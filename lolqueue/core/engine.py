@@ -22,8 +22,12 @@ class Engine:
 
     A ação escolhida por `handle_phase` vira *pendente* e é retentada nos
     ticks seguintes até ter sucesso ou estourar MAX_FAILURES — uma falha
-    de rede isolada não pode custar a partida. Sucesso limpa a pendência,
+    de rede isolada não pode custar a partida. Sucesso marca `_acted`,
     então nada roda duas vezes na mesma fase.
+
+    O tick também *reavalia* a fase atual enquanto nada foi feito nela.
+    Sem isso, ligar o motor ou marcar uma opção sem sair do lobby não
+    teria efeito, porque `handle_phase` só roda em transições.
     """
 
     def __init__(
@@ -39,6 +43,7 @@ class Engine:
         self._phase = GameflowPhase.UNKNOWN
         self._champ_select: ChampSelectController | None = None
         self._pending: Callable[[], None] | None = None
+        self._acted = False
         self._action_failures = 0
         self._champ_failures = 0
 
@@ -72,6 +77,7 @@ class Engine:
         """Chamado a cada ciclo de polling, para trabalho contínuo."""
         if not self._enabled:
             return
+        self._rearm()
         self._run_pending()
         if self._phase is GameflowPhase.CHAMP_SELECT and self._champ_select is not None:
             self._run_champ_select()
@@ -87,8 +93,21 @@ class Engine:
 
     def _clear_pending(self) -> None:
         self._pending = None
+        self._acted = False
         self._action_failures = 0
         self._champ_failures = 0
+
+    def _rearm(self) -> None:
+        """Reavalia a fase atual quando ainda não agimos nela.
+
+        Não mexe numa pendência viva (seria perder as retentativas) nem
+        ressuscita uma ação que já desistiu por MAX_FAILURES.
+        """
+        if self._pending is not None or self._acted:
+            return
+        if self._action_failures >= MAX_FAILURES:
+            return
+        self._pending = self._action_for(self._phase)
 
     def _run_pending(self) -> None:
         """Executa a ação pendente. ClientClosed sobe para o watcher."""
@@ -112,6 +131,7 @@ class Engine:
                 )
         else:
             self._pending = None
+            self._acted = True
             self._action_failures = 0
 
     def _run_champ_select(self) -> None:

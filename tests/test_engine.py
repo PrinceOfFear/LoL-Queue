@@ -60,6 +60,35 @@ def test_missing_permission_key_does_not_block_the_user():
     assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")
 
 
+def test_enabling_the_engine_inside_a_lobby_starts_the_queue():
+    """Apertar INICIAR já dentro do lobby precisa valer.
+
+    `handle_phase` só roda em transições de fase. Sem reavaliar no tick,
+    quem liga o motor sem sair do lobby espera para sempre.
+    """
+    client = FakeLcuClient(responses=LOBBY_READY)
+    engine = Engine(client, Config(auto_queue=True))
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert client.calls == []
+
+    engine.set_enabled(True)
+    engine.tick()
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")
+
+
+def test_turning_auto_queue_on_inside_a_lobby_starts_the_queue():
+    """Marcar a opção com o motor já ligado também precisa valer."""
+    config = Config(auto_queue=False)
+    engine, client = make_engine(config, responses=LOBBY_READY)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.tick()
+    assert client.calls == []
+
+    config.auto_queue = True
+    engine.tick()
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")
+
+
 def test_auto_queue_off_means_no_search():
     engine, client = make_engine(Config(auto_queue=False), responses=LOBBY_READY)
     engine.handle_phase(GameflowPhase.LOBBY)
