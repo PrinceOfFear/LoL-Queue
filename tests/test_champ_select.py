@@ -1,10 +1,17 @@
 from lolqueue.config import Config
-from lolqueue.core.champ_select import ChampSelectController, find_current_action
+from lolqueue.core.champ_select import (
+    MAX_LOCK_ATTEMPTS,
+    ChampSelectController,
+    find_current_action,
+)
 from lolqueue.core.champions import ChampionCatalog
 from lolqueue.lcu import endpoints
 from tests.fakes import FakeLcuClient
 
-SUMMARY = [{"id": 64, "name": "Lee Sin"}, {"id": 11, "name": "Master Yi"}]
+SUMMARY = [
+    {"id": 64, "name": "Lee Sin", "alias": "LeeSin"},
+    {"id": 11, "name": "Master Yi", "alias": "MasterYi"},
+]
 
 
 def session(action_type="pick", completed=False, in_progress=True, actor=0):
@@ -61,14 +68,42 @@ class Clock:
         return self.value
 
 
-def make_controller(config, responses):
+def settled_session(champion_id, action_id=7, action_type="pick"):
+    """Sessão depois que o cliente fechou a nossa ação.
+
+    `champion_id` é o que ficou de fato registrado — que nem sempre é o
+    que mandamos.
+    """
+    return {
+        "localPlayerCellId": 0,
+        "actions": [
+            [
+                {
+                    "id": action_id,
+                    "actorCellId": 0,
+                    "championId": champion_id,
+                    "completed": True,
+                    "isInProgress": False,
+                    "type": action_type,
+                }
+            ]
+        ],
+    }
+
+
+def make_controller(config, responses, log=None):
     responses = {endpoints.CHAMPION_SUMMARY: SUMMARY, **responses}
     client = FakeLcuClient(responses=responses)
     catalog = ChampionCatalog(client)
     catalog.load()
     clock = Clock()
-    controller = ChampSelectController(client, config, catalog, now=clock)
+    controller = ChampSelectController(client, config, catalog, log=log, now=clock)
     return controller, client, clock
+
+
+def locks(client):
+    """Só os PATCH que tentam travar a ação."""
+    return [body for _, body in client.payloads if body.get("completed")]
 
 
 PICK_CONFIG = Config(auto_pick=True, pick_priority=[64, 11], lock_delay_seconds=3.0)
@@ -279,6 +314,130 @@ def test_does_not_hover_again_after_locking():
     clock.value = 4.0
     controller.tick()
     assert len(client.payloads) == depois_do_lock
+
+
+def test_only_reports_the_lock_after_the_client_records_it():
+    """O 2xx do PATCH não prova nada.
+
+    Numa ranqueada de verdade o banimento respondeu sem erro, o app
+    anunciou "confirmado" e a sessão fechou a ação com -1: ninguém foi
+    banido. Quem decide se deu certo é a sessão, não a resposta.
+    """
+    mensagens = []
+    controller, client, clock = make_controller(
+        PICK_CONFIG,
+        {
+            endpoints.CHAMP_SELECT_SESSION: session(),
+            endpoints.PICKABLE_CHAMPIONS: [64],
+        },
+        log=mensagens.append,
+    )
+    controller.tick()
+    clock.value = 3.5
+    controller.tick()
+    assert not any("confirmado" in m for m in mensagens)
+
+    client.responses[endpoints.CHAMP_SELECT_SESSION] = settled_session(64)
+    clock.value = 3.75
+    controller.tick()
+    assert any("Lee Sin confirmado" in m for m in mensagens)
+
+
+def test_warns_when_the_client_ignored_the_lock():
+    """Vez de banir que passou em branco fica registrada com -1."""
+    mensagens = []
+    controller, client, clock = make_controller(
+        PICK_CONFIG,
+        {
+            endpoints.CHAMP_SELECT_SESSION: session(),
+            endpoints.PICKABLE_CHAMPIONS: [64],
+        },
+        log=mensagens.append,
+    )
+    controller.tick()
+    clock.value = 3.5
+    controller.tick()
+    client.responses[endpoints.CHAMP_SELECT_SESSION] = settled_session(-1)
+    clock.value = 3.75
+    controller.tick()
+    assert any("não registrou" in m for m in mensagens)
+    assert not any("confirmado" in m for m in mensagens)
+
+
+def test_reports_the_champion_the_client_actually_recorded():
+    """Se fechou com outro campeão, o registro precisa dizer qual."""
+    mensagens = []
+    controller, client, clock = make_controller(
+        PICK_CONFIG,
+        {
+            endpoints.CHAMP_SELECT_SESSION: session(),
+            endpoints.PICKABLE_CHAMPIONS: [64],
+        },
+        log=mensagens.append,
+    )
+    controller.tick()
+    clock.value = 3.5
+    controller.tick()
+    client.responses[endpoints.CHAMP_SELECT_SESSION] = settled_session(11)
+    clock.value = 3.75
+    controller.tick()
+    assert any("Master Yi" in m for m in mensagens)
+
+
+def test_retries_the_lock_while_the_client_ignores_it():
+    """Enquanto a ação continuar aberta, insiste.
+
+    O cliente engole a primeira trava quando a fase de ban ainda está
+    abrindo. Sem reenviar, a vez passa em branco.
+    """
+    controller, client, clock = make_controller(
+        PICK_CONFIG,
+        {
+            endpoints.CHAMP_SELECT_SESSION: session(),
+            endpoints.PICKABLE_CHAMPIONS: [64],
+        },
+    )
+    controller.tick()
+    clock.value = 3.5
+    controller.tick()
+    assert len(locks(client)) == 1
+    clock.value = 4.6
+    controller.tick()
+    assert len(locks(client)) == 2
+
+
+def test_gives_up_after_repeated_lock_attempts():
+    """Insistir para sempre viraria enxurrada de PATCH no cliente."""
+    controller, client, clock = make_controller(
+        PICK_CONFIG,
+        {
+            endpoints.CHAMP_SELECT_SESSION: session(),
+            endpoints.PICKABLE_CHAMPIONS: [64],
+        },
+    )
+    controller.tick()
+    clock.value = 3.5
+    controller.tick()
+    for extra in range(1, MAX_LOCK_ATTEMPTS + 10):
+        clock.value = 3.5 + extra * 1.5
+        controller.tick()
+    assert len(locks(client)) == MAX_LOCK_ATTEMPTS
+
+
+def test_pick_skips_a_champion_someone_else_already_took():
+    """A lista de escolhíveis pode demorar a refletir o pick alheio."""
+    config = Config(auto_pick=True, pick_priority=[64, 11], lock_delay_seconds=0.0)
+    tomado = ban_session([("pick", 64)])
+    tomado["actions"][1][0]["type"] = "pick"
+    controller, client, _ = make_controller(
+        config,
+        {
+            endpoints.CHAMP_SELECT_SESSION: tomado,
+            endpoints.PICKABLE_CHAMPIONS: [64, 11],
+        },
+    )
+    controller.tick()
+    assert client.payloads[0][1] == {"championId": 11}
 
 
 def test_auto_pick_off_means_no_action_on_pick():

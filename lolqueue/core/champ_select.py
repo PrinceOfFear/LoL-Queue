@@ -8,6 +8,19 @@ from ..lcu import endpoints
 from ..lcu.client import LcuError
 
 
+#: Intervalo entre tentativas de travar a mesma ação.
+#: Uma trava aceita se reflete na sessão em muito menos que isso, então
+#: em jogo normal nenhuma repetição chega a acontecer.
+LOCK_RETRY_SECONDS = 1.0
+
+#: Teto de PATCH de trava por ação, contando o primeiro. Sem teto, uma
+#: ação que nunca fecha viraria enxurrada de requisição no cliente.
+#: Com um envio por segundo, cobre quase toda uma fase de ban (~27s) —
+#: insistir por poucos segundos não bastaria se o cliente só aceitar a
+#: trava depois que a fase assenta.
+MAX_LOCK_ATTEMPTS = 20
+
+
 def find_current_action(session: dict) -> dict | None:
     """Devolve a ação em andamento do jogador local, se houver.
 
@@ -53,18 +66,32 @@ class ChampSelectController:
         self._hovered_at = 0.0
         self._warned_action: int | None = None
         self._locked_action: int | None = None
+        self._locked_champion: int | None = None
+        self._locked_at = 0.0
+        self._lock_attempts = 0
 
     def reset(self) -> None:
         self._hovered_action = None
         self._hovered_at = 0.0
         self._warned_action = None
         self._locked_action = None
+        self._locked_champion = None
+        self._locked_at = 0.0
+        self._lock_attempts = 0
 
     def tick(self) -> None:
         session = self._client.get(endpoints.CHAMP_SELECT_SESSION)
         if not isinstance(session, dict):
             return
         action = find_current_action(session)
+
+        if self._locked_action is not None and (
+            action is None or action["id"] != self._locked_action
+        ):
+            # A ação que travamos saiu de cena: agora dá para saber o que
+            # o cliente gravou de fato.
+            self._settle(session)
+
         if action is None:
             self._hovered_action = None
             return
@@ -74,16 +101,22 @@ class ChampSelectController:
             # Por um instante depois do lock a sessão ainda devolve a ação
             # como em andamento. Sem lembrar o que já foi travado, o tick
             # seguinte refaria o hover do zero.
+            self._retry_lock(action_id)
             return
 
         kind = action.get("type")
+        taken = self._already_taken(session)
         if kind == "pick" and self._config.auto_pick:
             available = self._available(endpoints.PICKABLE_CHAMPIONS)
             champion_id = next(
-                (c for c in self._config.pick_priority if c in available), None
+                (
+                    c
+                    for c in self._config.pick_priority
+                    if c in available and c not in taken
+                ),
+                None,
             )
         elif kind == "ban" and self._config.auto_ban:
-            taken = self._already_taken(session)
             champion_id = next(
                 (c for c in self._config.ban_priority if c not in taken), None
             )
@@ -151,10 +184,73 @@ class ChampSelectController:
         )
 
     def _lock(self, action_id: int, champion_id: int) -> None:
+        self._lock_attempts = 0
+        self._send_lock(action_id, champion_id)
+        self._hovered_action = None
+
+    def _retry_lock(self, action_id: int) -> None:
+        """Reenvia a trava enquanto o cliente deixar a ação aberta.
+
+        O PATCH responde 2xx mesmo quando não surte efeito — foi o que
+        aconteceu numa ranqueada: o app anunciou o banimento e a sessão
+        fechou a ação com -1. Se a ação continua aberta depois da trava,
+        ela não pegou; insistir é o que resolve.
+        """
+        if self._locked_champion is None:
+            return
+        if self._lock_attempts >= MAX_LOCK_ATTEMPTS:
+            return
+        if self._now() - self._locked_at < LOCK_RETRY_SECONDS:
+            return
+        self._send_lock(action_id, self._locked_champion)
+
+    def _send_lock(self, action_id: int, champion_id: int) -> None:
         self._client.patch(
             endpoints.CHAMP_SELECT_ACTION.format(action_id=action_id),
             json={"championId": champion_id, "completed": True},
         )
-        self._log(f"{self._catalog.name(champion_id)} confirmado.")
-        self._hovered_action = None
         self._locked_action = action_id
+        self._locked_champion = champion_id
+        self._locked_at = self._now()
+        self._lock_attempts += 1
+
+    def _settle(self, session: dict) -> None:
+        """Relata o que o cliente gravou na ação que tentamos travar.
+
+        Só aqui sai "confirmado": antes disso o app estava anunciando
+        sucesso com base na resposta do PATCH, que mente.
+        """
+        action_id = self._locked_action
+        champion_id = self._locked_champion
+        self._locked_action = None
+        self._locked_champion = None
+        self._lock_attempts = 0
+        if action_id is None or champion_id is None:
+            return
+
+        recorded = self._find_action(session, action_id)
+        if recorded is None:
+            # Sessão trocou de forma; sem base para afirmar nada.
+            return
+
+        actual = recorded.get("championId")
+        if actual == champion_id:
+            self._log(f"{self._catalog.name(champion_id)} confirmado.")
+        elif isinstance(actual, int) and actual > 0:
+            self._log(
+                f"O cliente não registrou {self._catalog.name(champion_id)} "
+                f"— ficou {self._catalog.name(actual)}."
+            )
+        else:
+            self._log(
+                f"O cliente não registrou {self._catalog.name(champion_id)} "
+                "— a vez passou em branco."
+            )
+
+    @staticmethod
+    def _find_action(session: dict, action_id: int) -> dict | None:
+        for round_actions in session.get("actions") or []:
+            for action in round_actions:
+                if action.get("id") == action_id:
+                    return action
+        return None
