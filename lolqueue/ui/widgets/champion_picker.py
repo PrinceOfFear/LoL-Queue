@@ -57,11 +57,18 @@ class ChampionPicker(QWidget):
         remove.clicked.connect(self._remove_selected)
         layout.addWidget(remove)
 
+        # Sem isto o espaço sobrando é dividido entre os widgets e os
+        # controles ficam boiando no meio da página.
+        layout.addStretch(1)
+
     def set_catalog(self, catalog) -> None:
         self._catalog = catalog
         self._combo.clear()
         for champion_id, name in catalog.all():
             self._combo.addItem(name, champion_id)
+        # A lista pode ter sido preenchida pela config antes do catálogo
+        # chegar; sem isto os salvos ficariam exibidos como "#64".
+        self._renumber()
 
     def set_ids(self, ids: list[int]) -> None:
         self._list.clear()

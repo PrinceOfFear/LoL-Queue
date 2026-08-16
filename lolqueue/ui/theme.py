@@ -70,7 +70,7 @@ STYLESHEET = f"""
     font-size: 12px;
     letter-spacing: 2px;
 }}
-#windowButton {{
+#windowButton, #closeButton {{
     background: transparent;
     border: none;
     color: {Palette.TEXT_MUTED};
