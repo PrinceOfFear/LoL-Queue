@@ -37,7 +37,9 @@ class Config:
         """Lê a config do disco. Ausente ou corrompida cai nos padrões."""
         target = path or config_path()
         try:
-            raw = json.loads(target.read_text(encoding="utf-8"))
+            # utf-8-sig aceita com e sem BOM: o Notepad do Windows grava
+            # com, e um BOM inesperado descartaria tudo em silêncio.
+            raw = json.loads(target.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             return cls()
         if not isinstance(raw, dict):

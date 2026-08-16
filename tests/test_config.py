@@ -28,6 +28,16 @@ def test_corrupt_file_yields_defaults_instead_of_crashing(tmp_path):
     assert Config.load(path) == Config()
 
 
+def test_file_saved_with_a_bom_still_loads(tmp_path):
+    """O Notepad do Windows grava UTF-8 com BOM.
+
+    Sem tolerar isso, editar a config na mão apagaria tudo em silêncio.
+    """
+    path = tmp_path / "config.json"
+    path.write_text('{"auto_queue": true}', encoding="utf-8-sig")
+    assert Config.load(path).auto_queue is True
+
+
 def test_unknown_keys_are_ignored(tmp_path):
     path = tmp_path / "config.json"
     path.write_text('{"auto_queue": true, "obsolete": 1}', encoding="utf-8")
