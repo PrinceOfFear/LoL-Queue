@@ -13,6 +13,10 @@ PLAY_AGAIN = "/lol-lobby/v2/play-again"
 CHAMP_SELECT_SESSION = "/lol-champ-select/v1/session"
 CHAMP_SELECT_ACTION = "/lol-champ-select/v1/session/actions/{action_id}"
 PICKABLE_CHAMPIONS = "/lol-champ-select/v1/pickable-champion-ids"
+#: NÃO use para decidir o que banir. Apesar do nome, o cliente responde
+#: apenas `[-1]` — um sentinela, não a lista de campeões. Filtrar por ela
+#: zerava o banimento automático numa ranqueada de verdade. Quem pode ser
+#: banido sai da própria sessão, em `ChampSelectController._already_taken`.
 BANNABLE_CHAMPIONS = "/lol-champ-select/v1/bannable-champion-ids"
 CHAMPION_SUMMARY = "/lol-game-data/assets/v1/champion-summary.json"
 CHAMPION_ICON = "/lol-game-data/assets/v1/champion-icons/{champion_id}.png"

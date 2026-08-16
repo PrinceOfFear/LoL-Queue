@@ -52,11 +52,13 @@ class ChampSelectController:
         self._hovered_action: int | None = None
         self._hovered_at = 0.0
         self._warned_action: int | None = None
+        self._locked_action: int | None = None
 
     def reset(self) -> None:
         self._hovered_action = None
         self._hovered_at = 0.0
         self._warned_action = None
+        self._locked_action = None
 
     def tick(self) -> None:
         session = self._client.get(endpoints.CHAMP_SELECT_SESSION)
@@ -67,20 +69,27 @@ class ChampSelectController:
             self._hovered_action = None
             return
 
+        action_id = action["id"]
+        if action_id == self._locked_action:
+            # Por um instante depois do lock a sessão ainda devolve a ação
+            # como em andamento. Sem lembrar o que já foi travado, o tick
+            # seguinte refaria o hover do zero.
+            return
+
         kind = action.get("type")
         if kind == "pick" and self._config.auto_pick:
-            priority, available = self._config.pick_priority, self._available(
-                endpoints.PICKABLE_CHAMPIONS
+            available = self._available(endpoints.PICKABLE_CHAMPIONS)
+            champion_id = next(
+                (c for c in self._config.pick_priority if c in available), None
             )
         elif kind == "ban" and self._config.auto_ban:
-            priority, available = self._config.ban_priority, self._available(
-                endpoints.BANNABLE_CHAMPIONS
+            taken = self._already_taken(session)
+            champion_id = next(
+                (c for c in self._config.ban_priority if c not in taken), None
             )
         else:
             return
 
-        champion_id = next((c for c in priority if c in available), None)
-        action_id = action["id"]
         if champion_id is None:
             if self._warned_action != action_id:
                 self._warned_action = action_id
@@ -96,6 +105,30 @@ class ChampSelectController:
 
         if self._now() - self._hovered_at >= self._config.lock_delay_seconds:
             self._lock(action_id, champion_id)
+
+    @staticmethod
+    def _already_taken(session: dict) -> set[int]:
+        """Campeões fora de jogo: já banidos ou já escolhidos.
+
+        Para banir não dá para usar `bannable-champion-ids`: o cliente
+        responde só `[-1]`, um sentinela, e filtrar por ele zerava a
+        lista inteira. Vale banir qualquer campeão que ninguém tenha
+        tirado de jogo ainda, e isso está na própria sessão.
+
+        Uma vez de banir que expirou fica gravada com `championId` -1;
+        o corte em zero descarta esse caso.
+        """
+        taken: set[int] = set()
+        for round_actions in session.get("actions") or []:
+            for action in round_actions:
+                if not action.get("completed"):
+                    continue
+                if action.get("type") not in ("ban", "pick"):
+                    continue
+                champion_id = action.get("championId")
+                if isinstance(champion_id, int) and champion_id > 0:
+                    taken.add(champion_id)
+        return taken
 
     def _available(self, path: str) -> set[int]:
         try:
@@ -124,3 +157,4 @@ class ChampSelectController:
         )
         self._log(f"{self._catalog.name(champion_id)} confirmado.")
         self._hovered_action = None
+        self._locked_action = action_id

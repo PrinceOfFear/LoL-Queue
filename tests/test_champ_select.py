@@ -25,6 +25,34 @@ def session(action_type="pick", completed=False, in_progress=True, actor=0):
     }
 
 
+def ban_session(prior=()):
+    """Sessão na vez de banir, após ações já concluídas de outros jogadores.
+
+    `prior` é uma lista de (tipo, championId) — o que já saiu de jogo
+    antes da nossa vez.
+    """
+    concluidas = [
+        {
+            "id": 100 + indice,
+            "actorCellId": 5 + indice,
+            "championId": champion_id,
+            "completed": True,
+            "isInProgress": False,
+            "type": tipo,
+        }
+        for indice, (tipo, champion_id) in enumerate(prior)
+    ]
+    minha = {
+        "id": 7,
+        "actorCellId": 0,
+        "championId": 0,
+        "completed": False,
+        "isInProgress": True,
+        "type": "ban",
+    }
+    return {"localPlayerCellId": 0, "actions": [concluidas, [minha]]}
+
+
 class Clock:
     def __init__(self):
         self.value = 0.0
@@ -152,7 +180,7 @@ def test_no_available_champion_locks_nothing_and_warns():
     assert messages
 
 
-def test_ban_uses_the_ban_list_and_bannable_ids():
+def test_ban_uses_the_ban_list():
     config = Config(auto_ban=True, ban_priority=[11], lock_delay_seconds=0.0)
     controller, client, _ = make_controller(
         config,
@@ -163,6 +191,94 @@ def test_ban_uses_the_ban_list_and_bannable_ids():
     )
     controller.tick()
     assert client.payloads[0][1] == {"championId": 11}
+
+
+def test_ban_works_even_when_the_client_reports_no_bannable_ids():
+    """O cliente responde `[-1]` em `bannable-champion-ids`.
+
+    Filtrar por essa lista deixava o banimento sempre vazio: nenhum id
+    real casa com o sentinela, então a vez de banir passava em branco.
+    Quem pode ser banido sai da própria sessão.
+    """
+    config = Config(auto_ban=True, ban_priority=[11], lock_delay_seconds=0.0)
+    controller, client, _ = make_controller(
+        config,
+        {
+            endpoints.CHAMP_SELECT_SESSION: ban_session(),
+            endpoints.BANNABLE_CHAMPIONS: [-1],
+        },
+    )
+    controller.tick()
+    assert client.payloads[0][1] == {"championId": 11}
+
+
+def test_ban_skips_a_champion_already_banned():
+    config = Config(auto_ban=True, ban_priority=[64, 11], lock_delay_seconds=0.0)
+    controller, client, _ = make_controller(
+        config,
+        {
+            endpoints.CHAMP_SELECT_SESSION: ban_session([("ban", 64)]),
+            endpoints.BANNABLE_CHAMPIONS: [-1],
+        },
+    )
+    controller.tick()
+    assert client.payloads[0][1] == {"championId": 11}
+
+
+def test_ban_skips_a_champion_already_picked():
+    """O segundo turno de bans acontece com campeões já escolhidos.
+
+    Banir um deles é recusado pelo cliente.
+    """
+    config = Config(auto_ban=True, ban_priority=[64, 11], lock_delay_seconds=0.0)
+    controller, client, _ = make_controller(
+        config,
+        {
+            endpoints.CHAMP_SELECT_SESSION: ban_session([("pick", 64)]),
+            endpoints.BANNABLE_CHAMPIONS: [-1],
+        },
+    )
+    controller.tick()
+    assert client.payloads[0][1] == {"championId": 11}
+
+
+def test_a_ban_that_passed_does_not_block_the_champion():
+    """Uma vez de banir que expira fica registrada com `championId` -1.
+
+    Isso não tira campeão nenhum de jogo.
+    """
+    config = Config(auto_ban=True, ban_priority=[64], lock_delay_seconds=0.0)
+    controller, client, _ = make_controller(
+        config,
+        {
+            endpoints.CHAMP_SELECT_SESSION: ban_session([("ban", -1)]),
+            endpoints.BANNABLE_CHAMPIONS: [-1],
+        },
+    )
+    controller.tick()
+    assert client.payloads[0][1] == {"championId": 64}
+
+
+def test_does_not_hover_again_after_locking():
+    """A sessão ainda anuncia a ação em andamento logo depois do lock.
+
+    Sem lembrar do que já travou, o tick seguinte refazia o hover — o
+    registro mostrava a mesma escolha duas vezes.
+    """
+    controller, client, clock = make_controller(
+        PICK_CONFIG,
+        {
+            endpoints.CHAMP_SELECT_SESSION: session(),
+            endpoints.PICKABLE_CHAMPIONS: [64],
+        },
+    )
+    controller.tick()
+    clock.value = 3.5
+    controller.tick()
+    depois_do_lock = len(client.payloads)
+    clock.value = 4.0
+    controller.tick()
+    assert len(client.payloads) == depois_do_lock
 
 
 def test_auto_pick_off_means_no_action_on_pick():
