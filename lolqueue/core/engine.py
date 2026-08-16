@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from functools import partial
 from typing import Callable, Protocol
 
 from ..config import Config
@@ -8,6 +10,31 @@ from ..lcu.client import ClientClosed, LcuError
 from .phases import END_PHASES, GameflowPhase
 
 MAX_FAILURES = 3
+
+#: Estados em que a busca está de pé. Qualquer outro quer dizer fila
+#: parada — inclusive "Error", que o cliente deixa grudado.
+LIVE_SEARCH_STATES = frozenset({"Searching", "Found"})
+
+#: Estados que deixam resto no cliente. Enquanto a busca estragada não
+#: for cancelada, ele recusa uma nova entrada — por isso não basta
+#: mandar procurar de novo.
+STUCK_SEARCH_STATES = frozenset(
+    {
+        "Error",
+        "ServiceError",
+        "ServiceShutdown",
+        "Canceled",
+        "AbandonedLowPriorityQueue",
+    }
+)
+
+#: Fases em que se cobra que a busca esteja viva. Fora delas o jogador
+#: está em seleção ou em partida, e não há fila alguma a vigiar.
+SEARCH_PHASES = (GameflowPhase.LOBBY, GameflowPhase.MATCHMAKING)
+
+#: Intervalo entre conferências do estado da busca. Espaçado de propósito:
+#: o polling roda a cada 0,25 s e essa pergunta não precisa dessa pressa.
+SEARCH_CHECK_SECONDS = 3.0
 
 
 class ChampSelectController(Protocol):
@@ -28,6 +55,9 @@ class Engine:
     O tick também *reavalia* a fase atual enquanto nada foi feito nela.
     Sem isso, ligar o motor ou marcar uma opção sem sair do lobby não
     teria efeito, porque `handle_phase` só roda em transições.
+
+    E vigia o estado da busca, porque nem toda parada troca de fase: o
+    cliente erra ao procurar partida e fica parado no mesmo lugar.
     """
 
     def __init__(
@@ -35,10 +65,12 @@ class Engine:
         client,
         config: Config,
         log: Callable[[str], None] | None = None,
+        now: Callable[[], float] = time.monotonic,
     ) -> None:
         self._client = client
         self._config = config
         self._log = log or (lambda message: None)
+        self._now = now
         self._enabled = False
         self._phase = GameflowPhase.UNKNOWN
         self._champ_select: ChampSelectController | None = None
@@ -46,6 +78,8 @@ class Engine:
         self._acted = False
         self._action_failures = 0
         self._champ_failures = 0
+        self._checked_search = 0.0
+        self._search_stalled = False
 
     @property
     def enabled(self) -> bool:
@@ -53,6 +87,8 @@ class Engine:
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
+        self._checked_search = 0.0
+        self._search_stalled = False
         self._clear_pending()
 
     def set_champ_select(self, controller: ChampSelectController | None) -> None:
@@ -77,6 +113,7 @@ class Engine:
         """Chamado a cada ciclo de polling, para trabalho contínuo."""
         if not self._enabled:
             return
+        self._watch_search()
         self._rearm()
         self._run_pending()
         if self._phase is GameflowPhase.CHAMP_SELECT and self._champ_select is not None:
@@ -108,6 +145,89 @@ class Engine:
         if self._action_failures >= MAX_FAILURES:
             return
         self._pending = self._action_for(self._phase)
+
+    def _watch_search(self) -> None:
+        """Retoma a fila que morreu sem o cliente trocar de fase.
+
+        O LoL erra ao procurar partida de vez em quando: a busca cai, o
+        cliente guarda o estado estragado e não sai mais dele sozinho —
+        vi `searchState` em "Error" persistindo até sem lobby nenhum.
+        Nenhuma transição avisa, e `_acted` impede uma segunda tentativa
+        na mesma fase, então sem isto o app espera para sempre.
+        """
+        if not self._config.auto_queue or self._phase not in SEARCH_PHASES:
+            return
+        now = self._now()
+        if now - self._checked_search < SEARCH_CHECK_SECONDS:
+            return
+        self._checked_search = now
+
+        state = self._search_state()
+        if not isinstance(state, dict):
+            return
+        name = state.get("searchState")
+
+        if name in LIVE_SEARCH_STATES:
+            if self._search_stalled:
+                self._search_stalled = False
+                self._log("Fila retomada.")
+            return
+
+        if not self._search_stalled:
+            self._search_stalled = True
+            self._log(f"Busca parada ({name}) — retomando a fila.")
+            for detail in self._search_errors(state):
+                self._log(detail)
+
+        if name in STUCK_SEARCH_STATES and not self._cancel_search():
+            return
+
+        # Insistir daqui em diante é silencioso: o episódio já foi contado
+        # e a fila parada repetiria a mesma linha a cada poucos segundos.
+        self._acted = False
+        self._action_failures = 0
+        self._pending = partial(self._start_queue, announce=False)
+
+    def _search_state(self) -> object:
+        """Estado da busca, ou None se nem isso responder.
+
+        Uma falha aqui é diagnóstico perdido, não motivo para derrubar o
+        tick: se o cliente está mesmo ruim, a ação pendente falha sozinha
+        e é ela quem reporta.
+        """
+        try:
+            return self._client.get(endpoints.MATCHMAKING_SEARCH_STATE)
+        except ClientClosed:
+            raise
+        except LcuError:
+            return None
+
+    def _cancel_search(self) -> bool:
+        """Limpa a busca estragada. Sem isso o cliente recusa a próxima."""
+        try:
+            self._client.delete(endpoints.MATCHMAKING_SEARCH)
+        except ClientClosed:
+            raise
+        except LcuError as exc:
+            self._log(f"Não consegui cancelar a busca: {exc}")
+            return False
+        return True
+
+    @staticmethod
+    def _search_errors(state: dict) -> list[str]:
+        """Motivos que o cliente anexou à busca, quando anexa algum.
+
+        Costuma vir vazio mesmo em "Error", então isto é um extra — a
+        parada é reportada de qualquer jeito.
+        """
+        details = []
+        for error in state.get("errors") or []:
+            if not isinstance(error, dict):
+                continue
+            text = error.get("message") or error.get("errorType")
+            if text:
+                details.append(f"Cliente: {text}")
+        return details
 
     def _run_pending(self) -> None:
         """Executa a ação pendente. ClientClosed sobe para o watcher."""
@@ -154,13 +274,20 @@ class Engine:
         self._client.post(endpoints.READY_CHECK_ACCEPT)
         self._log("Partida aceita.")
 
-    def _start_queue(self) -> None:
+    def _start_queue(self, announce: bool = True) -> None:
+        """Entra na fila. Calada quando é retomada de uma busca parada.
+
+        `announce` existe só pelo registro: a retomada insiste de poucos
+        em poucos segundos, e anunciar cada tentativa afogaria o resto.
+        """
         lobby = self._client.get(endpoints.LOBBY) or {}
         if isinstance(lobby, dict) and lobby.get("canStartActivity") is False:
-            self._log("Sem permissão para iniciar a fila neste lobby.")
+            if announce:
+                self._log("Sem permissão para iniciar a fila neste lobby.")
             return
         self._client.post(endpoints.MATCHMAKING_SEARCH)
-        self._log("Entrando na fila.")
+        if announce:
+            self._log("Entrando na fila.")
 
     def _play_again(self) -> None:
         self._client.post(endpoints.PLAY_AGAIN)

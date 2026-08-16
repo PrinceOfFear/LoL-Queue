@@ -1,7 +1,7 @@
 import pytest
 
 from lolqueue.config import Config
-from lolqueue.core.engine import MAX_FAILURES, Engine
+from lolqueue.core.engine import MAX_FAILURES, SEARCH_CHECK_SECONDS, Engine
 from lolqueue.core.phases import GameflowPhase
 from lolqueue.lcu import endpoints
 from lolqueue.lcu.client import ClientClosed
@@ -173,6 +173,124 @@ def test_failures_are_logged_not_swallowed():
     engine.set_enabled(True)
     engine.handle_phase(GameflowPhase.READY_CHECK)
     assert messages
+
+
+SEARCH_STATE = endpoints.MATCHMAKING_SEARCH_STATE
+
+
+def make_watching_engine(state, phase=GameflowPhase.LOBBY, log=None):
+    """Motor em fila contínua, com o relógio na mão.
+
+    Devolve o relógio junto porque a conferência da busca é espaçada no
+    tempo: sem adiantá-lo, nenhum tick chega a olhar o estado.
+    """
+    clock = {"t": 1000.0}
+    client = FakeLcuClient(responses={**LOBBY_READY, SEARCH_STATE: state})
+    engine = Engine(
+        client, Config(auto_queue=True), log=log, now=lambda: clock["t"]
+    )
+    engine.set_enabled(True)
+    engine.handle_phase(phase)
+    return engine, client, clock
+
+
+def test_a_dead_search_is_restarted_without_a_phase_change():
+    """O erro do cliente ao procurar partida não troca de fase.
+
+    Foi o que travou o app numa sessão real: o LoL deixou a busca em
+    "Error", ninguém saiu do lobby e, como `handle_phase` só dispara em
+    transição, o app esperou parado. Só o estado da busca denuncia.
+    """
+    engine, client, clock = make_watching_engine({"searchState": "Error"})
+    assert len(client.paths("POST")) == 1
+
+    clock["t"] += SEARCH_CHECK_SECONDS
+    engine.tick()
+
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("DELETE")
+    assert len(client.paths("POST")) == 2
+
+
+def test_a_live_search_is_left_alone():
+    """Fila andando não pode ser reiniciada: cairíamos no fim da espera."""
+    engine, client, clock = make_watching_engine({"searchState": "Searching"})
+    for _ in range(3):
+        clock["t"] += SEARCH_CHECK_SECONDS
+        engine.tick()
+
+    assert client.paths("DELETE") == []
+    assert len(client.paths("POST")) == 1
+
+
+def test_a_stuck_matchmaking_is_recovered():
+    """Fase de fila com a busca morta: nada mais perceberia."""
+    engine, client, clock = make_watching_engine(
+        {"searchState": "Error"}, phase=GameflowPhase.MATCHMAKING
+    )
+    assert client.calls == []
+
+    clock["t"] += SEARCH_CHECK_SECONDS
+    engine.tick()
+
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("DELETE")
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")
+
+
+def test_a_queue_that_never_started_is_not_cancelled():
+    """"Invalid" é o estado de lobby recém-aberto: não há o que cancelar."""
+    engine, client, clock = make_watching_engine({"searchState": "Invalid"})
+    clock["t"] += SEARCH_CHECK_SECONDS
+    engine.tick()
+
+    assert client.paths("DELETE") == []
+    assert len(client.paths("POST")) == 2
+
+
+def test_the_search_state_is_not_polled_on_every_tick():
+    """A conferência é barata, mas não precisa correr a cada 0,25 s."""
+    engine, client, _ = make_watching_engine({"searchState": "Searching"})
+    for _ in range(5):
+        engine.tick()
+
+    assert client.paths("GET").count(SEARCH_STATE) == 1
+
+
+def test_the_watch_is_off_when_auto_queue_is_off():
+    client = FakeLcuClient(responses={SEARCH_STATE: {"searchState": "Error"}})
+    engine = Engine(client, Config(auto_queue=False))
+    engine.set_enabled(True)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.tick()
+
+    assert client.calls == []
+
+
+def test_the_stall_is_reported_once_and_so_is_the_recovery():
+    """Insistir é silencioso; o que o usuário precisa ver é o episódio.
+
+    Sem isso, uma fila que não volta encheria o registro de linhas
+    iguais a cada poucos segundos.
+    """
+    messages = []
+    engine, client, clock = make_watching_engine(
+        {
+            "searchState": "Error",
+            "errors": [{"message": "Falha ao entrar na fila"}],
+        },
+        log=messages.append,
+    )
+    for _ in range(3):
+        clock["t"] += SEARCH_CHECK_SECONDS
+        engine.tick()
+
+    assert len([m for m in messages if "Busca parada" in m]) == 1
+    assert any("Falha ao entrar na fila" in m for m in messages)
+
+    client.responses[SEARCH_STATE] = {"searchState": "Searching"}
+    clock["t"] += SEARCH_CHECK_SECONDS
+    engine.tick()
+
+    assert any("Fila retomada" in m for m in messages)
 
 
 def test_champ_select_delegates_to_the_controller():
