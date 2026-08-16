@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from ..config import Config
+from ..config import Config, position_name
 from ..lcu import endpoints
 from ..lcu.client import LcuError
 
@@ -41,6 +41,22 @@ def find_current_action(session: dict) -> dict | None:
     return None
 
 
+def local_position(session: dict) -> str:
+    """Rota atribuída ao jogador local, ou vazio se o modo não atribui.
+
+    É o único lugar que diz onde o jogador caiu de fato — vale tanto
+    para a rota principal quanto para a secundária ou o autofill.
+    """
+    cell_id = session.get("localPlayerCellId")
+    if cell_id is None:
+        return ""
+    for member in session.get("myTeam") or []:
+        if member.get("cellId") == cell_id:
+            position = member.get("assignedPosition")
+            return position if isinstance(position, str) else ""
+    return ""
+
+
 class ChampSelectController:
     """Escolhe e bane campeões conforme a prioridade do usuário.
 
@@ -69,6 +85,7 @@ class ChampSelectController:
         self._locked_champion: int | None = None
         self._locked_at = 0.0
         self._lock_attempts = 0
+        self._announced_position: str | None = None
 
     def reset(self) -> None:
         self._hovered_action = None
@@ -78,6 +95,7 @@ class ChampSelectController:
         self._locked_champion = None
         self._locked_at = 0.0
         self._lock_attempts = 0
+        self._announced_position = None
 
     def tick(self) -> None:
         session = self._client.get(endpoints.CHAMP_SELECT_SESSION)
@@ -107,11 +125,13 @@ class ChampSelectController:
         kind = action.get("type")
         taken = self._already_taken(session)
         if kind == "pick" and self._config.auto_pick:
+            position = local_position(session)
+            self._announce_position(position)
             available = self._available(endpoints.PICKABLE_CHAMPIONS)
             champion_id = next(
                 (
                     c
-                    for c in self._config.pick_priority
+                    for c in self._config.pick_list(position)
                     if c in available and c not in taken
                 ),
                 None,
@@ -138,6 +158,21 @@ class ChampSelectController:
 
         if self._now() - self._hovered_at >= self._config.lock_delay_seconds:
             self._lock(action_id, champion_id)
+
+    def _announce_position(self, position: str) -> None:
+        """Diz de que rota veio a lista, uma vez por seleção.
+
+        Sem isso, cair de autofill numa rota sem lista própria parece
+        defeito: o app escolheria pela lista geral sem explicar por quê.
+        """
+        if not position or position == self._announced_position:
+            return
+        self._announced_position = position
+        name = position_name(position)
+        if self._config.pick_priority_by_position.get(position.casefold()):
+            self._log(f"Rota atribuída: {name} — usando a lista de {name}.")
+        else:
+            self._log(f"Rota atribuída: {name} — usando a lista geral.")
 
     @staticmethod
     def _already_taken(session: dict) -> set[int]:

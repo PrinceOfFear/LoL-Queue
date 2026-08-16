@@ -16,6 +16,24 @@ QUEUES: dict[int, str] = {
 }
 
 
+#: Rotas como o cliente as nomeia em `assignedPosition`, na ordem em que
+#: aparecem no mapa. É esse campo que revela autofill e rota secundária:
+#: seja qual for o motivo, ele diz onde o jogador caiu de verdade.
+POSITIONS: tuple[str, ...] = ("top", "jungle", "middle", "bottom", "utility")
+
+POSITION_NAMES: dict[str, str] = {
+    "top": "Topo",
+    "jungle": "Selva",
+    "middle": "Meio",
+    "bottom": "Atirador",
+    "utility": "Suporte",
+}
+
+
+def position_name(position: str) -> str:
+    return POSITION_NAMES.get(position.casefold(), position)
+
+
 def config_path() -> Path:
     base = os.environ.get("APPDATA") or str(Path.home())
     return Path(base) / "LoLQueue" / "config.json"
@@ -50,6 +68,7 @@ class Config:
     queue_id: int = 420
     pick_priority: list[int] = field(default_factory=list)
     ban_priority: list[int] = field(default_factory=list)
+    pick_priority_by_position: dict[str, list[int]] = field(default_factory=dict)
     lock_delay_seconds: float = 3.0
 
     def __post_init__(self) -> None:
@@ -63,6 +82,43 @@ class Config:
         """
         self.pick_priority = champion_ids(self.pick_priority)
         self.ban_priority = champion_ids(self.ban_priority)
+        self.pick_priority_by_position = self._clean_positions()
+
+    def _clean_positions(self) -> dict[str, list[int]]:
+        """Só rotas que o cliente conhece, e só com lista de verdade.
+
+        Lista vazia é descartada em vez de guardada: guardá-la faria
+        `pick_list` decidir entre vazio e ausente duas vezes, e as duas
+        querem dizer a mesma coisa — usar a lista geral.
+        """
+        source = self.pick_priority_by_position
+        if not isinstance(source, dict):
+            return {}
+        cleaned: dict[str, list[int]] = {}
+        for position, value in source.items():
+            if not isinstance(position, str):
+                continue
+            key = position.casefold()
+            if key not in POSITIONS:
+                continue
+            ids = champion_ids(value)
+            if ids:
+                cleaned[key] = ids
+        return cleaned
+
+    def pick_list(self, position: str | None) -> list[int]:
+        """Prioridade de escolha para a rota que o cliente atribuiu.
+
+        Cai na lista geral quando a rota não tem lista própria. Isso
+        cobre de uma vez o modo cego (que não atribui rota), o autofill
+        numa rota que o usuário não configurou e quem prefere uma lista
+        só para tudo.
+        """
+        if position:
+            specific = self.pick_priority_by_position.get(position.casefold())
+            if specific:
+                return specific
+        return self.pick_priority
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":

@@ -1,4 +1,53 @@
-from lolqueue.config import QUEUES, Config
+from lolqueue.config import POSITIONS, QUEUES, Config
+
+
+def test_positions_cover_the_five_lanes():
+    assert set(POSITIONS) == {"top", "jungle", "middle", "bottom", "utility"}
+
+
+def test_pick_list_falls_back_to_the_general_list():
+    """Sem lista da posição, vale a geral.
+
+    É o caso do modo cego, que não distribui rota nenhuma, e de quem
+    prefere configurar uma lista só.
+    """
+    config = Config(pick_priority=[64, 11])
+    assert config.pick_list("jungle") == [64, 11]
+    assert config.pick_list("") == [64, 11]
+    assert config.pick_list(None) == [64, 11]
+
+
+def test_pick_list_prefers_the_list_of_the_assigned_position():
+    """Cair de autofill no suporte tem que trocar a lista."""
+    config = Config(
+        pick_priority=[64],
+        pick_priority_by_position={"utility": [11]},
+    )
+    assert config.pick_list("utility") == [11]
+    assert config.pick_list("top") == [64]
+
+
+def test_pick_list_ignores_case_from_the_client():
+    config = Config(pick_priority=[64], pick_priority_by_position={"bottom": [11]})
+    assert config.pick_list("BOTTOM") == [11]
+
+
+def test_sanitize_drops_unknown_positions_and_malformed_ids():
+    config = Config(
+        pick_priority_by_position={
+            "utility": [11, "x", -3, True],
+            "mid": [64],
+            "top": [],
+        }
+    )
+    assert config.pick_priority_by_position == {"utility": [11]}
+
+
+def test_position_lists_round_trip_through_disk(tmp_path):
+    path = tmp_path / "config.json"
+    original = Config(pick_priority_by_position={"jungle": [64], "bottom": [11]})
+    original.save(path)
+    assert Config.load(path) == original
 
 
 def test_defaults_are_conservative():

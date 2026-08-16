@@ -3,6 +3,7 @@ from lolqueue.core.champ_select import (
     MAX_LOCK_ATTEMPTS,
     ChampSelectController,
     find_current_action,
+    local_position,
 )
 from lolqueue.core.champions import ChampionCatalog
 from lolqueue.lcu import endpoints
@@ -438,6 +439,84 @@ def test_pick_skips_a_champion_someone_else_already_took():
     )
     controller.tick()
     assert client.payloads[0][1] == {"championId": 11}
+
+
+def positioned_session(position):
+    """Sessão na vez de escolher, com a rota já atribuída."""
+    data = session()
+    data["myTeam"] = [{"cellId": 0, "assignedPosition": position}]
+    return data
+
+
+def test_reads_the_assigned_position_of_the_local_player():
+    assert local_position(positioned_session("utility")) == "utility"
+
+
+def test_no_position_when_the_mode_does_not_assign_one():
+    """Cego e coop não distribuem rota: `assignedPosition` vem vazio."""
+    assert local_position(positioned_session("")) == ""
+    assert local_position(session()) == ""
+
+
+def test_picks_from_the_list_of_the_assigned_position():
+    """Autofill no suporte precisa usar a lista de suporte."""
+    config = Config(
+        auto_pick=True,
+        pick_priority=[64],
+        pick_priority_by_position={"utility": [11]},
+        lock_delay_seconds=0.0,
+    )
+    controller, client, _ = make_controller(
+        config,
+        {
+            endpoints.CHAMP_SELECT_SESSION: positioned_session("utility"),
+            endpoints.PICKABLE_CHAMPIONS: [64, 11],
+        },
+    )
+    controller.tick()
+    assert client.payloads[0][1] == {"championId": 11}
+
+
+def test_picks_from_the_general_list_when_the_position_has_none():
+    config = Config(
+        auto_pick=True,
+        pick_priority=[64],
+        pick_priority_by_position={"utility": [11]},
+        lock_delay_seconds=0.0,
+    )
+    controller, client, _ = make_controller(
+        config,
+        {
+            endpoints.CHAMP_SELECT_SESSION: positioned_session("jungle"),
+            endpoints.PICKABLE_CHAMPIONS: [64, 11],
+        },
+    )
+    controller.tick()
+    assert client.payloads[0][1] == {"championId": 64}
+
+
+def test_announces_the_assigned_position_once():
+    """O usuário precisa ver de que rota veio a lista usada."""
+    mensagens = []
+    config = Config(
+        auto_pick=True,
+        pick_priority=[64],
+        pick_priority_by_position={"utility": [11]},
+        lock_delay_seconds=0.0,
+    )
+    controller, client, clock = make_controller(
+        config,
+        {
+            endpoints.CHAMP_SELECT_SESSION: positioned_session("utility"),
+            endpoints.PICKABLE_CHAMPIONS: [64, 11],
+        },
+        log=mensagens.append,
+    )
+    controller.tick()
+    clock.value = 1.0
+    controller.tick()
+    anuncios = [m for m in mensagens if "Suporte" in m]
+    assert len(anuncios) == 1
 
 
 def test_auto_pick_off_means_no_action_on_pick():
