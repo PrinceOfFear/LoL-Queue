@@ -39,9 +39,17 @@ class ChampionCatalog:
                 continue
             champion_id = entry.get("id")
             name = entry.get("name")
+            alias = entry.get("alias")
             if not isinstance(champion_id, int) or champion_id <= 0:
                 continue  # o cliente devolve um sentinela id=-1 "Nenhum"
             if not isinstance(name, str) or not name:
+                continue
+            if not isinstance(alias, str) or "_" in alias:
+                # Variantes de outros modos vêm como `Jade_MasterYi`: mesmo
+                # nome do original, id inválido para a seleção normal. O
+                # alias de um campeão de verdade nunca tem underscore, e o
+                # clone vem depois na lista — sem cortar aqui, ele ainda
+                # roubaria a busca por nome do original.
                 continue
             by_id[champion_id] = name
             by_name[name.casefold()] = champion_id
@@ -52,6 +60,10 @@ class ChampionCatalog:
 
     def name(self, champion_id: int) -> str:
         return self._by_id.get(champion_id, f"#{champion_id}")
+
+    def knows(self, champion_id: int) -> bool:
+        """Se o campeão existe mesmo. Falso enquanto o catálogo não veio."""
+        return champion_id in self._by_id
 
     def id_for(self, name: str) -> int | None:
         return self._by_name.get(name.casefold())

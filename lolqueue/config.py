@@ -21,6 +21,26 @@ def config_path() -> Path:
     return Path(base) / "LoLQueue" / "config.json"
 
 
+def champion_ids(value) -> list[int]:
+    """Filtra uma lista de prioridade, deixando só ids plausíveis.
+
+    Aplicado na leitura e na gravação: um id malformado não casa com
+    campeão nenhum, então só ocuparia uma posição da prioridade sem
+    nunca ser escolhido. Quem sabe quais ids existem de verdade é o
+    catálogo, que poda o resto quando carrega.
+
+    `bool` é subclasse de `int` em Python — daí a checagem explícita,
+    senão um `true` no arquivo viraria o campeão de id 1.
+    """
+    if not isinstance(value, list):
+        return []
+    return [
+        item
+        for item in value
+        if isinstance(item, int) and not isinstance(item, bool) and item > 0
+    ]
+
+
 @dataclass
 class Config:
     auto_accept: bool = True
@@ -31,6 +51,18 @@ class Config:
     pick_priority: list[int] = field(default_factory=list)
     ban_priority: list[int] = field(default_factory=list)
     lock_delay_seconds: float = 3.0
+
+    def __post_init__(self) -> None:
+        self.sanitize()
+
+    def sanitize(self) -> None:
+        """Descarta ids malformados das listas de prioridade.
+
+        Roda na construção (cobre a leitura do disco) e de novo antes de
+        gravar, porque a UI escreve nos campos direto por `setattr`.
+        """
+        self.pick_priority = champion_ids(self.pick_priority)
+        self.ban_priority = champion_ids(self.ban_priority)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
@@ -48,6 +80,7 @@ class Config:
         return cls(**{k: v for k, v in raw.items() if k in known})
 
     def save(self, path: Path | None = None) -> None:
+        self.sanitize()
         target = path or config_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(

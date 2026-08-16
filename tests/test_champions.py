@@ -53,6 +53,42 @@ def test_unknown_name_returns_none():
     assert catalog.id_for("Inexistente") is None
 
 
+def test_drops_mode_variants_that_duplicate_real_champions():
+    """O cliente devolve ~60 cópias de campeões feitas para outros modos.
+
+    Vêm com o mesmo `name` do original e um alias namespaced
+    (`Jade_MasterYi`), mas com ids na casa dos 60000 que a seleção
+    normal nunca aceita. Sem filtrar, a grade mostra cada campeão duas
+    vezes e metade dos cliques salva uma escolha que nunca funciona.
+    """
+    catalog = make_catalog(
+        SUMMARY + [{"id": 60011, "name": "Master Yi", "alias": "Jade_MasterYi"}]
+    )
+    catalog.load()
+    assert catalog.knows(60011) is False
+    assert [name for _, name in catalog.all()] == ["Lee Sin", "Master Yi"]
+    # O clone vinha depois na lista e sequestrava a busca por nome.
+    assert catalog.id_for("master yi") == 11
+
+
+def test_knows_only_the_ids_that_came_from_the_client():
+    catalog = make_catalog()
+    catalog.load()
+    assert catalog.knows(64) is True
+    assert catalog.knows(60079) is False
+
+
+def test_an_unloaded_catalog_claims_to_know_nothing_yet():
+    """Sem catálogo carregado, `knows` é falso para tudo.
+
+    Quem for podar uma lista com base nisso precisa checar `loaded`
+    antes, senão apaga as escolhas do usuário numa falha de rede.
+    """
+    catalog = make_catalog(failures={endpoints.CHAMPION_SUMMARY})
+    catalog.load()
+    assert catalog.knows(64) is False
+
+
 def test_failed_load_leaves_the_catalog_usable():
     catalog = make_catalog(failures={endpoints.CHAMPION_SUMMARY})
     catalog.load()
