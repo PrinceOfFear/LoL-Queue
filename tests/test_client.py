@@ -72,6 +72,18 @@ def test_timeout_is_an_lcu_error_not_client_closed():
     assert not isinstance(excinfo.value, ClientClosed)
 
 
+def test_raw_returns_bytes_without_parsing_json():
+    """Retratos de campeão são PNG: passar por .json() estouraria."""
+    session = FakeSession(FakeResponse(content=b"\x89PNG\r\n"))
+    assert LcuClient(CREDS, session=session).raw("/icon.png") == b"\x89PNG\r\n"
+
+
+def test_raw_raises_on_http_error_like_the_rest():
+    session = FakeSession(FakeResponse(status_code=404, content=b"nope"))
+    with pytest.raises(LcuError):
+        LcuClient(CREDS, session=session).raw("/icon.png")
+
+
 def test_http_error_status_raises_lcu_error():
     session = FakeSession(FakeResponse(status_code=404))
     with pytest.raises(LcuError):

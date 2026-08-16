@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QComboBox,
-    QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -12,12 +13,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+GRID_ICON = QSize(46, 46)
+GRID_CELL = QSize(58, 58)
+CHOSEN_ICON = QSize(30, 30)
+CHOSEN_HEIGHT = 132
+
 
 class ChampionPicker(QWidget):
-    """Lista ordenada de campeões por prioridade.
+    """Grade de retratos em cima, lista de prioridade embaixo.
 
-    O primeiro da lista é tentado primeiro; se estiver indisponível,
-    desce para o próximo.
+    Clicar num retrato acrescenta o campeão ao fim da lista. A posição na
+    lista é a prioridade: o primeiro é tentado primeiro e, se estiver
+    indisponível, desce para o próximo. Arrastar reordena.
     """
 
     changed = Signal(list)
@@ -25,30 +32,46 @@ class ChampionPicker(QWidget):
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._catalog = None
+        self._icons = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(9)
+        layout.setSpacing(8)
 
         heading = QLabel(title)
         heading.setObjectName("sectionTitle")
         layout.addWidget(heading)
 
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        self._combo = QComboBox()
-        self._combo.setEditable(True)
-        self._combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        row.addWidget(self._combo, 1)
-        add = QPushButton("Adicionar")
-        add.setObjectName("primaryButton")
-        add.clicked.connect(self._add_selected)
-        row.addWidget(add)
-        layout.addLayout(row)
+        self._search = QLineEdit()
+        self._search.setObjectName("search")
+        self._search.setPlaceholderText("buscar campeão")
+        self._search.setClearButtonEnabled(True)
+        self._search.textChanged.connect(self._filter)
+        layout.addWidget(self._search)
+
+        self._grid = QListWidget()
+        self._grid.setObjectName("championGrid")
+        self._grid.setViewMode(QListView.ViewMode.IconMode)
+        self._grid.setIconSize(GRID_ICON)
+        self._grid.setGridSize(GRID_CELL)
+        self._grid.setMovement(QListView.Movement.Static)
+        self._grid.setResizeMode(QListView.ResizeMode.Adjust)
+        self._grid.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self._grid.setUniformItemSizes(True)
+        self._grid.setWordWrap(False)
+        self._grid.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self._grid.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._grid.itemClicked.connect(self._add)
+        layout.addWidget(self._grid, 1)
+
+        chosen = QLabel("ESCOLHIDOS — ARRASTE PARA REORDENAR")
+        chosen.setObjectName("subTitle")
+        layout.addWidget(chosen)
 
         self._list = QListWidget()
         self._list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
-        self._list.setFixedHeight(150)
+        self._list.setIconSize(CHOSEN_ICON)
+        self._list.setFixedHeight(CHOSEN_HEIGHT)
         self._list.model().rowsMoved.connect(self._on_reordered)
         layout.addWidget(self._list)
 
@@ -57,17 +80,46 @@ class ChampionPicker(QWidget):
         remove.clicked.connect(self._remove_selected)
         layout.addWidget(remove)
 
-        # Sem isto o espaço sobrando é dividido entre os widgets e os
-        # controles ficam boiando no meio da página.
-        layout.addStretch(1)
+    # ---------- entrada de dados ----------
 
     def set_catalog(self, catalog) -> None:
         self._catalog = catalog
-        self._combo.clear()
-        for champion_id, name in catalog.all():
-            self._combo.addItem(name, champion_id)
-        # A lista pode ter sido preenchida pela config antes do catálogo
-        # chegar; sem isto os salvos ficariam exibidos como "#64".
+        self._grid.clear()
+        for champion_id, _ in catalog.all():
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, champion_id)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._decorate(item, champion_id)
+            self._grid.addItem(item)
+        self._prune()
+        # A lista de prioridade pode ter vindo da config antes do catálogo;
+        # sem isto os salvos ficariam exibidos como "#64".
+        self._renumber()
+        self._filter(self._search.text())
+
+    def _prune(self) -> None:
+        """Descarta escolhas que o catálogo não reconhece.
+
+        Um id inexistente jamais seria escolhido — ficaria só ocupando
+        uma posição da prioridade, parecendo válido. Só age com o
+        catálogo carregado: numa falha de rede ele está vazio, e podar
+        por ele apagaria tudo que o usuário escolheu.
+        """
+        if self._catalog is None or not self._catalog.loaded:
+            return
+        current = self.ids()
+        kept = [champion_id for champion_id in current if self._catalog.knows(champion_id)]
+        if kept == current:
+            return
+        self.set_ids(kept)
+        self._emit()
+
+    def set_icons(self, store) -> None:
+        """Liga (ou religa) o cache de retratos e redesenha o que houver."""
+        self._icons = store
+        for row in range(self._grid.count()):
+            item = self._grid.item(row)
+            self._decorate(item, item.data(Qt.ItemDataRole.UserRole))
         self._renumber()
 
     def set_ids(self, ids: list[int]) -> None:
@@ -81,27 +133,62 @@ class ChampionPicker(QWidget):
             for row in range(self._list.count())
         ]
 
+    # ---------- desenho ----------
+
+    def _name(self, champion_id: int) -> str:
+        if self._catalog is None:
+            return f"#{champion_id}"
+        return self._catalog.name(champion_id)
+
+    def _icon(self, champion_id: int) -> QIcon | None:
+        if self._icons is None or not self._icons.has(champion_id):
+            return None
+        return QIcon(str(self._icons.path_for(champion_id)))
+
+    def _decorate(self, item: QListWidgetItem, champion_id: int) -> None:
+        """Retrato quando existe; nome enquanto ainda está baixando."""
+        name = self._name(champion_id)
+        item.setToolTip(name)
+        icon = self._icon(champion_id)
+        if icon is None:
+            # Na primeira execução os retratos ainda estão vindo. Sem o
+            # nome no lugar, a grade seria um campo de quadrados vazios.
+            item.setText(name)
+            item.setIcon(QIcon())
+        else:
+            item.setText("")
+            item.setIcon(icon)
+
     def _label(self, position: int, champion_id: int) -> str:
-        name = self._catalog.name(champion_id) if self._catalog else f"#{champion_id}"
-        return f"{position}.  {name}"
+        return f"{position}.  {self._name(champion_id)}"
 
     def _append(self, champion_id: int) -> None:
         item = QListWidgetItem(self._label(self._list.count() + 1, champion_id))
         item.setData(Qt.ItemDataRole.UserRole, champion_id)
+        icon = self._icon(champion_id)
+        if icon is not None:
+            item.setIcon(icon)
         self._list.addItem(item)
 
     def _renumber(self) -> None:
         """Reescreve os rótulos: a posição na lista é a prioridade."""
         for row in range(self._list.count()):
             item = self._list.item(row)
-            item.setText(self._label(row + 1, item.data(Qt.ItemDataRole.UserRole)))
+            champion_id = item.data(Qt.ItemDataRole.UserRole)
+            item.setText(self._label(row + 1, champion_id))
+            icon = self._icon(champion_id)
+            item.setIcon(icon if icon is not None else QIcon())
 
-    def _on_reordered(self, *_) -> None:
-        self._renumber()
-        self._emit()
+    # ---------- interação ----------
 
-    def _add_selected(self) -> None:
-        champion_id = self._combo.currentData()
+    def _filter(self, text: str) -> None:
+        needle = text.strip().casefold()
+        for row in range(self._grid.count()):
+            item = self._grid.item(row)
+            item.setHidden(bool(needle) and needle not in item.toolTip().casefold())
+
+    def _add(self, item: QListWidgetItem) -> None:
+        champion_id = item.data(Qt.ItemDataRole.UserRole)
         if champion_id is None or champion_id in self.ids():
             return
         self._append(champion_id)
@@ -112,6 +199,10 @@ class ChampionPicker(QWidget):
         if row < 0:
             return
         self._list.takeItem(row)
+        self._renumber()
+        self._emit()
+
+    def _on_reordered(self, *_) -> None:
         self._renumber()
         self._emit()
 

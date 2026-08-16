@@ -19,20 +19,15 @@ from ..config import QUEUES, Config
 from ..core.champ_select import ChampSelectController
 from ..core.champions import ChampionCatalog
 from ..core.engine import Engine
+from ..core.icons import IconStore
 from ..core.phases import GameflowPhase
 from ..core.watcher import PhaseWatcher
+from .icon_loader import IconLoader
 from .theme import STYLESHEET
 from .widgets.champion_picker import ChampionPicker
 from .widgets.log_pane import LogPane
 from .widgets.sidebar import Sidebar
 from .widgets.status_ring import StatusRing
-
-TIMED_PHASES = {
-    GameflowPhase.MATCHMAKING.value,
-    GameflowPhase.READY_CHECK.value,
-    GameflowPhase.CHAMP_SELECT.value,
-}
-
 
 class MainWindow(QWidget):
     """Janela sem moldura nativa. Só desenha estado."""
@@ -46,6 +41,8 @@ class MainWindow(QWidget):
         super().__init__()
         self._config = config
         self._catalog: ChampionCatalog | None = None
+        self._icons = IconStore()
+        self._icon_loader: IconLoader | None = None
         self._phase = GameflowPhase.NONE.value
         self._phase_started = time.monotonic()
         self._drag_offset = None
@@ -146,8 +143,8 @@ class MainWindow(QWidget):
     def _build_champions_page(self) -> QWidget:
         page = QWidget()
         layout = QHBoxLayout(page)
-        layout.setContentsMargins(40, 20, 40, 28)
-        layout.setSpacing(28)
+        layout.setContentsMargins(32, 14, 32, 20)
+        layout.setSpacing(24)
 
         self._pick_picker = ChampionPicker("PRIORIDADE DE ESCOLHA")
         self._pick_picker.set_ids(self._config.pick_priority)
@@ -287,22 +284,36 @@ class MainWindow(QWidget):
         self._phase = phase_value
         self._phase_started = time.monotonic()
         if self._catalog is not None:
-            self._pick_picker.set_catalog(self._catalog)
-            self._ban_picker.set_catalog(self._catalog)
-            self._catalog = None
+            catalog, self._catalog = self._catalog, None
+            for picker in (self._pick_picker, self._ban_picker):
+                picker.set_icons(self._icons)
+                picker.set_catalog(catalog)
+            self._start_icon_loader(catalog)
         self._refresh_ring()
+
+    def _start_icon_loader(self, catalog: ChampionCatalog) -> None:
+        """Busca os retratos que faltam, uma vez por conexão."""
+        ids = [champion_id for champion_id, _ in catalog.all()]
+        if self._icon_loader is not None or not self._icons.missing(ids):
+            return
+        self._log_message("Baixando os retratos dos campeões…")
+        self._icon_loader = IconLoader(ids, self._icons, self)
+        self._icon_loader.done.connect(self._on_icons_ready)
+        self._icon_loader.start()
+
+    def _on_icons_ready(self) -> None:
+        for picker in (self._pick_picker, self._ban_picker):
+            picker.set_icons(self._icons)
+        self._log_message("Retratos prontos.")
 
     def _on_connection_changed(self, connected: bool) -> None:
         self._sidebar.set_connected(connected)
         self._ring.set_connected(connected)
 
     def _refresh_ring(self) -> None:
-        elapsed = (
-            time.monotonic() - self._phase_started
-            if self._phase in TIMED_PHASES
-            else 0.0
-        )
-        self._ring.set_phase(self._phase, elapsed)
+        # Conta em toda fase, não só nas de fila. Zerado fora delas o
+        # cronômetro ficava num 00:00 parado que parecia defeito.
+        self._ring.set_phase(self._phase, time.monotonic() - self._phase_started)
 
     def _log_message(self, message: str) -> None:
         self._log.append(message)
@@ -323,4 +334,7 @@ class MainWindow(QWidget):
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self._watcher.stop()
         self._watcher.wait(3000)
+        if self._icon_loader is not None:
+            self._icon_loader.stop()
+            self._icon_loader.wait(3000)
         event.accept()

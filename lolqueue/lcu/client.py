@@ -49,7 +49,20 @@ class LcuClient:
     def delete(self, path: str) -> Any:
         return self._request("DELETE", path)
 
+    def raw(self, path: str) -> bytes:
+        """Corpo sem interpretar. Para imagens, que não são JSON."""
+        return self._send("GET", path).content
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        response = self._send(method, path, **kwargs)
+        if not response.content:
+            return None
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise LcuError(f"{method} {path} devolveu JSON inválido") from exc
+
+    def _send(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self._credentials.base_url}{path}"
         try:
             response = self._session.request(
@@ -62,9 +75,4 @@ class LcuClient:
 
         if response.status_code >= 400:
             raise LcuError(f"{method} {path} respondeu {response.status_code}")
-        if not response.content:
-            return None
-        try:
-            return response.json()
-        except ValueError as exc:
-            raise LcuError(f"{method} {path} devolveu JSON inválido") from exc
+        return response

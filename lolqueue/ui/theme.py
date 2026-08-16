@@ -176,6 +176,15 @@ QComboBox QAbstractItemView {{
     selection-background-color: {Palette.SURFACE_HIGH};
     outline: none;
 }}
+QLineEdit {{
+    background: {Palette.BACKGROUND};
+    border: 1px solid {Palette.BORDER};
+    border-radius: 7px;
+    padding: 7px 11px;
+    font-size: 12px;
+    selection-background-color: {Palette.SURFACE_HIGH};
+}}
+QLineEdit:focus {{ border: 1px solid {Palette.ACCENT}; }}
 QListWidget {{
     background: {Palette.BACKGROUND};
     border: 1px solid {Palette.BORDER};
@@ -187,6 +196,19 @@ QListWidget::item {{ padding: 7px 10px; border-radius: 5px; }}
 QListWidget::item:selected {{
     background: {Palette.SURFACE_HIGH};
     color: {Palette.ACCENT};
+}}
+#championGrid {{ background: {Palette.SURFACE}; }}
+#championGrid::item {{
+    padding: 2px;
+    border-radius: 6px;
+    font-size: 8px;
+    color: {Palette.TEXT_MUTED};
+}}
+#championGrid::item:hover {{ background: {Palette.SURFACE_HIGH}; }}
+#subTitle {{
+    color: {Palette.TEXT_MUTED};
+    font-size: 9px;
+    letter-spacing: 1px;
 }}
 #logPane {{
     background: {Palette.BACKGROUND};
