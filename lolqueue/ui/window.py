@@ -26,6 +26,7 @@ from .icon_loader import IconLoader
 from .theme import STYLESHEET
 from .widgets.champion_picker import ChampionPicker
 from .widgets.log_pane import LogPane
+from .widgets.position_picker import PositionPicker
 from .widgets.sidebar import Sidebar
 from .widgets.status_ring import StatusRing
 
@@ -146,8 +147,11 @@ class MainWindow(QWidget):
         layout.setContentsMargins(32, 14, 32, 20)
         layout.setSpacing(24)
 
-        self._pick_picker = ChampionPicker("PRIORIDADE DE ESCOLHA")
-        self._pick_picker.set_ids(self._config.pick_priority)
+        self._pick_picker = PositionPicker(
+            "PRIORIDADE DE ESCOLHA",
+            self._config.pick_priority,
+            self._config.pick_priority_by_position,
+        )
         self._pick_picker.changed.connect(self._on_pick_priority_changed)
         layout.addWidget(self._pick_picker, 1)
 
@@ -234,8 +238,17 @@ class MainWindow(QWidget):
     def _on_delay_changed(self, value: float) -> None:
         self._set_config("lock_delay_seconds", value)
 
-    def _on_pick_priority_changed(self, ids: list) -> None:
-        self._set_config("pick_priority", ids)
+    def _on_pick_priority_changed(self, position: str, ids: list) -> None:
+        """A aba aberta diz qual lista mudou; a vazia é a geral."""
+        if not position:
+            self._set_config("pick_priority", ids)
+            return
+        by_position = dict(self._config.pick_priority_by_position)
+        if ids:
+            by_position[position] = ids
+        else:
+            by_position.pop(position, None)
+        self._set_config("pick_priority_by_position", by_position)
 
     def _on_ban_priority_changed(self, ids: list) -> None:
         self._set_config("ban_priority", ids)

@@ -205,6 +205,23 @@ QListWidget::item:selected {{
     color: {Palette.TEXT_MUTED};
 }}
 #championGrid::item:hover {{ background: {Palette.SURFACE_HIGH}; }}
+#positionTabs {{ background: transparent; }}
+#positionTabs::tab {{
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: {Palette.TEXT_MUTED};
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 7px 9px;
+    margin-right: 2px;
+}}
+#positionTabs::tab:hover {{ color: {Palette.TEXT}; }}
+#positionTabs::tab:selected {{
+    color: {Palette.ACCENT};
+    border-bottom: 2px solid {Palette.ACCENT};
+}}
 #subTitle {{
     color: {Palette.TEXT_MUTED};
     font-size: 9px;

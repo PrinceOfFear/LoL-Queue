@@ -64,9 +64,10 @@ class ChampionPicker(QWidget):
         self._grid.itemClicked.connect(self._add)
         layout.addWidget(self._grid, 1)
 
-        chosen = QLabel("ESCOLHIDOS — ARRASTE PARA REORDENAR")
-        chosen.setObjectName("subTitle")
-        layout.addWidget(chosen)
+        self._layout = layout
+        self._chosen_label = QLabel("ESCOLHIDOS — ARRASTE PARA REORDENAR")
+        self._chosen_label.setObjectName("subTitle")
+        layout.addWidget(self._chosen_label)
 
         self._list = QListWidget()
         self._list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
@@ -79,6 +80,14 @@ class ChampionPicker(QWidget):
         remove.setObjectName("logToggle")
         remove.clicked.connect(self._remove_selected)
         layout.addWidget(remove)
+
+    def add_list_header(self, widget: QWidget) -> None:
+        """Encaixa um widget logo acima da lista de prioridade.
+
+        É por aqui que a seleção por rota pendura suas abas, sem que a
+        grade precise saber que rotas existem.
+        """
+        self._layout.insertWidget(self._layout.indexOf(self._chosen_label), widget)
 
     # ---------- entrada de dados ----------
 
