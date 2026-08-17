@@ -222,6 +222,12 @@ QListWidget::item:selected {{
     color: {Palette.ACCENT};
     border-bottom: 2px solid {Palette.ACCENT};
 }}
+#listNotice {{
+    color: {Palette.TEXT_MUTED};
+    font-size: 10px;
+    padding: 2px 0 4px 0;
+}}
+#listNotice[alert="true"] {{ color: {Palette.ACCENT}; }}
 #subTitle {{
     color: {Palette.TEXT_MUTED};
     font-size: 9px;

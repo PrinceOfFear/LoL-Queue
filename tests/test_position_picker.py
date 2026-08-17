@@ -97,6 +97,54 @@ def test_the_catalog_prunes_every_tab_not_just_the_open_one(picker):
     assert ("top", [64]) in recebido
 
 
+def test_the_general_tab_warns_which_lanes_ignore_it(picker):
+    """Editar a geral sem saber que a rota tem lista é a armadilha.
+
+    Foi o que aconteceu de verdade: a ordem da geral foi reordenada e
+    salva, mas o jogador caiu de ADC e o motor usou a lista de ADC. Da
+    aba geral nada indicava isso.
+    """
+    picker._tabs.setCurrentIndex(tab_index(GENERAL))
+    assert "SUP" in picker.notice()
+
+    picker._tabs.setCurrentIndex(tab_index("top"))
+    picker._on_ids_changed([64])
+    picker._tabs.setCurrentIndex(tab_index(GENERAL))
+    assert "TOPO" in picker.notice()
+    assert "SUP" in picker.notice()
+
+
+def test_the_general_tab_says_so_when_it_rules_everything(picker):
+    picker._tabs.setCurrentIndex(tab_index("utility"))
+    picker._on_ids_changed([])
+    picker._tabs.setCurrentIndex(tab_index(GENERAL))
+
+    assert "todas as rotas" in picker.notice()
+
+
+def test_a_lane_without_a_list_says_it_falls_back(picker):
+    picker._tabs.setCurrentIndex(tab_index("jungle"))
+
+    assert "geral" in picker.notice()
+
+
+def test_a_lane_with_a_list_says_when_it_applies(picker):
+    picker._tabs.setCurrentIndex(tab_index("utility"))
+
+    assert "Suporte" in picker.notice()
+
+
+def test_the_warning_is_flagged_only_when_a_lane_overrides(picker):
+    """O alerta é o que muda a cor; sem conflito não há o que alertar."""
+    picker._tabs.setCurrentIndex(tab_index(GENERAL))
+    assert picker._notice.property("alert") is True
+
+    picker._tabs.setCurrentIndex(tab_index("utility"))
+    picker._on_ids_changed([])
+    picker._tabs.setCurrentIndex(tab_index(GENERAL))
+    assert picker._notice.property("alert") is False
+
+
 def test_a_tab_with_its_own_list_is_marked(picker):
     marcada = picker._tabs.tabText(tab_index("utility"))
     vazia = picker._tabs.tabText(tab_index("jungle"))

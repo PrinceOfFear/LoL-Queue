@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QTabBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QTabBar, QVBoxLayout, QWidget
 
 from ...config import POSITIONS, position_name
 from .champion_picker import ChampionPicker
@@ -27,6 +27,13 @@ TAB_ORDER: tuple[str, ...] = (GENERAL, *POSITIONS)
 #: Marca as abas que têm lista própria, para dar de relance quais rotas
 #: estão configuradas e quais caem na geral.
 FILLED_MARK = " ●"
+
+
+def join_names(names: list[str]) -> str:
+    """Junta rótulos como se escreve à mão: A, B e C."""
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} e {names[-1]}"
 
 
 class PositionPicker(QWidget):
@@ -69,8 +76,14 @@ class PositionPicker(QWidget):
             self._tabs.setTabToolTip(index, self._tooltip(key))
         self._picker.add_list_header(self._tabs)
 
+        self._notice = QLabel()
+        self._notice.setObjectName("listNotice")
+        self._notice.setWordWrap(True)
+        self._picker.add_list_header(self._notice)
+
         self._picker.set_ids(self._lists[GENERAL])
         self._refresh_marks()
+        self._refresh_notice()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self._picker.changed.connect(self._on_ids_changed)
 
@@ -106,10 +119,12 @@ class PositionPicker(QWidget):
     def _on_tab_changed(self, index: int) -> None:
         self._current = TAB_ORDER[index]
         self._picker.set_ids(self._lists[self._current])
+        self._refresh_notice()
 
     def _on_ids_changed(self, ids: list) -> None:
         self._lists[self._current] = list(ids)
         self._refresh_marks()
+        self._refresh_notice()
         self.changed.emit(self._current, list(ids))
 
     def _refresh_marks(self) -> None:
@@ -118,6 +133,41 @@ class PositionPicker(QWidget):
             if key != GENERAL and self._lists[key]:
                 label += FILLED_MARK
             self._tabs.setTabText(index, label)
+
+    def _refresh_notice(self) -> None:
+        """Diz, na aba aberta, se a lista dali vai ser usada de verdade.
+
+        Sem isto a geral parecia mandar em tudo: dava para reordenar,
+        salvar, entrar na partida e ver outro campeão ser escolhido,
+        porque a rota sorteada tinha lista própria e ela é que valia.
+        """
+        text, alert = self._notice_for(self._current)
+        self._notice.setText(text)
+        self._notice.setProperty("alert", alert)
+        # Propriedade dinâmica só muda a cor depois de repintar.
+        self._notice.style().unpolish(self._notice)
+        self._notice.style().polish(self._notice)
+
+    def _notice_for(self, key: str) -> tuple[str, bool]:
+        if key != GENERAL:
+            if self._lists[key]:
+                return f"Vale quando você cair de {position_name(key)}.", False
+            return "Sem lista própria — esta rota usa a lista geral.", False
+
+        overriding = [
+            TAB_LABELS[position]
+            for position in POSITIONS
+            if self._lists[position]
+        ]
+        if not overriding:
+            return "Vale para todas as rotas.", False
+        return (
+            f"{join_names(overriding)} têm lista própria e não usam esta.",
+            True,
+        )
+
+    def notice(self) -> str:
+        return self._notice.text()
 
     # ---------- leitura ----------
 
