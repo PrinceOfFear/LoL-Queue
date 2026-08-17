@@ -97,6 +97,20 @@ def test_the_catalog_prunes_every_tab_not_just_the_open_one(picker):
     assert ("top", [64]) in recebido
 
 
+def test_the_tabs_come_before_what_they_command(picker):
+    """A aba aberta decide o que a grade e a lista estão editando.
+
+    Embaixo, depois da grade, ela passava batida: o usuário reordenava
+    a lista geral sem ver que a rota dele tinha lista própria. Quem
+    manda tem que aparecer primeiro.
+    """
+    layout = picker._picker._layout
+
+    assert layout.indexOf(picker._tabs) < layout.indexOf(picker._picker._grid)
+    assert layout.indexOf(picker._tabs) < layout.indexOf(picker._notice)
+    assert layout.indexOf(picker._notice) < layout.indexOf(picker._picker._grid)
+
+
 def test_the_general_tab_warns_which_lanes_ignore_it(picker):
     """Editar a geral sem saber que a rota tem lista é a armadilha.
 

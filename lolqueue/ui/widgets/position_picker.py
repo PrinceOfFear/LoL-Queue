@@ -74,12 +74,12 @@ class PositionPicker(QWidget):
         for key in TAB_ORDER:
             index = self._tabs.addTab(TAB_LABELS[key])
             self._tabs.setTabToolTip(index, self._tooltip(key))
-        self._picker.add_list_header(self._tabs)
+        self._picker.add_header(self._tabs)
 
         self._notice = QLabel()
         self._notice.setObjectName("listNotice")
         self._notice.setWordWrap(True)
-        self._picker.add_list_header(self._notice)
+        self._picker.add_header(self._notice)
 
         self._picker.set_ids(self._lists[GENERAL])
         self._refresh_marks()

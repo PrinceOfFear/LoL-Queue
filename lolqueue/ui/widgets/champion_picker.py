@@ -60,6 +60,10 @@ class ChampionPicker(QWidget):
         heading.setObjectName("sectionTitle")
         layout.addWidget(heading)
 
+        #: Onde `add_header` encaixa o próximo widget: logo depois do
+        #: título. Anda junto para que várias chamadas fiquem na ordem.
+        self._header_slot = layout.count()
+
         self._search = QLineEdit()
         self._search.setObjectName("search")
         self._search.setPlaceholderText("buscar campeão")
@@ -99,13 +103,17 @@ class ChampionPicker(QWidget):
         remove.clicked.connect(self._remove_selected)
         layout.addWidget(remove)
 
-    def add_list_header(self, widget: QWidget) -> None:
-        """Encaixa um widget logo acima da lista de prioridade.
+    def add_header(self, widget: QWidget) -> None:
+        """Encaixa um widget logo abaixo do título, antes da busca.
 
         É por aqui que a seleção por rota pendura suas abas, sem que a
-        grade precise saber que rotas existem.
+        grade precise saber que rotas existem. Vem antes de tudo porque
+        é a aba aberta que decide qual lista a grade e a prioridade
+        estão editando: embaixo, depois da grade, ela passava batida e
+        o usuário reordenava uma lista que não valia para a rota dele.
         """
-        self._layout.insertWidget(self._layout.indexOf(self._chosen_label), widget)
+        self._layout.insertWidget(self._header_slot, widget)
+        self._header_slot += 1
 
     # ---------- entrada de dados ----------
 
