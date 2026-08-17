@@ -4,7 +4,7 @@ import time
 from functools import partial
 from typing import Callable, Protocol
 
-from ..config import Config
+from ..config import Config, queue_name
 from ..lcu import endpoints
 from ..lcu.client import ClientClosed, LcuError
 from .phases import END_PHASES, GameflowPhase
@@ -126,6 +126,8 @@ class Engine:
             return self._start_queue
         if phase in END_PHASES and self._config.auto_queue:
             return self._play_again
+        if phase is GameflowPhase.NONE and self._config.auto_queue:
+            return self._open_lobby
         return None
 
     def _clear_pending(self) -> None:
@@ -292,3 +294,19 @@ class Engine:
     def _play_again(self) -> None:
         self._client.post(endpoints.PLAY_AGAIN)
         self._log("Voltando ao lobby.")
+
+    def _open_lobby(self) -> None:
+        """Reabre o lobby quando o cliente larga o jogador na tela inicial.
+
+        O `play-again` nem sempre recria o lobby: em algumas partidas o
+        cliente volta para a tela inicial, e ali não existe lobby de onde
+        entrar na fila. Como a fase para de mudar, a fila contínua morria
+        calada exatamente aí.
+
+        Não é preciso conferir se já há um lobby: se houvesse, a fase
+        seria `Lobby` e esta ação nem seria escolhida.
+        """
+        self._client.post(
+            endpoints.LOBBY, json={"queueId": self._config.queue_id}
+        )
+        self._log(f"Sem lobby — abrindo {queue_name(self._config.queue_id)}.")

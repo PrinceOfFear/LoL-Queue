@@ -112,7 +112,6 @@ def test_play_again_closes_the_loop(phase):
 @pytest.mark.parametrize(
     "phase",
     [
-        GameflowPhase.NONE,
         GameflowPhase.MATCHMAKING,
         GameflowPhase.IN_PROGRESS,
         GameflowPhase.GAME_START,
@@ -124,6 +123,43 @@ def test_idle_phases_trigger_nothing(phase):
     engine, client = make_engine(Config(auto_queue=True, auto_accept=True))
     engine.handle_phase(phase)
     assert client.calls == []
+
+
+def test_the_lobby_is_reopened_when_the_client_drops_to_the_home_screen():
+    """O fim da partida às vezes devolve o cliente à tela inicial.
+
+    O `play-again` nem sempre recria o lobby. Quando não recria, não há
+    de onde entrar na fila, e a fila contínua morria calada bem ali.
+    """
+    engine, client = make_engine(Config(auto_queue=True, queue_id=450))
+    engine.handle_phase(GameflowPhase.NONE)
+
+    assert client.payloads == [(endpoints.LOBBY, {"queueId": 450})]
+
+
+def test_reopening_the_lobby_does_not_skip_straight_to_the_queue():
+    """Primeiro o lobby existe, depois a fila — nessa ordem."""
+    engine, client = make_engine(Config(auto_queue=True))
+    engine.handle_phase(GameflowPhase.NONE)
+
+    assert endpoints.MATCHMAKING_SEARCH not in client.paths("POST")
+
+
+def test_the_home_screen_is_left_alone_when_auto_queue_is_off():
+    """Sem fila contínua, abrir lobby sozinho seria invasão pura."""
+    engine, client = make_engine(Config(auto_queue=False))
+    engine.handle_phase(GameflowPhase.NONE)
+
+    assert client.calls == []
+
+
+def test_the_reopened_lobby_leads_into_the_queue():
+    """O ciclo fecha: tela inicial -> lobby -> fila."""
+    engine, client = make_engine(Config(auto_queue=True), responses=LOBBY_READY)
+    engine.handle_phase(GameflowPhase.NONE)
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")
 
 
 def test_successful_action_runs_only_once_per_phase():

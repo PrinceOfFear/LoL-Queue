@@ -34,6 +34,11 @@ def position_name(position: str) -> str:
     return POSITION_NAMES.get(position.casefold(), position)
 
 
+def queue_name(queue_id: int) -> str:
+    """Nome da fila para o registro. Id desconhecido aparece como número."""
+    return QUEUES.get(queue_id, f"fila {queue_id}")
+
+
 def config_path() -> Path:
     base = os.environ.get("APPDATA") or str(Path.home())
     return Path(base) / "LoLQueue" / "config.json"
