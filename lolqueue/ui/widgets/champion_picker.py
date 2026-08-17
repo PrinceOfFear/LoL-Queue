@@ -19,6 +19,24 @@ CHOSEN_ICON = QSize(30, 30)
 CHOSEN_HEIGHT = 132
 
 
+class PriorityList(QListWidget):
+    """Lista arrastável que avisa quando um arrasto termina.
+
+    Escutar `rowsMoved` não bastava: esse sinal só vem se o Qt resolver o
+    arrasto interno como movimento de linha, e quando ele resolve por
+    remoção e inserção nada é emitido. A reordenação ficava só na tela,
+    a config guardava a ordem antiga e o motor escolhia por ela — foi o
+    defeito relatado, com o campeão do topo antigo sendo escolhido de
+    novo. `dropEvent` é o único ponto por onde todo drop passa.
+    """
+
+    dropped = Signal()
+
+    def dropEvent(self, event) -> None:
+        super().dropEvent(event)
+        self.dropped.emit()
+
+
 class ChampionPicker(QWidget):
     """Grade de retratos em cima, lista de prioridade embaixo.
 
@@ -69,11 +87,11 @@ class ChampionPicker(QWidget):
         self._chosen_label.setObjectName("subTitle")
         layout.addWidget(self._chosen_label)
 
-        self._list = QListWidget()
+        self._list = PriorityList()
         self._list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self._list.setIconSize(CHOSEN_ICON)
         self._list.setFixedHeight(CHOSEN_HEIGHT)
-        self._list.model().rowsMoved.connect(self._on_reordered)
+        self._list.dropped.connect(self._on_reordered)
         layout.addWidget(self._list)
 
         remove = QPushButton("Remover selecionado")
