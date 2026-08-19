@@ -16,6 +16,7 @@ from ..core.champions import ChampionCatalog
 from ..core.engine import Engine
 from ..core.icons import IconStore
 from ..core.journal import Journal
+from ..core.loadout import Loadout
 from ..core.phases import GameflowPhase
 from ..core.watcher import PhaseWatcher
 from .binding import ConfigBinder
@@ -130,7 +131,13 @@ class MainWindow(QWidget):
         engine = Engine(client, self._config, log=self._watcher.message.emit)
         engine.set_champ_select(
             ChampSelectController(
-                client, self._config, catalog, log=self._watcher.message.emit
+                client,
+                self._config,
+                catalog,
+                log=self._watcher.message.emit,
+                loadout=Loadout(
+                    client, self._config, catalog, log=self._watcher.message.emit
+                ),
             )
         )
         engine.set_enabled(self._enabled)

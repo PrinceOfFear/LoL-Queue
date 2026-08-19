@@ -43,6 +43,9 @@ class LcuClient:
     def post(self, path: str, json: Any | None = None) -> Any:
         return self._request("POST", path, json=json)
 
+    def put(self, path: str, json: Any | None = None) -> Any:
+        return self._request("PUT", path, json=json)
+
     def patch(self, path: str, json: Any | None = None) -> Any:
         return self._request("PATCH", path, json=json)
 

@@ -9,13 +9,16 @@ class FakeLcuClient:
     """Cliente LCU falso.
 
     - `responses` mapeia caminho -> payload devolvido pelo GET
+    - `posts` mapeia caminho -> payload devolvido pelo POST, para quando
+      a resposta importa (criar página de runas devolve o id da nova)
     - `failures` são caminhos que levantam LcuError
     - `closed` faz qualquer chamada levantar ClientClosed
     - `calls` grava (método, caminho) na ordem
     """
 
-    def __init__(self, responses=None, failures=None, closed=False):
+    def __init__(self, responses=None, failures=None, closed=False, posts=None):
         self.responses = dict(responses or {})
+        self.posts = dict(posts or {})
         self.failures = set(failures or ())
         self.closed = closed
         self.calls: list[tuple[str, str]] = []
@@ -34,6 +37,11 @@ class FakeLcuClient:
 
     def post(self, path, json=None):
         self._record("POST", path)
+        self.payloads.append((path, json))
+        return self.posts.get(path)
+
+    def put(self, path, json=None):
+        self._record("PUT", path)
         self.payloads.append((path, json))
         return None
 

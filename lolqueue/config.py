@@ -75,6 +75,8 @@ class Config:
     auto_queue: bool = False
     auto_pick: bool = False
     auto_ban: bool = False
+    auto_spells: bool = False
+    auto_runes: bool = False
     queue_id: int = 420
     pick_priority: list[int] = field(default_factory=list)
     ban_priority: list[int] = field(default_factory=list)

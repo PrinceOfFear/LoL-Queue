@@ -30,8 +30,21 @@ class SettingsPage(QWidget):
             ("Aceitar partida automaticamente", "auto_accept"),
             ("Escolher campeão automaticamente", "auto_pick"),
             ("Banir campeão automaticamente", "auto_ban"),
+            ("Aplicar os feitiços recomendados", "auto_spells"),
+            ("Aplicar as runas recomendadas", "auto_runes"),
         ):
             layout.addWidget(binder.checkbox(label, attribute))
+
+        # Estes dois não têm lista para configurar, e sem uma linha de
+        # explicação "recomendados" não diz por quem.
+        note = QLabel(
+            "Feitiços e runas saem da recomendação do próprio cliente do LoL "
+            "para o campeão e a rota da partida. O app mantém uma única "
+            "página de runas, chamada “LoL Queue”, e não mexe nas suas."
+        )
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        layout.addWidget(note)
 
         delay_row = QHBoxLayout()
         delay_row.addWidget(QLabel("Atraso antes de travar o campeão"))

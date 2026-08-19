@@ -72,12 +72,16 @@ class ChampSelectController:
         catalog,
         log: Callable[[str], None] | None = None,
         now: Callable[[], float] = time.monotonic,
+        loadout=None,
     ) -> None:
         self._client = client
         self._config = config
         self._catalog = catalog
         self._log = log or (lambda message: None)
         self._now = now
+        # Recebe a sessão de carona: o equipamento precisa exatamente do
+        # que já foi buscado aqui, e um GET por tick a mais não se paga.
+        self._loadout = loadout
         self._hovered_action: int | None = None
         self._hovered_at = 0.0
         self._warned_action: int | None = None
@@ -96,11 +100,15 @@ class ChampSelectController:
         self._locked_at = 0.0
         self._lock_attempts = 0
         self._announced_position = None
+        if self._loadout is not None:
+            self._loadout.reset()
 
     def tick(self) -> None:
         session = self._client.get(endpoints.CHAMP_SELECT_SESSION)
         if not isinstance(session, dict):
             return
+        if self._loadout is not None:
+            self._loadout.apply(session)
         action = find_current_action(session)
 
         if self._locked_action is not None and (

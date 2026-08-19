@@ -25,3 +25,28 @@ BANNABLE_CHAMPIONS = "/lol-champ-select/v1/bannable-champion-ids"
 CHAMPION_SUMMARY = "/lol-game-data/assets/v1/champion-summary.json"
 CHAMPION_ICON = "/lol-game-data/assets/v1/champion-icons/{champion_id}.png"
 CURRENT_SUMMONER = "/lol-summoner/v1/current-summoner"
+#: Sessão do gameflow. Usada só para descobrir o mapa: a recomendação de
+#: runas muda entre a Fenda (11) e o Abismo (12), e a sessão da seleção
+#: de campeões não diz em qual dos dois se está.
+GAMEFLOW_SESSION = "/lol-gameflow/v1/session"
+CHAMP_SELECT_MY_SELECTION = "/lol-champ-select/v1/session/my-selection"
+
+#: Páginas de runas do jogador. POST cria e devolve a página com id;
+#: DELETE remove. Quantas cabem sai de PERK_INVENTORY, em
+#: `canAddCustomPage` — a conta não é o número de páginas, porque parte
+#: dos espaços vem de recompensa de nível.
+PERK_PAGES = "/lol-perks/v1/pages"
+PERK_PAGE = "/lol-perks/v1/pages/{page_id}"
+PERK_INVENTORY = "/lol-perks/v1/inventory"
+#: Ativa uma página. O corpo é o id cru, um inteiro solto — não um
+#: objeto com o id dentro.
+PERK_CURRENT_PAGE = "/lol-perks/v1/currentpage"
+#: Recomendação da Riot para um campeão numa rota. Devolve três opções;
+#: a primeira é a padrão. Traz as runas e também `summonerSpellIds`, o
+#: que resolve feitiços e runas numa chamada só. `position` aceita
+#: "NONE", e aí a Riot responde pela rota natural do campeão; vazio dá
+#: 400.
+PERK_RECOMMENDED = (
+    "/lol-perks/v1/recommended-pages"
+    "/champion/{champion_id}/position/{position}/map/{map_id}"
+)
