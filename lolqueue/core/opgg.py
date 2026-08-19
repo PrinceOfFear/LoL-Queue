@@ -1,16 +1,21 @@
-"""Runas e feitiços do OP.GG.
+"""Runas, feitiços e itens do OP.GG.
 
 A Riot recomenda o que os designers acham bom; o OP.GG mede o que
 venceu. Este módulo pega a segunda opinião pelo servidor MCP oficial do
-OP.GG — `mcp-api.op.gg`, aberto, sem chave — e devolve as nove runas e
-os dois feitiços prontos para o cliente.
+OP.GG — `mcp-api.op.gg`, aberto, sem chave — e devolve as nove runas,
+os dois feitiços e os blocos de itens prontos para o cliente.
 
 **A resposta não é JSON.** É um formato compacto feito para LLM: o
 esquema vem declarado em cima, em linhas ``class X: campo,campo``, e os
 valores vêm embaixo por posição, ``Runes(8112,8100,"Domination",…)``.
-Contar vírgulas seria construir uma bomba-relógio, então o parser aqui
-lê o esquema declarado e casa os nomes com os valores. Um campo novo no
-meio da lista deixa de ser um incidente.
+
+**E o nome da classe não identifica o campo.** O servidor reaproveita
+``CoreItems`` para tudo que tenha o mesmo feitio — os itens iniciais, as
+botas e até os feitiços de invocador chegam com essa mesma etiqueta.
+Procurar a classe pelo nome, portanto, é procurar errado. O caminho é
+entrar em ``Data(...)`` e casar cada valor com o campo que o próprio
+servidor declarou para aquela posição. De quebra, um campo novo no meio
+da lista deixa de ser um incidente.
 
 **Nada aqui é obrigatório.** Toda falha — rede fora, campeão
 desconhecido, formato mudado, modo sem dados — vira ``None``, e quem
@@ -33,7 +38,27 @@ TIER = "diamond_plus"
 
 #: Sintaxe do próprio servidor: `[]` marca campo de lista. Sem isso ele
 #: recusa o pedido e devolve um diagnóstico em vez de dados.
-FIELDS = ("data.runes[]", "data.summoner_spells[]")
+FIELDS = (
+    "data.runes[]",
+    "data.summoner_spells[]",
+    "data.starter_items[]",
+    "data.boots[]",
+    "data.core_items[]",
+    "data.fourth_items[]",
+    "data.fifth_items[]",
+    "data.sixth_items[]",
+)
+
+#: Os blocos do arsenal, na ordem em que se compra. O rótulo é o que
+#: aparece na loja, dentro da partida.
+ITEM_BLOCKS = (
+    ("starter_items", "Iniciais"),
+    ("boots", "Botas"),
+    ("core_items", "Principais"),
+    ("fourth_items", "4º item"),
+    ("fifth_items", "5º item"),
+    ("sixth_items", "6º item"),
+)
 
 #: Os dois modos com dados: fila ranqueada e Abismo. Normal e URF
 #: existem no servidor mas voltam vazios.
@@ -57,17 +82,31 @@ POSITIONS = {
 #: secundária, três fragmentos.
 PERK_COUNT = 9
 
+#: A chamada que embrulha a resposta inteira.
+ROOT = "LolGetChampionAnalysis"
+
 _CALL = "(?<![A-Za-z0-9_]){name}\\("
+_NAMED = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\((.*)\)$", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class Block:
+    """Um bloco do arsenal: o rótulo na loja e o que comprar nele."""
+
+    label: str
+    items: tuple[int, ...]
+    win_rate: float
 
 
 @dataclass(frozen=True)
 class Build:
-    """O que o cliente precisa para montar uma página e os feitiços."""
+    """O que o cliente precisa para montar página, feitiços e arsenal."""
 
     style: int
     sub_style: int
     perks: tuple[int, ...]
     spells: tuple[int, int]
+    blocks: tuple[Block, ...] = ()
 
 
 # ---------- o formato compacto ----------
@@ -123,19 +162,66 @@ def _arguments(text: str, name: str) -> str | None:
     return None
 
 
-def _fields(text: str, name: str) -> dict[str, str] | None:
-    """Casa o esquema declarado com os valores, por nome."""
-    match = re.search(rf"^class {name}: *(.+)$", text, re.MULTILINE)
+def _schema(text: str) -> dict[str, list[str]]:
+    """As linhas ``class X: campo,campo`` que abrem a resposta."""
+    schema: dict[str, list[str]] = {}
+    for name, fields in re.findall(r"^class (\w+): *(.+)$", text, re.MULTILINE):
+        schema.setdefault(name, [field.strip() for field in fields.split(",")])
+    return schema
+
+
+def _unpack(value: str | None, schema: dict[str, list[str]]) -> dict[str, str] | None:
+    """Abre um ``Nome(...)`` casando cada valor com o campo declarado.
+
+    Recusa o que não bater: classe desconhecida ou quantidade de valores
+    diferente da que o esquema anuncia. Nesse ponto já não dá para saber
+    qual valor é qual, e chutar sairia caro.
+    """
+    if value is None:
+        return None
+    match = _NAMED.match(value.strip())
     if match is None:
         return None
-    names = [field.strip() for field in match.group(1).split(",")]
-    values = _arguments(text, name)
-    if values is None:
+    fields = schema.get(match.group(1))
+    if fields is None:
+        return None
+    parts = _split(match.group(2))
+    if len(parts) != len(fields):
+        return None
+    return dict(zip(fields, parts))
+
+
+def _entries(value: str) -> list[str]:
+    """Os elementos de ``[A(…),B(…)]``; fora de lista, o próprio valor.
+
+    O servidor usa lista sempre que há mais de uma opção, e valor solto
+    quando há uma só. Aqui os dois casos viram a mesma coisa.
+    """
+    text = value.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        return [text]
+    inner = text[1:-1].strip()
+    return _split(inner) if inner else []
+
+
+def _first(value: str | None) -> str | None:
+    """A opção mais jogada, quando o servidor manda uma lista delas."""
+    if value is None:
+        return None
+    entries = _entries(value)
+    return entries[0] if entries else None
+
+
+def _data(text: str, schema: dict[str, list[str]]) -> dict[str, str] | None:
+    """O bloco ``Data(...)``, com cada campo no seu nome."""
+    fields = schema.get(ROOT)
+    values = _arguments(text, ROOT)
+    if fields is None or values is None:
         return None
     parts = _split(values)
-    if len(parts) != len(names):
+    if len(parts) != len(fields):
         return None
-    return dict(zip(names, parts))
+    return _unpack(dict(zip(fields, parts)).get("data"), schema)
 
 
 def _int(value: str) -> int | None:
@@ -159,15 +245,56 @@ def _ints(value: str) -> list[int] | None:
     return numbers  # type: ignore[return-value]
 
 
+def _blocks(data: dict[str, str], schema: dict[str, list[str]]) -> tuple[Block, ...]:
+    """Monta os blocos do arsenal com o que veio na resposta.
+
+    Item é enfeite: se um campo faltar ou vier vazio, o bloco some e o
+    resto segue. Diferente das runas, aqui não há meia página possível.
+    """
+    blocks: list[Block] = []
+    for field, label in ITEM_BLOCKS:
+        raw = data.get(field)
+        if raw is None:
+            continue
+        items: list[int] = []
+        plays = wins = 0
+        for entry in _entries(raw):
+            fields = _unpack(entry, schema)
+            if fields is None:
+                continue
+            ids = _ints(fields.get("ids", ""))
+            if not ids:
+                continue
+            items.extend(ids)
+            plays += _int(fields.get("play", "")) or 0
+            wins += _int(fields.get("win", "")) or 0
+        if not items:
+            continue
+        blocks.append(
+            Block(
+                label=label,
+                items=tuple(items),
+                win_rate=wins / plays if plays else 0.0,
+            )
+        )
+    return tuple(blocks)
+
+
 def parse_build(text: str) -> Build | None:
-    """Lê a resposta do OP.GG. Devolve ``None`` se faltar qualquer peça.
+    """Lê a resposta do OP.GG. Devolve ``None`` se faltar runa ou feitiço.
 
     Meia recomendação é pior que nenhuma: entrar em partida com três
     runas certas e o resto em branco é um estrago silencioso. Por isso
-    tudo aqui é tudo-ou-nada.
+    a página é tudo-ou-nada. Os itens seguem regra própria, mais frouxa,
+    porque um bloco a menos na loja não estraga nada.
     """
-    runes = _fields(text, "Runes")
-    spells = _fields(text, "SummonerSpells")
+    schema = _schema(text)
+    data = _data(text, schema)
+    if data is None:
+        return None
+
+    runes = _unpack(_first(data.get("runes")), schema)
+    spells = _unpack(_first(data.get("summoner_spells")), schema)
     if runes is None or spells is None:
         return None
 
@@ -194,6 +321,7 @@ def parse_build(text: str) -> Build | None:
         sub_style=sub_style,
         perks=perks,
         spells=(chosen[0], chosen[1]),
+        blocks=_blocks(data, schema),
     )
 
 
@@ -249,7 +377,7 @@ class OpggSource:
         self._cache: dict[tuple[str, str], Build] = {}
 
     def fetch(self, champion: str, position: str | None, aram: bool) -> Build | None:
-        """Runas e feitiços para este campeão nesta rota, ou ``None``.
+        """Runas, feitiços e itens deste campeão nesta rota, ou ``None``.
 
         Na Fenda, sem rota não há pergunta a fazer: o OP.GG exige a
         posição, e no modo cego o cliente não atribui nenhuma. No

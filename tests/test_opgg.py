@@ -28,6 +28,43 @@ RESPOSTA = (
     "[5008,5008,5001],[5008,5008,5001],9850,5007,0.45)))"
 )
 
+#: Captura do servidor real pedindo tudo o que o app usa (Annie,
+#: meio, Diamante+). Repare em `summoner_spells` chegando como
+#: `CoreItems`: o servidor reaproveita a etiqueta para qualquer
+#: coisa de mesma forma, e é por isso que o parser se guia pelo
+#: esquema de `Data`, nunca pelo nome da classe.
+COMPLETA = (
+    "class LolGetChampionAnalysis: data\n"
+    "class Data: core_items,boots,starter_items,fourth_items,"
+    "fifth_items,sixth_items,summoner_spells,runes\n"
+    "class CoreItems: ids,ids_names,play,win,pick_rate\n"
+    "class Runes: id,primary_page_id,primary_page_name,primary_rune_ids,"
+    "primary_rune_names,secondary_page_id,secondary_page_name,"
+    "secondary_rune_ids,secondary_rune_names,stat_mod_ids,stat_mod_names,"
+    "play,win,pick_rate\n"
+    "\n"
+    "LolGetChampionAnalysis(Data("
+    'CoreItems([3118,3152,4645],["Malignance","Hextech Rocketbelt",'
+    '"Shadowflame"],816,429,0.16),'
+    'CoreItems([3020],["Sorcerer\'s Shoes"],6131,3145,0.71),'
+    'CoreItems([1056,2003,2003],["Doran\'s Ring","Health Potion",'
+    '"Health Potion"],8599,4320,0.97),'
+    '[CoreItems([3157],["Zhonya\'s Hourglass"],465,280,0.24),'
+    'CoreItems([3089],["Rabadon\'s Deathcap"],438,256,0.23),'
+    'CoreItems([3135],["Void Staff"],253,137,0.13)],'
+    '[CoreItems([3089],["Rabadon\'s Deathcap"],98,53,0.24),'
+    'CoreItems([3157],["Zhonya\'s Hourglass"],80,39,0.19),'
+    'CoreItems([3135],["Void Staff"],68,41,0.16)],'
+    '[CoreItems([4646],["Stormsurge"],2,0,0.25),'
+    'CoreItems([3157],["Zhonya\'s Hourglass"],2,1,0.25),'
+    'CoreItems([3102],["Banshee\'s Veil"],1,1,0.13)],'
+    "CoreItems([4,14],[4,14],6384,3240,0.7),"
+    'Runes(8112,8100,"Domination",[8112,8126,8140,8105],'
+    '["Electrocute","Cheap Shot","Grisly Mementos","Relentless Hunter"],'
+    '8200,"Sorcery",[8224,8233],["Axiom Arcanist","Absolute Focus"],'
+    "[5008,5008,5001],[5008,5008,5001],3212,1585,0.36)))"
+)
+
 DIAGNOSTICO = (
     "class LolGetChampionAnalysis: _field_diagnostics\n"
     "class FieldDiagnostics: unmatched_fields,hint\n"
@@ -105,14 +142,118 @@ def test_a_truncated_answer_gives_nothing():
 
 
 def test_the_first_page_is_the_one_that_counts():
-    """O servidor pode mandar mais de uma página, da mais jogada
-    para a menos. A primeira é a resposta.
+    """Havendo mais de uma página, elas vêm em lista.
+
+    É como o servidor manda toda multiplicidade — foi assim que os
+    itens de 4º, 5º e 6º slot chegaram na captura real. A ordem é da
+    mais jogada para a menos, então a primeira é a resposta.
     """
     segunda = 'Runes(9999,8300,"Inspiration",[8351,8306,8304,8321],[],'
     segunda += '8000,"Precision",[9111,8014],[],[5005,5008,5001],[],1,1,0.1)'
-    texto = RESPOSTA.replace(')))', '),' + segunda + '))')
+    texto = RESPOSTA.replace("Runes(8112,", "[Runes(8112,").replace(
+        "0.45)))", "0.45)," + segunda + "]))"
+    )
 
     assert parse_build(texto).style == 8100
+
+
+def test_a_value_too_many_is_refused():
+    """Se a contagem não bate com o esquema, ninguém sabe qual
+    valor é qual. Chutar aí sairia caro: viraria runa errada.
+    """
+    texto = RESPOSTA.replace(
+        "class Data: summoner_spells,runes", "class Data: runes"
+    )
+
+    assert parse_build(texto) is None
+
+
+# --- itens ---------------------------------------------------------------
+
+
+def test_the_spells_are_read_even_wearing_another_label():
+    """Pedindo tudo, os feitiços chegam como `CoreItems`.
+
+    Foi o que quase passou despercebido: o parser procurava a
+    etiqueta `SummonerSpells`, que some quando o pedido cresce. Ler
+    pelo esquema de `Data` é o que torna isso irrelevante.
+    """
+    assert parse_build(COMPLETA).spells == (4, 14)
+
+
+def test_the_runes_survive_the_bigger_answer():
+    build = parse_build(COMPLETA)
+
+    assert build.style == 8100
+    assert build.perks[0] == 8112
+
+
+def test_the_blocks_come_in_the_order_you_buy_them():
+    """Iniciais primeiro, botas, principais, depois as opções."""
+    blocks = parse_build(COMPLETA).blocks
+
+    assert [b.label for b in blocks] == [
+        "Iniciais",
+        "Botas",
+        "Principais",
+        "4º item",
+        "5º item",
+        "6º item",
+    ]
+
+
+def test_the_starting_items_keep_the_repeated_potion():
+    """Duas poções são duas poções, não uma."""
+    blocks = {b.label: b for b in parse_build(COMPLETA).blocks}
+
+    assert blocks["Iniciais"].items == (1056, 2003, 2003)
+
+
+def test_the_core_is_the_trio_that_wins():
+    blocks = {b.label: b for b in parse_build(COMPLETA).blocks}
+
+    assert blocks["Principais"].items == (3118, 3152, 4645)
+    assert blocks["Botas"].items == (3020,)
+
+
+def test_the_late_slots_gather_every_option():
+    """Cada opção vem num `CoreItems` próprio; o bloco junta os três.
+    """
+    blocks = {b.label: b for b in parse_build(COMPLETA).blocks}
+
+    assert blocks["4º item"].items == (3157, 3089, 3135)
+    assert blocks["6º item"].items == (4646, 3157, 3102)
+
+
+def test_the_core_block_carries_its_win_rate():
+    """429 vitórias em 816 partidas — o que decide a compra."""
+    blocks = {b.label: b for b in parse_build(COMPLETA).blocks}
+
+    assert round(blocks["Principais"].win_rate, 3) == 0.526
+
+
+def test_an_empty_slot_becomes_no_block():
+    """Campeão sem 6º item não ganha um bloco vazio na loja."""
+    texto = COMPLETA.replace(
+        '[CoreItems([4646],["Stormsurge"],2,0,0.25),'
+        'CoreItems([3157],["Zhonya\'s Hourglass"],2,1,0.25),'
+        'CoreItems([3102],["Banshee\'s Veil"],1,1,0.13)]',
+        "[]",
+    )
+
+    labels = [b.label for b in parse_build(texto).blocks]
+
+    assert "6º item" not in labels
+    assert "5º item" in labels
+
+
+def test_an_answer_without_items_still_gives_the_runes():
+    """Runa e item são independentes: um faltar não leva o outro.
+    """
+    build = parse_build(RESPOSTA)
+
+    assert build.blocks == ()
+    assert build.perks[0] == 8112
 
 
 # --- a fonte -------------------------------------------------------------
