@@ -46,6 +46,14 @@ funciona normalmente.
   cobre o modo ou demora demais. O Flash fica na tecla que você já
   usa. A página criada se chama "LoL Queue" e é a única que o app
   mexe; as suas ficam intactas.
+- **Monta o arsenal na loja**, se você ligar. Vira um conjunto de
+  itens do campeão com seis blocos — iniciais, botas, principais e
+  as três opções mais jogadas de quarto, quinto e sexto item —, cada
+  um com a taxa de vitória no título. Sem dados do OP.GG nenhum
+  conjunto é criado: aqui não há reserva da Riot, porque a
+  recomendação do cliente não traz itens. O conjunto se chama
+  "LoL Queue" e é o único que o app mexe; os do Porofessor, do
+  U.GG e os seus ficam onde estão.
 - **Respeita a sala de quem convidou**: com "só mexer na fila quando eu
   for o dono da sala" ligado, na sala de um amigo ele não inicia a busca
   nem abre sala própria, mas continua aceitando, banindo e escolhendo.
