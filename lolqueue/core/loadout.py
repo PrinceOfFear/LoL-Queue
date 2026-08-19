@@ -36,6 +36,7 @@ from typing import Callable, Iterable, Sequence
 from ..config import Config
 from ..lcu import endpoints
 from ..lcu.client import LcuError
+from .itemsets import ItemSets
 from .opgg import Build
 
 #: Prefixo do nome da página que o app cria. É por ele que a página é
@@ -133,6 +134,7 @@ class Loadout:
         self._log = log or (lambda message: None)
         self._source = source
         self._now = now or time.monotonic
+        self._items = ItemSets(client, log=self._log)
         self._done_for: int | None = None
         self._pending: _Search | None = None
 
@@ -143,7 +145,11 @@ class Loadout:
         self._pending = None
 
     def apply(self, session: dict) -> None:
-        if not (self._config.auto_spells or self._config.auto_runes):
+        if not (
+            self._config.auto_spells
+            or self._config.auto_runes
+            or self._config.auto_items
+        ):
             return
         champion_id = local_champion(session)
         if champion_id <= 0 or champion_id == self._done_for:
@@ -159,6 +165,17 @@ class Loadout:
         # virar uma tentativa por tick pelo resto da seleção.
         self._done_for = champion_id
         try:
+            # O arsenal vem primeiro porque nao depende da Riot: se a
+            # recomendacao dela faltar, ele ainda tem por que existir.
+            if self._config.auto_items and external is not None:
+                self._items.apply(
+                    champion_id,
+                    self._catalog.name(champion_id),
+                    external.blocks,
+                    self._map_id(),
+                )
+            if not (self._config.auto_spells or self._config.auto_runes):
+                return
             recommendation = self._recommendation(
                 champion_id, session, external
             )

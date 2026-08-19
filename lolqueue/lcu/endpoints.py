@@ -55,3 +55,9 @@ PERK_RECOMMENDED = (
 #: liga e desliga fila sem avisar, e criar lobby numa fila desligada
 #: responde 500 sem explicar o motivo.
 GAME_QUEUES = "/lol-game-queues/v1/queues"
+
+#: Conjuntos de itens do jogador — o arsenal que aparece na loja. GET
+#: devolve a lista inteira e PUT a substitui por completo: não existe
+#: acrescentar um só. Quem usa Porofessor ou Blitz tem dezenas guardadas
+#: aqui, então toda gravação parte de uma leitura.
+ITEM_SETS = "/lol-item-sets/v1/item-sets/{summoner_id}/sets"

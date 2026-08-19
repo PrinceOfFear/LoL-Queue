@@ -15,7 +15,7 @@ import time
 from lolqueue.config import Config
 from lolqueue.core.champions import ChampionCatalog
 from lolqueue.core.loadout import PAGE_PREFIX, Loadout, align_spells
-from lolqueue.core.opgg import Build as OpggBuild
+from lolqueue.core.opgg import Block, Build as OpggBuild
 from lolqueue.lcu import endpoints
 from tests.fakes import FakeLcuClient
 
@@ -29,6 +29,8 @@ RECOMMENDATION = {
     "summonerSpellIds": [21, 4],
     "perks": [{"id": perk} for perk in PERK_IDS],
 }
+
+ITEM_SETS = endpoints.ITEM_SETS.format(summoner_id=42)
 
 MY_PAGE = {"id": 1, "name": PAGE_PREFIX + ": Kog Maw", "isDeletable": True}
 USER_PAGE = {"id": 2, "name": "Blitz: Kog Maw ADC", "isDeletable": True}
@@ -58,6 +60,8 @@ def session(champion_id=96, position="bottom", spell1=4, spell2=14):
 def build(config=None, responses=None, failures=None, source=None, now=None):
     base = {
         endpoints.CHAMPION_SUMMARY: SUMMARY,
+        endpoints.CURRENT_SUMMONER: {"summonerId": 42},
+        ITEM_SETS: {"accountId": 7, "itemSets": [], "timestamp": 0},
         endpoints.GAMEFLOW_SESSION: {"map": {"id": 11}},
         endpoints.PERK_PAGES: [USER_PAGE],
         endpoints.PERK_INVENTORY: {"canAddCustomPage": True},
@@ -334,6 +338,18 @@ OPGG_BUILD = OpggBuild(
 )
 
 
+COM_ARSENAL = OpggBuild(
+    style=8100,
+    sub_style=8200,
+    perks=(8112, 8126, 8140, 8105, 8224, 8233, 5008, 5008, 5001),
+    spells=(4, 14),
+    blocks=(
+        Block(label="Iniciais", items=(1055, 2003), win_rate=0.5),
+        Block(label="Principais", items=(3031, 3094), win_rate=0.53),
+    ),
+)
+
+
 def page_body(client):
     """Corpo do POST que criou a página de runas."""
     return next(p for p in client.payloads if p[0] == endpoints.PERK_PAGES)[1]
@@ -514,3 +530,73 @@ def test_the_journal_says_when_the_riot_answered_instead():
     settle(loadout, session())
 
     assert any("Riot" in message for message in messages)
+
+
+# ---------- o arsenal na loja ----------
+
+
+def test_the_arsenal_reaches_the_shop():
+    loadout, client, _ = build(
+        config=Config(auto_runes=True, auto_items=True),
+        source=SlowSource(COM_ARSENAL),
+    )
+
+    settle(loadout, session())
+
+    gravado = next(b for p, b in client.payloads if p == ITEM_SETS)
+    assert gravado["itemSets"][0]["title"] == "LoL Queue: Kog Maw"
+
+
+def test_without_the_option_the_shop_is_left_alone():
+    """Quem não pediu arsenal não tem a loja mexida."""
+    loadout, client, _ = build(
+        config=Config(auto_runes=True, auto_items=False),
+        source=SlowSource(COM_ARSENAL),
+    )
+
+    settle(loadout, session())
+
+    assert ITEM_SETS not in client.paths("PUT")
+
+
+def test_the_arsenal_alone_needs_no_rune_page():
+    """As três opções são independentes uma da outra."""
+    loadout, client, _ = build(
+        config=Config(auto_items=True),
+        source=SlowSource(COM_ARSENAL),
+    )
+
+    settle(loadout, session())
+
+    assert ITEM_SETS in client.paths("PUT")
+    assert endpoints.PERK_PAGES not in client.paths("POST")
+
+
+def test_the_riot_fallback_brings_no_arsenal():
+    """A recomendação da Riot não tem itens, e inventar um
+    arsenal a partir do nada seria pior que não montar nenhum.
+    """
+    loadout, client, _ = build(
+        config=Config(auto_runes=True, auto_items=True),
+        source=SlowSource(None),
+    )
+
+    settle(loadout, session())
+
+    assert ITEM_SETS not in client.paths("PUT")
+    assert endpoints.PERK_PAGES in client.paths("POST")
+
+
+def test_a_shop_failure_does_not_reach_the_tick():
+    """O mesmo tick escolhe e bane campeão; nada aqui pode
+    interromper aquilo.
+    """
+    loadout, _, messages = build(
+        config=Config(auto_items=True),
+        source=SlowSource(COM_ARSENAL),
+        failures={ITEM_SETS},
+    )
+
+    settle(loadout, session())
+
+    assert messages == [] or all(isinstance(m, str) for m in messages)

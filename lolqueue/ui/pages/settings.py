@@ -32,15 +32,19 @@ class SettingsPage(QWidget):
             ("Banir campeão automaticamente", "auto_ban"),
             ("Aplicar os feitiços recomendados", "auto_spells"),
             ("Aplicar as runas recomendadas", "auto_runes"),
+            ("Montar o arsenal na loja", "auto_items"),
         ):
             layout.addWidget(binder.checkbox(label, attribute))
 
-        # Estes dois não têm lista para configurar, e sem uma linha de
-        # explicação "recomendados" não diz por quem.
+        # Estas três não têm lista para configurar, e sem uma linha de
+        # explicação "recomendados" não diz por quem — nem que a
+        # resposta vem de fora do cliente.
         note = QLabel(
-            "Feitiços e runas saem da recomendação do próprio cliente do LoL "
-            "para o campeão e a rota da partida. O app mantém uma única "
-            "página de runas, chamada “LoL Queue”, e não mexe nas suas."
+            "Feitiços, runas e itens saem do que mais venceu no OP.GG "
+            "(Diamante+) para o campeão e a rota da partida; se o OP.GG "
+            "não responder, valem os do próprio cliente do LoL. O app "
+            "mantém uma página de runas e um conjunto de itens, ambos "
+            "chamados “LoL Queue”, e não mexe nos seus."
         )
         note.setObjectName("hint")
         note.setWordWrap(True)
