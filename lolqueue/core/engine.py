@@ -80,6 +80,12 @@ class Engine:
         self._champ_failures = 0
         self._checked_search = 0.0
         self._search_stalled = False
+        # Convidado = está numa sala de outra pessoa. Fica lembrado
+        # depois que a sala some: é justamente ao voltar para a tela
+        # inicial que o app abriria uma sala própria e entraria na fila
+        # sozinho, largando o grupo do amigo.
+        self._guest = False
+        self._warned_guest = False
 
     @property
     def enabled(self) -> bool:
@@ -89,6 +95,10 @@ class Engine:
         self._enabled = enabled
         self._checked_search = 0.0
         self._search_stalled = False
+        # Ligar o motor é o jogador dizendo o que quer agora; o que
+        # aconteceu antes disso não vale mais.
+        self._guest = False
+        self._warned_guest = False
         self._clear_pending()
 
     def set_champ_select(self, controller: ChampSelectController | None) -> None:
@@ -158,6 +168,9 @@ class Engine:
         na mesma fase, então sem isto o app espera para sempre.
         """
         if not self._config.auto_queue or self._phase not in SEARCH_PHASES:
+            return
+        # A busca de uma sala alheia não é nossa para retomar.
+        if self._guest and self._config.queue_only_as_host:
             return
         now = self._now()
         if now - self._checked_search < SEARCH_CHECK_SECONDS:
@@ -283,6 +296,10 @@ class Engine:
         em poucos segundos, e anunciar cada tentativa afogaria o resto.
         """
         lobby = self._client.get(endpoints.LOBBY) or {}
+        if isinstance(lobby, dict):
+            self._note_role(lobby)
+        if self._holding_back():
+            return
         if isinstance(lobby, dict) and lobby.get("canStartActivity") is False:
             if announce:
                 self._log("Sem permissão para iniciar a fila neste lobby.")
@@ -290,6 +307,31 @@ class Engine:
         self._client.post(endpoints.MATCHMAKING_SEARCH)
         if announce:
             self._log("Entrando na fila.")
+
+    def _note_role(self, lobby: dict) -> None:
+        """Anota se a sala é nossa ou de outra pessoa.
+
+        Formato inesperado conta como sala nossa: trancar a fila de quem
+        joga sozinho por causa de um campo que sumiu seria bem pior do
+        que deixar passar.
+        """
+        member = lobby.get("localMember")
+        is_leader = (member or {}).get("isLeader", True)
+        self._guest = not is_leader
+        if is_leader:
+            self._warned_guest = False
+
+    def _holding_back(self) -> bool:
+        """True quando a sala é de outro e o jogador pediu para não mexer."""
+        if not (self._guest and self._config.queue_only_as_host):
+            return False
+        if not self._warned_guest:
+            self._warned_guest = True
+            self._log(
+                "Você não é o dono da sala — deixo a fila com quem é e "
+                "sigo só aceitando, banindo e escolhendo."
+            )
+        return True
 
     def _play_again(self) -> None:
         self._client.post(endpoints.PLAY_AGAIN)
@@ -306,6 +348,8 @@ class Engine:
         Não é preciso conferir se já há um lobby: se houvesse, a fase
         seria `Lobby` e esta ação nem seria escolhida.
         """
+        if self._holding_back():
+            return
         self._client.post(
             endpoints.LOBBY, json={"queueId": self._config.queue_id}
         )

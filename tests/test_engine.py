@@ -350,3 +350,116 @@ def test_champ_select_delegates_to_the_controller():
 def test_champ_select_without_controller_does_not_crash():
     engine, _ = make_engine()
     engine.handle_phase(GameflowPhase.CHAMP_SELECT)
+
+
+# ---------- quando a sala é de outra pessoa ----------
+#
+# Entrar na sala de um amigo é o caso em que a fila automática atrapalha
+# em vez de ajudar: quem manda na busca é o dono, e o app acaba criando
+# uma sala paralela e entrando na fila sozinho. Aceitar, banir e
+# escolher continuam valendo — é justamente o que o jogador quer que
+# siga automático enquanto o amigo conduz.
+
+GUEST_LOBBY = {
+    endpoints.LOBBY: {"canStartActivity": False, "localMember": {"isLeader": False}}
+}
+HOST_LOBBY = {
+    endpoints.LOBBY: {"canStartActivity": True, "localMember": {"isLeader": True}}
+}
+
+
+def test_it_does_not_start_the_queue_in_someone_elses_lobby():
+    engine, client = make_engine(Config(auto_queue=True), responses=GUEST_LOBBY)
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    assert endpoints.MATCHMAKING_SEARCH not in client.paths("POST")
+
+
+def test_it_still_accepts_the_match_in_someone_elses_lobby():
+    engine, client = make_engine(
+        Config(auto_queue=True, auto_accept=True), responses=GUEST_LOBBY
+    )
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+
+    assert endpoints.READY_CHECK_ACCEPT in client.paths("POST")
+
+
+def test_it_does_not_open_a_lobby_of_its_own_after_being_a_guest():
+    """O caso chato: a partida acaba e o app cria sala e fila sozinho."""
+    engine, client = make_engine(Config(auto_queue=True), responses=GUEST_LOBBY)
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.handle_phase(GameflowPhase.NONE)
+
+    assert endpoints.LOBBY not in client.paths("POST")
+
+
+def test_it_opens_its_own_lobby_again_once_it_hosts():
+    engine, client = make_engine(Config(auto_queue=True), responses=GUEST_LOBBY)
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    client.responses.update(HOST_LOBBY)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.handle_phase(GameflowPhase.NONE)
+
+    assert endpoints.LOBBY in client.paths("POST")
+
+
+def test_turning_the_engine_on_forgets_it_was_a_guest():
+    """Ligar o motor é o jogador dizendo o que quer agora."""
+    engine, client = make_engine(Config(auto_queue=True), responses=GUEST_LOBBY)
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    engine.set_enabled(True)
+    engine.handle_phase(GameflowPhase.NONE)
+
+    assert endpoints.LOBBY in client.paths("POST")
+
+
+def test_the_option_off_keeps_the_old_behaviour():
+    engine, client = make_engine(
+        Config(auto_queue=True, queue_only_as_host=False), responses=GUEST_LOBBY
+    )
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.handle_phase(GameflowPhase.NONE)
+
+    assert endpoints.LOBBY in client.paths("POST")
+
+
+def test_it_says_why_it_is_holding_back():
+    messages = []
+    client = FakeLcuClient(responses=GUEST_LOBBY)
+    engine = Engine(client, Config(auto_queue=True), log=messages.append)
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    assert any("dono da sala" in message for message in messages)
+
+
+def test_it_does_not_repeat_the_warning_every_tick():
+    messages = []
+    client = FakeLcuClient(responses=GUEST_LOBBY)
+    engine = Engine(client, Config(auto_queue=True), log=messages.append)
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.tick()
+    engine.tick()
+
+    assert len([m for m in messages if "dono da sala" in m]) == 1
+
+
+def test_a_lobby_without_the_leader_flag_is_treated_as_our_own():
+    """Formato inesperado não pode trancar quem está jogando sozinho."""
+    engine, client = make_engine(
+        Config(auto_queue=True), responses={endpoints.LOBBY: {}}
+    )
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")

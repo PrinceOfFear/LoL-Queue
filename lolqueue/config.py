@@ -78,6 +78,7 @@ class Config:
     auto_spells: bool = False
     auto_runes: bool = False
     queue_id: int = 420
+    queue_only_as_host: bool = True
     pick_priority: list[int] = field(default_factory=list)
     ban_priority: list[int] = field(default_factory=list)
     pick_priority_by_position: dict[str, list[int]] = field(default_factory=dict)
