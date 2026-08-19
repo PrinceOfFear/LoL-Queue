@@ -6,3 +6,7 @@ build/
 dist/
 *.egg-info/
 tests/fixtures/*.json
+
+# App antigo (captura de tela). Movido para cá inteiro em vez de apagado:
+# se algum dia fizer falta, está tudo lá. Pode apagar a pasta à vontade.
+_legado/
