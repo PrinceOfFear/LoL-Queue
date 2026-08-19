@@ -50,3 +50,8 @@ PERK_RECOMMENDED = (
     "/lol-perks/v1/recommended-pages"
     "/champion/{champion_id}/position/{position}/map/{map_id}"
 )
+
+#: Catálogo de filas com disponibilidade por região e temporada. A Riot
+#: liga e desliga fila sem avisar, e criar lobby numa fila desligada
+#: responde 500 sem explicar o motivo.
+GAME_QUEUES = "/lol-game-queues/v1/queues"

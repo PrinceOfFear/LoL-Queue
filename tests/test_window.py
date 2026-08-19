@@ -122,3 +122,41 @@ def test_every_message_is_also_written_to_the_file(window, tmp_path):
 
 def test_the_log_folder_sits_next_to_the_config(window, tmp_path):
     assert window._journal.directory == tmp_path / "registro"
+
+
+# --- filas que a Riot desligou -------------------------------------------
+#
+# Quem descobre é o watcher, na thread dele; quem mostra é a página, na
+# thread da GUI. A entrega vai pelo mesmo caminho do catálogo: um
+# atributo simples, lido na primeira troca de fase.
+
+
+def test_a_queue_the_client_refuses_is_marked_on_the_selector(window):
+    window._blocked_queues = {430}
+
+    window._on_phase_changed("None")
+
+    combo = window._queue._combo
+    assert "indisponível" in combo.itemText(combo.findData(430))
+
+
+def test_the_player_hears_about_it_when_the_queue_is_his_own(window, monkeypatch):
+    said = []
+    monkeypatch.setattr(window, "_log_message", said.append)
+    window._config.queue_id = 430
+    window._blocked_queues = {430}
+
+    window._on_phase_changed("None")
+
+    assert any("Normal Blind" in line for line in said)
+
+
+def test_nothing_is_said_when_the_chosen_queue_works(window, monkeypatch):
+    said = []
+    monkeypatch.setattr(window, "_log_message", said.append)
+    window._config.queue_id = 420
+    window._blocked_queues = {430}
+
+    window._on_phase_changed("None")
+
+    assert said == []

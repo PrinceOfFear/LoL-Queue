@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import Config, log_dir
+from ..config import Config, log_dir, queue_name
 from ..core.champ_select import ChampSelectController
 from ..core.champions import ChampionCatalog
 from ..core.engine import Engine
@@ -18,6 +18,7 @@ from ..core.icons import IconStore
 from ..core.journal import Journal
 from ..core.loadout import Loadout
 from ..core.phases import GameflowPhase
+from ..core.queues import unavailable_queues
 from ..core.watcher import PhaseWatcher
 from .binding import ConfigBinder
 from .icon_loader import IconLoader
@@ -43,6 +44,9 @@ class MainWindow(QWidget):
         self._config = config
         self._binder = ConfigBinder(config, self)
         self._catalog: ChampionCatalog | None = None
+        # Filas que a Riot desligou nesta região. Descobertas na thread
+        # do watcher e lidas na da GUI, igual ao catálogo.
+        self._blocked_queues: set[int] | None = None
         self._icons = IconStore()
         self._icon_loader: IconLoader | None = None
         self._phase = GameflowPhase.NONE.value
@@ -99,12 +103,13 @@ class MainWindow(QWidget):
         self._dashboard.toggled.connect(self.toggle_engine)
         self._dashboard.set_log_folder(self._journal.directory)
         self._champions = ChampionsPage(self._binder)
+        self._queue = QueuePage(self._binder)
 
         self._pages = QStackedWidget()
         for page in (
             self._dashboard,
             self._champions,
-            QueuePage(self._binder),
+            self._queue,
             SettingsPage(self._binder),
         ):
             self._pages.addWidget(page)
@@ -128,6 +133,7 @@ class MainWindow(QWidget):
         catalog = ChampionCatalog(client)
         catalog.load()
         self._catalog = catalog
+        self._blocked_queues = unavailable_queues(client)
         engine = Engine(client, self._config, log=self._watcher.message.emit)
         engine.set_champ_select(
             ChampSelectController(
@@ -162,7 +168,24 @@ class MainWindow(QWidget):
             self._champions.set_icons(self._icons)
             self._champions.set_catalog(catalog)
             self._start_icon_loader(catalog)
+        if self._blocked_queues is not None:
+            blocked, self._blocked_queues = self._blocked_queues, None
+            self._show_blocked_queues(blocked)
         self._refresh_ring()
+
+    def _show_blocked_queues(self, blocked: set[int]) -> None:
+        """Marca no seletor as filas que o cliente recusa.
+
+        Só fala quando é a fila do jogador: listar as desligadas toda vez
+        que o app conecta viraria ruído, mas descobrir que a sua não abre
+        só quando o motor falha é tarde demais.
+        """
+        self._queue.set_unavailable(blocked)
+        if self._config.queue_id in blocked:
+            self._log_message(
+                f"{queue_name(self._config.queue_id)} está indisponível no "
+                "cliente agora — escolha outra fila na aba Fila."
+            )
 
     def _start_icon_loader(self, catalog: ChampionCatalog) -> None:
         """Busca os retratos que faltam, uma vez por conexão."""

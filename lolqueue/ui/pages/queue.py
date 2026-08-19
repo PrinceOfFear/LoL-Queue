@@ -6,6 +6,12 @@ from ...config import QUEUES
 from ..binding import ConfigBinder
 
 
+#: Marca da fila que a Riot desligou. Fica na lista de propósito: uma
+#: opção que some é lida como defeito do app, e o jogador procura o que
+#: não vai achar.
+UNAVAILABLE_SUFFIX = "  ·  indisponível agora"
+
+
 class QueuePage(QWidget):
     """Qual fila jogar e se o app volta para ela sozinho."""
 
@@ -51,6 +57,22 @@ class QueuePage(QWidget):
         layout.addWidget(note)
 
         layout.addStretch(1)
+
+    def set_unavailable(self, queue_ids) -> None:
+        """Marca as filas que o cliente recusa agora.
+
+        A escolha do jogador não é trocada por conta própria: descobrir
+        dentro de uma Ranqueada que o app te mudou de fila sozinho seria
+        muito pior do que ver a fila marcada aqui.
+        """
+        model = self._combo.model()
+        for index in range(self._combo.count()):
+            queue_id = self._combo.itemData(index)
+            blocked = queue_id in queue_ids
+            name = QUEUES.get(queue_id, str(queue_id))
+            suffix = UNAVAILABLE_SUFFIX if blocked else ""
+            self._combo.setItemText(index, name + suffix)
+            model.item(index).setEnabled(not blocked)
 
     def _on_changed(self, index: int) -> None:
         self._binder.set("queue_id", self._combo.itemData(index))
