@@ -99,6 +99,22 @@ def test_junk_where_a_number_should_be_gives_nothing():
     assert parse_build(texto) is None
 
 
+def test_a_truncated_answer_gives_nothing():
+    """Resposta cortada no meio não vira página pela metade."""
+    assert parse_build(RESPOSTA[: len(RESPOSTA) - 40]) is None
+
+
+def test_the_first_page_is_the_one_that_counts():
+    """O servidor pode mandar mais de uma página, da mais jogada
+    para a menos. A primeira é a resposta.
+    """
+    segunda = 'Runes(9999,8300,"Inspiration",[8351,8306,8304,8321],[],'
+    segunda += '8000,"Precision",[9111,8014],[],[5005,5008,5001],[],1,1,0.1)'
+    texto = RESPOSTA.replace(')))', '),' + segunda + '))')
+
+    assert parse_build(texto).style == 8100
+
+
 # --- a fonte -------------------------------------------------------------
 
 
