@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .config import Config
+from .resources import icon_path
 from .ui.window import MainWindow
+
+#: Identidade do app para o Windows. Sem ela, rodando pelo Python, a
+#: barra de tarefas agrupa a janela sob o ícone do interpretador e
+#: ignora o nosso.
+APP_ID = "lolqueue.desktop"
 
 
 def _install_hotkeys(window: MainWindow) -> None:
@@ -25,8 +32,24 @@ def _install_hotkeys(window: MainWindow) -> None:
         pass
 
 
+def _claim_taskbar_identity() -> None:
+    """Diz ao Windows que somos um app próprio, não o Python.
+
+    Puramente cosmético e só existe no Windows — falhar aqui não pode
+    impedir o app de abrir.
+    """
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:
+        pass
+
+
 def main() -> int:
+    _claim_taskbar_identity()
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(str(icon_path())))
     window = MainWindow(Config.load())
     _install_hotkeys(window)
     window.show()
