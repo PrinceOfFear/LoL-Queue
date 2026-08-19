@@ -22,6 +22,7 @@ from ..core.engine import Engine
 from ..core.icons import IconStore
 from ..core.phases import GameflowPhase
 from ..core.watcher import PhaseWatcher
+from .advice import ban_notice
 from .icon_loader import IconLoader
 from .theme import STYLESHEET
 from .widgets.champion_picker import ChampionPicker
@@ -50,6 +51,11 @@ class MainWindow(QWidget):
         # Estado do motor guardado num atributo simples: `_make_engine` roda
         # na thread do watcher e não pode consultar widgets.
         self._enabled = False
+        # Caixas por campo da config. O mesmo campo aparece em mais de uma
+        # página — o interruptor da escolha automática mora tanto em
+        # Automação quanto ao lado da lista que ele comanda —, e as duas
+        # precisam concordar sem que uma dispare a outra.
+        self._boxes: dict[str, list[QCheckBox]] = {}
 
         self.setWindowTitle("LoL Queue")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -97,6 +103,10 @@ class MainWindow(QWidget):
         self._pages.addWidget(self._build_settings_page())
         right.addWidget(self._pages, 1)
         columns.addLayout(right, 1)
+
+        # Depois das páginas: o aviso lê a config e escreve nos dois
+        # pickers, que só existem a partir daqui.
+        self._refresh_advice()
 
     def _build_titlebar(self) -> QWidget:
         bar = QWidget()
@@ -153,11 +163,15 @@ class MainWindow(QWidget):
             self._config.pick_priority_by_position,
         )
         self._pick_picker.changed.connect(self._on_pick_priority_changed)
+        self._pick_picker.set_title_widget(
+            self._auto_switch("automática", "auto_pick")
+        )
         layout.addWidget(self._pick_picker, 1)
 
         self._ban_picker = ChampionPicker("PRIORIDADE DE BANIMENTO")
         self._ban_picker.set_ids(self._config.ban_priority)
         self._ban_picker.changed.connect(self._on_ban_priority_changed)
+        self._ban_picker.set_title_widget(self._auto_switch("automático", "auto_ban"))
         layout.addWidget(self._ban_picker, 1)
         return page
 
@@ -224,6 +238,13 @@ class MainWindow(QWidget):
         box = QCheckBox(label)
         box.setChecked(getattr(self._config, attribute))
         box.toggled.connect(lambda value: self._set_config(attribute, value))
+        self._boxes.setdefault(attribute, []).append(box)
+        return box
+
+    def _auto_switch(self, label: str, attribute: str) -> QCheckBox:
+        """A mesma caixa, no tamanho de quem acompanha um título."""
+        box = self._checkbox(label, attribute)
+        box.setObjectName("autoSwitch")
         return box
 
     # ---------- estado ----------
@@ -231,6 +252,28 @@ class MainWindow(QWidget):
     def _set_config(self, attribute: str, value) -> None:
         setattr(self._config, attribute, value)
         self._config.save()
+        self._sync_boxes(attribute, value)
+        self._refresh_advice()
+
+    def _sync_boxes(self, attribute: str, value) -> None:
+        """Alinha as outras caixas do mesmo campo, sem reentrância.
+
+        Marcar uma caixa daqui dispararia `toggled` de novo; o bloqueio
+        corta o vaivém antes que ele exista.
+        """
+        for box in self._boxes.get(attribute, []):
+            if box.isChecked() == value:
+                continue
+            box.blockSignals(True)
+            box.setChecked(bool(value))
+            box.blockSignals(False)
+
+    def _refresh_advice(self) -> None:
+        """Reescreve o que cada lista avisa sobre si mesma."""
+        self._pick_picker.set_automation(self._config.auto_pick)
+        self._ban_picker.set_notice(
+            *ban_notice(self._config.ban_priority, self._config.auto_ban)
+        )
 
     def _on_queue_changed(self, index: int) -> None:
         self._set_config("queue_id", self._queue_combo.itemData(index))

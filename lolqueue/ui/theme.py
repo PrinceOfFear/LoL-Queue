@@ -225,6 +225,15 @@ QListWidget::item:selected {{
     background: {Palette.SURFACE_HIGH};
     border-bottom: 2px solid {Palette.ACCENT};
 }}
+#autoSwitch {{
+    color: {Palette.TEXT_MUTED};
+    font-size: 11px;
+    letter-spacing: 1px;
+    padding: 0;
+    spacing: 6px;
+}}
+#autoSwitch:checked {{ color: {Palette.ACCENT}; }}
+#autoSwitch::indicator {{ width: 14px; height: 14px; border-radius: 4px; }}
 #listNotice {{
     color: {Palette.TEXT_MUTED};
     font-size: 10px;

@@ -107,8 +107,8 @@ def test_the_tabs_come_before_what_they_command(picker):
     layout = picker._picker._layout
 
     assert layout.indexOf(picker._tabs) < layout.indexOf(picker._picker._grid)
-    assert layout.indexOf(picker._tabs) < layout.indexOf(picker._notice)
-    assert layout.indexOf(picker._notice) < layout.indexOf(picker._picker._grid)
+    assert layout.indexOf(picker._tabs) < layout.indexOf(picker._picker._notice)
+    assert layout.indexOf(picker._picker._notice) < layout.indexOf(picker._picker._grid)
 
 
 def test_the_general_tab_warns_which_lanes_ignore_it(picker):
@@ -151,12 +151,12 @@ def test_a_lane_with_a_list_says_when_it_applies(picker):
 def test_the_warning_is_flagged_only_when_a_lane_overrides(picker):
     """O alerta é o que muda a cor; sem conflito não há o que alertar."""
     picker._tabs.setCurrentIndex(tab_index(GENERAL))
-    assert picker._notice.property("alert") is True
+    assert picker._picker._notice.property("alert") is True
 
     picker._tabs.setCurrentIndex(tab_index("utility"))
     picker._on_ids_changed([])
     picker._tabs.setCurrentIndex(tab_index(GENERAL))
-    assert picker._notice.property("alert") is False
+    assert picker._picker._notice.property("alert") is False
 
 
 def test_a_tab_with_its_own_list_is_marked(picker):

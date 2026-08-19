@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListView,
@@ -56,13 +57,29 @@ class ChampionPicker(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
+        # O título é uma linha, não um rótulo solto: o interruptor da
+        # automação encosta nele à direita. Longe da lista que comanda,
+        # ele passava despercebido — dava para encher a lista inteira
+        # sem notar que nada dali seria usado.
+        self._head = QHBoxLayout()
+        self._head.setContentsMargins(0, 0, 0, 0)
         heading = QLabel(title)
         heading.setObjectName("sectionTitle")
-        layout.addWidget(heading)
+        self._head.addWidget(heading)
+        self._head.addStretch(1)
+        layout.addLayout(self._head)
 
         #: Onde `add_header` encaixa o próximo widget: logo depois do
         #: título. Anda junto para que várias chamadas fiquem na ordem.
         self._header_slot = layout.count()
+
+        #: Fica abaixo dos cabeçalhos e acima da grade porque é o que
+        #: diz se esta lista vale alguma coisa. Nasce vazio: sem texto,
+        #: o Qt não reserva altura nenhuma para ele.
+        self._notice = QLabel()
+        self._notice.setObjectName("listNotice")
+        self._notice.setWordWrap(True)
+        layout.addWidget(self._notice)
 
         self._search = QLineEdit()
         self._search.setObjectName("search")
@@ -114,6 +131,21 @@ class ChampionPicker(QWidget):
         """
         self._layout.insertWidget(self._header_slot, widget)
         self._header_slot += 1
+
+    def set_title_widget(self, widget: QWidget) -> None:
+        """Encosta um widget à direita do título desta lista."""
+        self._head.addWidget(widget)
+
+    def set_notice(self, text: str, alert: bool = False) -> None:
+        """Escreve o aviso desta lista; `alert` é o que muda a cor."""
+        self._notice.setText(text)
+        self._notice.setProperty("alert", alert)
+        # Propriedade dinâmica só muda a cor depois de repintar.
+        self._notice.style().unpolish(self._notice)
+        self._notice.style().polish(self._notice)
+
+    def notice(self) -> str:
+        return self._notice.text()
 
     # ---------- entrada de dados ----------
 

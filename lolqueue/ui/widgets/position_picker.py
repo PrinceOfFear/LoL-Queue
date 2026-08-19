@@ -1,39 +1,23 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QLabel, QTabBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QTabBar, QVBoxLayout, QWidget
 
 from ...config import POSITIONS, position_name
+from ..advice import GENERAL, TAB_LABELS, TAB_ORDER, join_names, pick_notice
 from .champion_picker import ChampionPicker
 
-#: Chave da lista que vale quando a rota não tem lista própria. Vazia de
-#: propósito: é o mesmo valor que o cliente manda em `assignedPosition`
-#: nos modos que não distribuem rota.
-GENERAL = ""
-
-#: Rótulos curtos: a coluna não comporta "Atirador" e "Suporte" inteiros
-#: em seis abas lado a lado.
-TAB_LABELS: dict[str, str] = {
-    GENERAL: "GERAL",
-    "top": "TOPO",
-    "jungle": "SELVA",
-    "middle": "MEIO",
-    "bottom": "ADC",
-    "utility": "SUP",
-}
-
-TAB_ORDER: tuple[str, ...] = (GENERAL, *POSITIONS)
+__all__ = [
+    "GENERAL",
+    "TAB_LABELS",
+    "TAB_ORDER",
+    "PositionPicker",
+    "join_names",
+]
 
 #: Marca as abas que têm lista própria, para dar de relance quais rotas
 #: estão configuradas e quais caem na geral.
 FILLED_MARK = " ●"
-
-
-def join_names(names: list[str]) -> str:
-    """Junta rótulos como se escreve à mão: A, B e C."""
-    if len(names) <= 1:
-        return "".join(names)
-    return f"{', '.join(names[:-1])} e {names[-1]}"
 
 
 class PositionPicker(QWidget):
@@ -59,6 +43,9 @@ class PositionPicker(QWidget):
         for position in POSITIONS:
             self._lists[position] = list(by_position.get(position) or [])
         self._current = GENERAL
+        #: Começa ligada para que o aviso não acuse desligamento antes de
+        #: a janela dizer como a config está de fato.
+        self._automatic = True
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -75,11 +62,6 @@ class PositionPicker(QWidget):
             index = self._tabs.addTab(TAB_LABELS[key])
             self._tabs.setTabToolTip(index, self._tooltip(key))
         self._picker.add_header(self._tabs)
-
-        self._notice = QLabel()
-        self._notice.setObjectName("listNotice")
-        self._notice.setWordWrap(True)
-        self._picker.add_header(self._notice)
 
         self._picker.set_ids(self._lists[GENERAL])
         self._refresh_marks()
@@ -104,10 +86,23 @@ class PositionPicker(QWidget):
                     self.changed.emit(key, kept)
             self._picker.set_ids(self._lists[self._current])
             self._refresh_marks()
+            self._refresh_notice()
         self._picker.set_catalog(catalog)
 
     def set_icons(self, store) -> None:
         self._picker.set_icons(store)
+
+    def set_title_widget(self, widget: QWidget) -> None:
+        self._picker.set_title_widget(widget)
+
+    def set_automation(self, enabled: bool) -> None:
+        """Diz se a escolha automática está ligada.
+
+        Sem isso a tela mostraria listas caprichadas sem revelar que
+        nenhuma delas seria consultada na partida.
+        """
+        self._automatic = enabled
+        self._refresh_notice()
 
     # ---------- interação ----------
 
@@ -141,33 +136,11 @@ class PositionPicker(QWidget):
         salvar, entrar na partida e ver outro campeão ser escolhido,
         porque a rota sorteada tinha lista própria e ela é que valia.
         """
-        text, alert = self._notice_for(self._current)
-        self._notice.setText(text)
-        self._notice.setProperty("alert", alert)
-        # Propriedade dinâmica só muda a cor depois de repintar.
-        self._notice.style().unpolish(self._notice)
-        self._notice.style().polish(self._notice)
-
-    def _notice_for(self, key: str) -> tuple[str, bool]:
-        if key != GENERAL:
-            if self._lists[key]:
-                return f"Vale quando você cair de {position_name(key)}.", False
-            return "Sem lista própria — esta rota usa a lista geral.", False
-
-        overriding = [
-            TAB_LABELS[position]
-            for position in POSITIONS
-            if self._lists[position]
-        ]
-        if not overriding:
-            return "Vale para todas as rotas.", False
-        return (
-            f"{join_names(overriding)} têm lista própria e não usam esta.",
-            True,
-        )
+        text, alert = pick_notice(self._current, self._lists, self._automatic)
+        self._picker.set_notice(text, alert)
 
     def notice(self) -> str:
-        return self._notice.text()
+        return self._picker.notice()
 
     # ---------- leitura ----------
 
