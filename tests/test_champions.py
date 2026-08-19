@@ -102,3 +102,21 @@ def test_load_only_hits_the_api_once():
     catalog.load()
     catalog.load()
     assert catalog._client.paths("GET").count(endpoints.CHAMPION_SUMMARY) == 1
+
+
+def test_it_knows_the_riot_alias():
+    """O nome de exibição é traduzido; o alias não.
+
+    Num cliente em português "Nunu & Willump" vira "Nunu e Willump",
+    e sites de fora não reconhecem isso. O alias é o mesmo em toda
+    parte, e é ele que serve para conversar com terceiros.
+    """
+    catalog = make_catalog()
+    catalog.load()
+    assert catalog.alias(64) == "LeeSin"
+
+
+def test_an_unknown_champion_has_no_alias():
+    catalog = make_catalog()
+    catalog.load()
+    assert catalog.alias(999) == ""

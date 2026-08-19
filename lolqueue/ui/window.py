@@ -17,6 +17,7 @@ from ..core.engine import Engine
 from ..core.icons import IconStore
 from ..core.journal import Journal
 from ..core.loadout import Loadout
+from ..core.opgg import OpggSource
 from ..core.phases import GameflowPhase
 from ..core.queues import unavailable_queues
 from ..core.watcher import PhaseWatcher
@@ -47,6 +48,9 @@ class MainWindow(QWidget):
         # Filas que a Riot desligou nesta região. Descobertas na thread
         # do watcher e lidas na da GUI, igual ao catálogo.
         self._blocked_queues: set[int] | None = None
+        # Vive fora do motor de propósito: assim o que já foi
+        # consultado sobrevive a uma reconexão com o cliente.
+        self._opgg = OpggSource()
         self._icons = IconStore()
         self._icon_loader: IconLoader | None = None
         self._phase = GameflowPhase.NONE.value
@@ -142,7 +146,11 @@ class MainWindow(QWidget):
                 catalog,
                 log=self._watcher.message.emit,
                 loadout=Loadout(
-                    client, self._config, catalog, log=self._watcher.message.emit
+                    client,
+                    self._config,
+                    catalog,
+                    log=self._watcher.message.emit,
+                    source=self._opgg,
                 ),
             )
         )

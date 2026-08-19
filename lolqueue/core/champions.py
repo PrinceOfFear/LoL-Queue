@@ -14,6 +14,7 @@ class ChampionCatalog:
     def __init__(self, client) -> None:
         self._client = client
         self._by_id: dict[int, str] = {}
+        self._by_alias: dict[int, str] = {}
         self._by_name: dict[str, int] = {}
         self._loaded = False
 
@@ -34,6 +35,7 @@ class ChampionCatalog:
 
         by_id: dict[int, str] = {}
         by_name: dict[str, int] = {}
+        by_alias: dict[int, str] = {}
         for entry in data:
             if not isinstance(entry, dict):
                 continue
@@ -53,13 +55,24 @@ class ChampionCatalog:
                 continue
             by_id[champion_id] = name
             by_name[name.casefold()] = champion_id
+            by_alias[champion_id] = alias
 
         self._by_id = by_id
         self._by_name = by_name
+        self._by_alias = by_alias
         self._loaded = True
 
     def name(self, champion_id: int) -> str:
         return self._by_id.get(champion_id, f"#{champion_id}")
+
+    def alias(self, champion_id: int) -> str:
+        """Identificador da Riot, igual em qualquer idioma.
+
+        O nome de exibição vem traduzido pelo cliente. Para falar com
+        gente de fora — um site de estatísticas, por exemplo — é o
+        alias que serve.
+        """
+        return self._by_alias.get(champion_id, "")
 
     def knows(self, champion_id: int) -> bool:
         """Se o campeão existe mesmo. Falso enquanto o catálogo não veio."""

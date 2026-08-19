@@ -15,17 +15,28 @@ O que este módulo cuida de não estragar:
   dele, reconhecida pelo nome. Sem espaço para criá-la, ele desiste e
   avisa; apagar página alheia para abrir vaga está fora de questão.
 
+Quando há uma fonte externa ligada — o OP.GG —, ela fala primeiro: o
+que venceu em partidas de verdade costuma valer mais que a curadoria
+da Riot. Mas ela responde em segundos, e a seleção de campeões não
+espera por ninguém, então a consulta corre numa thread à parte e o
+resultado é recolhido num tick seguinte. Passou do teto de espera, a
+Riot assume.
+
 Erros aqui não sobem: se a recomendação falhar, a seleção e o
 banimento automáticos seguem sem saber de nada.
 """
 
 from __future__ import annotations
 
+import threading
+import time
+from dataclasses import dataclass
 from typing import Callable, Iterable, Sequence
 
 from ..config import Config
 from ..lcu import endpoints
 from ..lcu.client import LcuError
+from .opgg import Build
 
 #: Prefixo do nome da página que o app cria. É por ele que a página é
 #: reconhecida depois — e é o que separa a nossa das do usuário.
@@ -33,6 +44,17 @@ PAGE_PREFIX = "LoL Queue"
 
 #: Mapa padrão quando o cliente não diz qual é: a Fenda.
 DEFAULT_MAP = 11
+
+#: Mapa do Abismo dos Lamentos. Runa e feitiço de ARAM são outros.
+ARAM_MAP = 12
+
+#: Quanto se espera pela fonte externa antes de chamar a Riot. Medido:
+#: as respostas chegam entre três e seis segundos, então o teto dá
+#: folga sem chegar perto do fim da seleção.
+WAIT_SECONDS = 8.0
+
+#: Sinal interno de "ainda não sei" — diferente de "não veio nada".
+PENDING = object()
 
 
 def align_spells(
@@ -77,6 +99,16 @@ def local_spells(session: dict) -> tuple[int | None, int | None]:
     return None, None
 
 
+@dataclass
+class _Search:
+    """Uma consulta à fonte externa que ainda está no ar."""
+
+    champion_id: int
+    started: float
+    thread: threading.Thread | None = None
+    result: Build | None = None
+
+
 class Loadout:
     """Aplica feitiços e runas quando o campeão fica definido."""
 
@@ -86,15 +118,23 @@ class Loadout:
         config: Config,
         catalog,
         log: Callable[[str], None] | None = None,
+        source=None,
+        now: Callable[[], float] | None = None,
     ) -> None:
         self._client = client
         self._config = config
         self._catalog = catalog
         self._log = log or (lambda message: None)
+        self._source = source
+        self._now = now or time.monotonic
         self._done_for: int | None = None
+        self._pending: _Search | None = None
 
     def reset(self) -> None:
         self._done_for = None
+        # A thread em voo, se houver, é daemon e some sozinha; o que
+        # importa é não colar a resposta de uma seleção na seguinte.
+        self._pending = None
 
     def apply(self, session: dict) -> None:
         if not (self._config.auto_spells or self._config.auto_runes):
@@ -103,11 +143,19 @@ class Loadout:
         if champion_id <= 0 or champion_id == self._done_for:
             return
 
+        external = self._external(champion_id, session)
+        if external is PENDING:
+            # A fonte externa ainda está respondendo. Sair sem marcar
+            # é o que faz o próximo tick voltar aqui para recolher.
+            return
+
         # Marcado antes de agir: uma falha no meio do caminho não pode
         # virar uma tentativa por tick pelo resto da seleção.
         self._done_for = champion_id
         try:
-            recommendation = self._recommendation(champion_id, session)
+            recommendation = self._recommendation(
+                champion_id, session, external
+            )
             if recommendation is None:
                 return
             if self._config.auto_spells:
@@ -119,7 +167,24 @@ class Loadout:
 
     # ---------- recomendação ----------
 
-    def _recommendation(self, champion_id: int, session: dict) -> dict | None:
+    def _recommendation(
+        self, champion_id: int, session: dict, external: Build | None
+    ) -> dict | None:
+        """A do OP.GG quando existe, a da Riot quando não.
+
+        As duas saem daqui no mesmo formato — o da Riot — para que o
+        resto do módulo não precise saber de onde veio.
+        """
+        if external is not None:
+            return {
+                "primaryPerkStyleId": external.style,
+                "secondaryPerkStyleId": external.sub_style,
+                "summonerSpellIds": list(external.spells),
+                "perks": [{"id": perk} for perk in external.perks],
+            }
+        return self._riot_recommendation(champion_id, session)
+
+    def _riot_recommendation(self, champion_id: int, session: dict) -> dict | None:
         from .champ_select import local_position
 
         position = local_position(session).upper() or "NONE"
@@ -136,6 +201,55 @@ class Loadout:
             )
             return None
         return payload[0]
+
+    # ---------- fonte externa ----------
+
+    def _external(self, champion_id: int, session: dict):
+        """A recomendação do OP.GG, ``PENDING`` ou ``None``.
+
+        Nunca bloqueia. O tick da seleção roda a cada 0,25 s e é o
+        mesmo que trava campeão e bane — parar aqui por segundos
+        seria trocar a runa pela partida.
+        """
+        if self._source is None:
+            return None
+
+        search = self._pending
+        if search is None or search.champion_id != champion_id:
+            search = self._start(champion_id, session)
+
+        if search.thread is not None and search.thread.is_alive():
+            if self._now() - search.started < WAIT_SECONDS:
+                return PENDING
+            self._pending = None
+            self._log("O OP.GG demorou; usando a recomendação da Riot.")
+            return None
+
+        self._pending = None
+        return search.result
+
+    def _start(self, champion_id: int, session: dict) -> _Search:
+        from .champ_select import local_position
+
+        # O alias, não o nome: o cliente traduz o nome, e quem está
+        # do outro lado só conhece o identificador da Riot.
+        champion = self._catalog.alias(champion_id)
+        position = local_position(session)
+        aram = self._map_id() == ARAM_MAP
+        search = _Search(champion_id=champion_id, started=self._now())
+
+        def run() -> None:
+            try:
+                search.result = self._source.fetch(champion, position, aram)
+            except Exception:
+                # A fonte é um extra; quebrar aqui não pode custar a
+                # recomendação da Riot, que ainda vem depois.
+                search.result = None
+
+        search.thread = threading.Thread(target=run, daemon=True)
+        search.thread.start()
+        self._pending = search
+        return search
 
     def _map_id(self) -> int:
         """Fenda ou Abismo. A recomendação muda entre os dois."""

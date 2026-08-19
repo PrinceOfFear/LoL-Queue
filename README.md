@@ -40,9 +40,12 @@ funciona normalmente.
   procurar partida de vez em quando e fica parado sem avisar.
 - **Escolhe e bane campeão** por lista de prioridade, com lista separada
   por rota quando você quiser.
-- **Aplica runas e feitiços** recomendados pelo próprio cliente para o
-  campeão e a rota, se você ligar. A página criada se chama "LoL Queue"
-  e é a única que o app mexe; as suas ficam intactas.
+- **Aplica runas e feitiços** para o campeão e a rota, se você ligar.
+  A recomendação sai do OP.GG — o que mais venceu em Diamante+ — e a
+  do próprio cliente entra no lugar quando o OP.GG não responde, não
+  cobre o modo ou demora demais. O Flash fica na tecla que você já
+  usa. A página criada se chama "LoL Queue" e é a única que o app
+  mexe; as suas ficam intactas.
 - **Respeita a sala de quem convidou**: com "só mexer na fila quando eu
   for o dono da sala" ligado, na sala de um amigo ele não inicia a busca
   nem abre sala própria, mas continua aceitando, banindo e escolhendo.

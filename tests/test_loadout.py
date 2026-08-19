@@ -9,9 +9,13 @@ Duas regras guiam quase tudo aqui:
   jamais encosta nas outras.
 """
 
+import threading
+import time
+
 from lolqueue.config import Config
 from lolqueue.core.champions import ChampionCatalog
 from lolqueue.core.loadout import PAGE_PREFIX, Loadout, align_spells
+from lolqueue.core.opgg import Build as OpggBuild
 from lolqueue.lcu import endpoints
 from tests.fakes import FakeLcuClient
 
@@ -51,7 +55,7 @@ def session(champion_id=96, position="bottom", spell1=4, spell2=14):
     }
 
 
-def build(config=None, responses=None, failures=None):
+def build(config=None, responses=None, failures=None, source=None, now=None):
     base = {
         endpoints.CHAMPION_SUMMARY: SUMMARY,
         endpoints.GAMEFLOW_SESSION: {"map": {"id": 11}},
@@ -67,7 +71,15 @@ def build(config=None, responses=None, failures=None):
     catalog.load()
     messages: list[str] = []
     config = config or Config(auto_spells=True, auto_runes=True)
-    return Loadout(client, config, catalog, log=messages.append), client, messages
+    loadout = Loadout(
+        client,
+        config,
+        catalog,
+        log=messages.append,
+        source=source,
+        now=now or (lambda: 0.0),
+    )
+    return loadout, client, messages
 
 
 # ---------- o lado do Flash ----------
@@ -286,3 +298,179 @@ def test_it_does_not_retry_a_failure_every_tick():
     loadout.apply(session())
 
     assert len(client.calls) == before
+
+
+# ---------- a segunda opinião do OP.GG ----------
+
+
+class SlowSource:
+    """Fonte que só responde quando o teste mandar.
+
+    A busca de verdade leva de três a seis segundos e roda fora da
+    thread da seleção; segurar a resposta na mão é o que permite olhar
+    o app no meio dessa espera.
+    """
+
+    def __init__(self, build=None, boom=False):
+        self.build = build
+        self.boom = boom
+        self.gate = threading.Event()
+        self.gate.set()
+        self.calls = []
+
+    def fetch(self, champion, position, aram):
+        self.calls.append((champion, position, aram))
+        self.gate.wait(timeout=5)
+        if self.boom:
+            raise RuntimeError("fonte quebrada")
+        return self.build
+
+
+OPGG_BUILD = OpggBuild(
+    style=8100,
+    sub_style=8200,
+    perks=(8112, 8126, 8140, 8105, 8224, 8233, 5008, 5008, 5001),
+    spells=(4, 14),
+)
+
+
+def page_body(client):
+    """Corpo do POST que criou a página de runas."""
+    return next(p for p in client.payloads if p[0] == endpoints.PERK_PAGES)[1]
+
+
+def settle(loadout, session_data, tries=50):
+    """Aplica em ticks, como a janela faz, até a busca terminar."""
+    for _ in range(tries):
+        loadout.apply(session_data)
+        if loadout._pending is None:
+            return
+        time.sleep(0.01)
+
+
+def test_the_opgg_page_is_the_one_that_gets_created():
+    loadout, client, _ = build(source=SlowSource(OPGG_BUILD))
+
+    settle(loadout, session())
+
+    created = page_body(client)
+    assert created["selectedPerkIds"] == list(OPGG_BUILD.perks)
+    assert created["primaryStyleId"] == 8100
+
+
+def test_the_opgg_spells_still_respect_the_flash_key():
+    """A regra do Flash vale para qualquer fonte, não só para a Riot."""
+    loadout, client, _ = build(source=SlowSource(OPGG_BUILD))
+
+    settle(loadout, session(spell1=14, spell2=4))
+
+    assert endpoints.CHAMP_SELECT_MY_SELECTION not in client.paths("PATCH")
+
+
+def test_it_asks_the_opgg_about_the_champion_and_the_lane():
+    """Pelo alias, não pelo nome que o cliente mostra.
+
+    Num cliente em português o nome vem traduzido, e o OP.GG não
+    conhece "Nunu e Willump". O alias é o mesmo em qualquer idioma.
+    """
+    source = SlowSource(OPGG_BUILD)
+    loadout, _, _ = build(source=source)
+
+    settle(loadout, session())
+
+    assert source.calls == [("KogMaw", "bottom", False)]
+
+
+def test_the_abyss_is_announced_to_the_opgg():
+    source = SlowSource(OPGG_BUILD)
+    loadout, _, _ = build(
+        source=source,
+        responses={
+            endpoints.GAMEFLOW_SESSION: {"map": {"id": 12}},
+            recommended_path(map_id=12): [RECOMMENDATION],
+        },
+    )
+
+    settle(loadout, session())
+
+    assert source.calls[0][2] is True
+
+
+def test_nothing_is_applied_while_the_answer_has_not_arrived():
+    """O tick não pode travar esperando a rede: a seleção corre junto."""
+    source = SlowSource(OPGG_BUILD)
+    source.gate.clear()
+    loadout, client, _ = build(source=source)
+
+    loadout.apply(session())
+
+    assert client.paths("POST") == []
+    source.gate.set()
+
+
+def test_the_answer_is_applied_on_a_later_tick():
+    source = SlowSource(OPGG_BUILD)
+    source.gate.clear()
+    loadout, client, _ = build(source=source)
+
+    loadout.apply(session())
+    source.gate.set()
+    settle(loadout, session())
+
+    assert endpoints.PERK_PAGES in client.paths("POST")
+
+
+def test_a_slow_opgg_gives_way_to_the_riot():
+    """Seis segundos é o teto: depois disso a seleção já anda sozinha."""
+    clock = [0.0]
+    source = SlowSource(OPGG_BUILD)
+    source.gate.clear()
+    loadout, client, _ = build(source=source, now=lambda: clock[0])
+
+    loadout.apply(session())
+    clock[0] = 99.0
+    loadout.apply(session())
+    source.gate.set()
+
+    created = page_body(client)
+    assert created["selectedPerkIds"] == PERK_IDS
+
+
+def test_an_empty_answer_gives_way_to_the_riot():
+    loadout, client, _ = build(source=SlowSource(None))
+
+    settle(loadout, session())
+
+    created = page_body(client)
+    assert created["selectedPerkIds"] == PERK_IDS
+
+
+def test_a_broken_source_gives_way_to_the_riot():
+    """Exceção na fonte é problema dela; a seleção segue equipada."""
+    loadout, client, _ = build(source=SlowSource(boom=True))
+
+    settle(loadout, session())
+
+    created = page_body(client)
+    assert created["selectedPerkIds"] == PERK_IDS
+
+
+def test_the_opgg_is_asked_once_per_champion():
+    source = SlowSource(OPGG_BUILD)
+    loadout, _, _ = build(source=source)
+
+    settle(loadout, session())
+    loadout.apply(session())
+
+    assert len(source.calls) == 1
+
+
+def test_a_new_champ_select_starts_over():
+    source = SlowSource(OPGG_BUILD)
+    loadout, _, _ = build(source=source)
+
+    settle(loadout, session())
+    loadout.reset()
+    settle(loadout, session())
+
+    assert len(source.calls) == 2
