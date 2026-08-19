@@ -56,6 +56,12 @@ WAIT_SECONDS = 8.0
 #: Sinal interno de "ainda não sei" — diferente de "não veio nada".
 PENDING = object()
 
+#: De onde veio a recomendação, para o registro dizer. Sem isso não
+#: dá para perceber que o OP.GG parou de responder e que o app está
+#: rodando na reserva há semanas.
+ORIGIN_RIOT = "Riot"
+ORIGIN_OPGG = "OP.GG"
+
 
 def align_spells(
     recommended: Sequence[int], current: Iterable[int | None]
@@ -158,10 +164,11 @@ class Loadout:
             )
             if recommendation is None:
                 return
+            origem = ORIGIN_OPGG if external is not None else ORIGIN_RIOT
             if self._config.auto_spells:
-                self._apply_spells(recommendation, session)
+                self._apply_spells(recommendation, session, origem)
             if self._config.auto_runes:
-                self._apply_runes(recommendation, champion_id)
+                self._apply_runes(recommendation, champion_id, origem)
         except LcuError as exc:
             self._log(f"Não deu para aplicar runas e feitiços: {exc}")
 
@@ -271,7 +278,9 @@ class Loadout:
 
     # ---------- feitiços ----------
 
-    def _apply_spells(self, recommendation: dict, session: dict) -> None:
+    def _apply_spells(
+        self, recommendation: dict, session: dict, origem: str
+    ) -> None:
         spells = recommendation.get("summonerSpellIds")
         if not isinstance(spells, list) or len(spells) < 2:
             return
@@ -283,11 +292,13 @@ class Loadout:
             endpoints.CHAMP_SELECT_MY_SELECTION,
             json={"spell1Id": first, "spell2Id": second},
         )
-        self._log("Feitiços recomendados aplicados.")
+        self._log(f"Feitiços do {origem} aplicados.")
 
     # ---------- runas ----------
 
-    def _apply_runes(self, recommendation: dict, champion_id: int) -> None:
+    def _apply_runes(
+        self, recommendation: dict, champion_id: int, origem: str
+    ) -> None:
         name = f"{PAGE_PREFIX}: {self._catalog.name(champion_id)}"
         self._discard_old_pages()
         if not self._has_room():
@@ -315,7 +326,7 @@ class Loadout:
         # Criar não ativa: sem este passo o jogador entraria na partida
         # com a página que estava selecionada antes.
         self._client.put(endpoints.PERK_CURRENT_PAGE, json=page_id)
-        self._log(f"Runas recomendadas aplicadas — página “{name}”.")
+        self._log(f"Runas do {origem} aplicadas — página “{name}”.")
 
     def _discard_old_pages(self) -> None:
         """Apaga a página que o app criou antes, e só ela."""

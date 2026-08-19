@@ -495,3 +495,22 @@ def test_a_disconnect_during_the_search_does_not_reach_the_tick():
     client.closed = True
 
     loadout.apply(session())  # não levanta
+
+
+def test_the_journal_says_the_runes_came_from_the_opgg():
+    """Saber a origem é metade do valor: sem isso não dá para
+    perceber que o OP.GG parou de responder.
+    """
+    loadout, _, messages = build(source=SlowSource(OPGG_BUILD))
+
+    settle(loadout, session())
+
+    assert any("OP.GG" in message for message in messages)
+
+
+def test_the_journal_says_when_the_riot_answered_instead():
+    loadout, _, messages = build(source=SlowSource(None))
+
+    settle(loadout, session())
+
+    assert any("Riot" in message for message in messages)
