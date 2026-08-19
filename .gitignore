@@ -10,3 +10,6 @@ tests/fixtures/*.json
 # App antigo (captura de tela). Movido para cá inteiro em vez de apagado:
 # se algum dia fizer falta, está tudo lá. Pode apagar a pasta à vontade.
 _legado/
+
+# Atalho gerado por tools/criar-atalho.ps1 (aponta para o pythonw desta máquina)
+*.lnk
