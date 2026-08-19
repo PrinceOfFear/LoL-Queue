@@ -4,18 +4,13 @@ import time
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDoubleSpinBox,
     QHBoxLayout,
-    QLabel,
-    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from ..config import QUEUES, Config, log_dir
+from ..config import Config, log_dir
 from ..core.champ_select import ChampSelectController
 from ..core.champions import ChampionCatalog
 from ..core.engine import Engine
@@ -23,17 +18,19 @@ from ..core.icons import IconStore
 from ..core.journal import Journal
 from ..core.phases import GameflowPhase
 from ..core.watcher import PhaseWatcher
-from .advice import ban_notice
+from .binding import ConfigBinder
 from .icon_loader import IconLoader
+from .pages.champions import ChampionsPage
+from .pages.dashboard import DashboardPage
+from .pages.queue import QueuePage
+from .pages.settings import SettingsPage
 from .theme import STYLESHEET
-from .widgets.champion_picker import ChampionPicker
-from .widgets.log_pane import LogPane
-from .widgets.position_picker import PositionPicker
 from .widgets.sidebar import Sidebar
-from .widgets.status_ring import StatusRing
+from .widgets.titlebar import TITLEBAR_HEIGHT, TitleBar
+
 
 class MainWindow(QWidget):
-    """Janela sem moldura nativa. Só desenha estado."""
+    """Moldura, navegação e o motor. Cada página cuida do seu assunto."""
 
     #: Ponte para ligar/desligar o motor de fora da thread da GUI.
     #: As hotkeys globais chegam pela thread do `keyboard`, que não pode
@@ -43,6 +40,7 @@ class MainWindow(QWidget):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
+        self._binder = ConfigBinder(config, self)
         self._catalog: ChampionCatalog | None = None
         self._icons = IconStore()
         self._icon_loader: IconLoader | None = None
@@ -52,11 +50,6 @@ class MainWindow(QWidget):
         # Estado do motor guardado num atributo simples: `_make_engine` roda
         # na thread do watcher e não pode consultar widgets.
         self._enabled = False
-        # Caixas por campo da config. O mesmo campo aparece em mais de uma
-        # página — o interruptor da escolha automática mora tanto em
-        # Automação quanto ao lado da lista que ele comanda —, e as duas
-        # precisam concordar sem que uma dispare a outra.
-        self._boxes: dict[str, list[QCheckBox]] = {}
         # O painel guarda algumas centenas de linhas e some ao fechar o
         # app. O arquivo é o que sobra para conferir, depois da partida,
         # qual lista foi usada e se o banimento entrou.
@@ -99,208 +92,23 @@ class MainWindow(QWidget):
         right = QVBoxLayout()
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
-        right.addWidget(self._build_titlebar())
+        right.addWidget(TitleBar(self.showMinimized, self.close))
+
+        self._dashboard = DashboardPage()
+        self._dashboard.toggled.connect(self.toggle_engine)
+        self._dashboard.set_log_folder(self._journal.directory)
+        self._champions = ChampionsPage(self._binder)
 
         self._pages = QStackedWidget()
-        self._pages.addWidget(self._build_dashboard())
-        self._pages.addWidget(self._build_champions_page())
-        self._pages.addWidget(self._build_queue_page())
-        self._pages.addWidget(self._build_settings_page())
+        for page in (
+            self._dashboard,
+            self._champions,
+            QueuePage(self._binder),
+            SettingsPage(self._binder),
+        ):
+            self._pages.addWidget(page)
         right.addWidget(self._pages, 1)
         columns.addLayout(right, 1)
-
-        # Depois das páginas: o aviso lê a config e escreve nos dois
-        # pickers, que só existem a partir daqui.
-        self._refresh_advice()
-
-    def _build_titlebar(self) -> QWidget:
-        bar = QWidget()
-        bar.setObjectName("titlebar")
-        bar.setFixedHeight(46)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(24, 0, 12, 0)
-        layout.addWidget(QLabel("LOL QUEUE"))
-        layout.addStretch(1)
-        for text, name, slot in (
-            ("—", "windowButton", self.showMinimized),
-            ("✕", "closeButton", self.close),
-        ):
-            button = QPushButton(text)
-            button.setObjectName(name)
-            button.clicked.connect(slot)
-            layout.addWidget(button)
-        return bar
-
-    def _build_dashboard(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 10, 40, 28)
-        layout.setSpacing(18)
-        layout.addStretch(1)
-
-        self._ring = StatusRing()
-        layout.addWidget(self._ring, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self._toggle = QPushButton("INICIAR")
-        self._toggle.setObjectName("primaryButton")
-        self._toggle.setProperty("running", "false")
-        self._toggle.clicked.connect(self.toggle_engine)
-        layout.addWidget(self._toggle, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        hint = QLabel("F5 iniciar        F6 parar")
-        hint.setObjectName("hint")
-        layout.addWidget(hint, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        layout.addStretch(1)
-        self._log = LogPane()
-        self._log.set_folder(self._journal.directory)
-        layout.addWidget(self._log)
-        return page
-
-    def _build_champions_page(self) -> QWidget:
-        page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setContentsMargins(32, 14, 32, 20)
-        layout.setSpacing(24)
-
-        self._pick_picker = PositionPicker(
-            "PRIORIDADE DE ESCOLHA",
-            self._config.pick_priority,
-            self._config.pick_priority_by_position,
-        )
-        self._pick_picker.changed.connect(self._on_pick_priority_changed)
-        self._pick_picker.set_title_widget(
-            self._auto_switch("automática", "auto_pick")
-        )
-        layout.addWidget(self._pick_picker, 1)
-
-        self._ban_picker = ChampionPicker("PRIORIDADE DE BANIMENTO")
-        self._ban_picker.set_ids(self._config.ban_priority)
-        self._ban_picker.changed.connect(self._on_ban_priority_changed)
-        self._ban_picker.set_title_widget(self._auto_switch("automático", "auto_ban"))
-        layout.addWidget(self._ban_picker, 1)
-        return page
-
-    def _build_queue_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 24, 40, 28)
-        layout.setSpacing(14)
-
-        title = QLabel("FILA")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-
-        self._queue_combo = QComboBox()
-        for queue_id, name in QUEUES.items():
-            self._queue_combo.addItem(name, queue_id)
-        index = self._queue_combo.findData(self._config.queue_id)
-        if index >= 0:
-            self._queue_combo.setCurrentIndex(index)
-        self._queue_combo.currentIndexChanged.connect(self._on_queue_changed)
-        layout.addWidget(self._queue_combo)
-
-        self._auto_queue = self._checkbox(
-            "Entrar na fila e voltar a ela automaticamente", "auto_queue"
-        )
-        layout.addWidget(self._auto_queue)
-        layout.addStretch(1)
-        return page
-
-    def _build_settings_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 24, 40, 28)
-        layout.setSpacing(14)
-
-        title = QLabel("AUTOMAÇÃO")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-
-        layout.addWidget(
-            self._checkbox("Aceitar partida automaticamente", "auto_accept")
-        )
-        layout.addWidget(
-            self._checkbox("Escolher campeão automaticamente", "auto_pick")
-        )
-        layout.addWidget(self._checkbox("Banir campeão automaticamente", "auto_ban"))
-
-        delay_row = QHBoxLayout()
-        delay_row.addWidget(QLabel("Atraso antes de travar o campeão"))
-        self._delay = QDoubleSpinBox()
-        self._delay.setRange(0.0, 15.0)
-        self._delay.setSingleStep(0.5)
-        self._delay.setSuffix(" s")
-        self._delay.setValue(self._config.lock_delay_seconds)
-        self._delay.valueChanged.connect(self._on_delay_changed)
-        delay_row.addWidget(self._delay)
-        delay_row.addStretch(1)
-        layout.addLayout(delay_row)
-
-        layout.addStretch(1)
-        return page
-
-    def _checkbox(self, label: str, attribute: str) -> QCheckBox:
-        box = QCheckBox(label)
-        box.setChecked(getattr(self._config, attribute))
-        box.toggled.connect(lambda value: self._set_config(attribute, value))
-        self._boxes.setdefault(attribute, []).append(box)
-        return box
-
-    def _auto_switch(self, label: str, attribute: str) -> QCheckBox:
-        """A mesma caixa, no tamanho de quem acompanha um título."""
-        box = self._checkbox(label, attribute)
-        box.setObjectName("autoSwitch")
-        return box
-
-    # ---------- estado ----------
-
-    def _set_config(self, attribute: str, value) -> None:
-        setattr(self._config, attribute, value)
-        self._config.save()
-        self._sync_boxes(attribute, value)
-        self._refresh_advice()
-
-    def _sync_boxes(self, attribute: str, value) -> None:
-        """Alinha as outras caixas do mesmo campo, sem reentrância.
-
-        Marcar uma caixa daqui dispararia `toggled` de novo; o bloqueio
-        corta o vaivém antes que ele exista.
-        """
-        for box in self._boxes.get(attribute, []):
-            if box.isChecked() == value:
-                continue
-            box.blockSignals(True)
-            box.setChecked(bool(value))
-            box.blockSignals(False)
-
-    def _refresh_advice(self) -> None:
-        """Reescreve o que cada lista avisa sobre si mesma."""
-        self._pick_picker.set_automation(self._config.auto_pick)
-        self._ban_picker.set_notice(
-            *ban_notice(self._config.ban_priority, self._config.auto_ban)
-        )
-
-    def _on_queue_changed(self, index: int) -> None:
-        self._set_config("queue_id", self._queue_combo.itemData(index))
-
-    def _on_delay_changed(self, value: float) -> None:
-        self._set_config("lock_delay_seconds", value)
-
-    def _on_pick_priority_changed(self, position: str, ids: list) -> None:
-        """A aba aberta diz qual lista mudou; a vazia é a geral."""
-        if not position:
-            self._set_config("pick_priority", ids)
-            return
-        by_position = dict(self._config.pick_priority_by_position)
-        if ids:
-            by_position[position] = ids
-        else:
-            by_position.pop(position, None)
-        self._set_config("pick_priority_by_position", by_position)
-
-    def _on_ban_priority_changed(self, ids: list) -> None:
-        self._set_config("ban_priority", ids)
 
     def _navigate(self, index: int) -> None:
         self._pages.setCurrentIndex(index)
@@ -333,10 +141,7 @@ class MainWindow(QWidget):
 
     def set_engine_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
-        self._toggle.setProperty("running", "true" if enabled else "false")
-        self._toggle.setText("PARAR" if enabled else "INICIAR")
-        self._toggle.style().unpolish(self._toggle)
-        self._toggle.style().polish(self._toggle)
+        self._dashboard.set_running(enabled)
         engine = self._watcher.engine
         if engine is not None:
             engine.set_enabled(enabled)
@@ -347,9 +152,8 @@ class MainWindow(QWidget):
         self._phase_started = time.monotonic()
         if self._catalog is not None:
             catalog, self._catalog = self._catalog, None
-            for picker in (self._pick_picker, self._ban_picker):
-                picker.set_icons(self._icons)
-                picker.set_catalog(catalog)
+            self._champions.set_icons(self._icons)
+            self._champions.set_catalog(catalog)
             self._start_icon_loader(catalog)
         self._refresh_ring()
 
@@ -364,27 +168,31 @@ class MainWindow(QWidget):
         self._icon_loader.start()
 
     def _on_icons_ready(self) -> None:
-        for picker in (self._pick_picker, self._ban_picker):
-            picker.set_icons(self._icons)
+        self._champions.set_icons(self._icons)
         self._log_message("Retratos prontos.")
 
     def _on_connection_changed(self, connected: bool) -> None:
         self._sidebar.set_connected(connected)
-        self._ring.set_connected(connected)
+        self._dashboard.ring.set_connected(connected)
 
     def _refresh_ring(self) -> None:
         # Conta em toda fase, não só nas de fila. Zerado fora delas o
         # cronômetro ficava num 00:00 parado que parecia defeito.
-        self._ring.set_phase(self._phase, time.monotonic() - self._phase_started)
+        self._dashboard.ring.set_phase(
+            self._phase, time.monotonic() - self._phase_started
+        )
 
     def _log_message(self, message: str) -> None:
-        self._log.append(message)
+        self._dashboard.append(message)
         self._journal.write(message)
 
     # ---------- janela sem moldura ----------
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if event.button() == Qt.MouseButton.LeftButton and event.position().y() < 46:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and event.position().y() < TITLEBAR_HEIGHT
+        ):
             self._drag_offset = event.globalPosition().toPoint() - self.pos()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)

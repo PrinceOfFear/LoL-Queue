@@ -40,7 +40,7 @@ def window(app, monkeypatch, tmp_path):
 
 
 def boxes(window, attribute):
-    return window._boxes[attribute]
+    return window._binder.boxes(attribute)
 
 
 def test_the_same_setting_has_a_switch_next_to_its_list(window):
@@ -82,28 +82,28 @@ def test_the_switches_do_not_bounce_off_each_other(window):
 def test_turning_the_pick_automation_off_shows_up_on_the_list(window):
     boxes(window, "auto_pick")[0].setChecked(False)
 
-    assert "desligada" in window._pick_picker.notice()
+    assert "desligada" in window._champions.pick_picker.notice()
 
 
 def test_turning_the_ban_automation_off_shows_up_on_the_list(window):
     boxes(window, "auto_ban")[0].setChecked(False)
 
-    assert "desligado" in window._ban_picker.notice()
+    assert "desligado" in window._champions.ban_picker.notice()
 
 
 def test_emptying_the_ban_list_warns_that_nothing_is_banned(window):
-    window._ban_picker.set_ids([])
-    window._ban_picker._emit()
+    window._champions.ban_picker.set_ids([])
+    window._champions.ban_picker._emit()
 
-    assert "banido" in window._ban_picker.notice()
+    assert "banido" in window._champions.ban_picker.notice()
 
 
 def test_an_empty_general_list_warns_which_lanes_pick_nothing(window):
     """A config real do usuário chegou nesse estado sem nenhum aviso."""
-    window._pick_picker._picker.set_ids([])
-    window._pick_picker._picker._emit()
+    window._champions.pick_picker._picker.set_ids([])
+    window._champions.pick_picker._picker._emit()
 
-    assert "TOPO" in window._pick_picker.notice()
+    assert "TOPO" in window._champions.pick_picker.notice()
 
 
 def test_the_window_saves_what_the_switches_change(window, tmp_path):
