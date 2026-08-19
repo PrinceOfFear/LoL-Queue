@@ -252,8 +252,17 @@ class Loadout:
         return search
 
     def _map_id(self) -> int:
-        """Fenda ou Abismo. A recomendação muda entre os dois."""
-        session = self._client.get(endpoints.GAMEFLOW_SESSION)
+        """Fenda ou Abismo. A recomendação muda entre os dois.
+
+        Uma falha aqui não pode subir. Este é o primeiro passo da
+        busca externa, que corre fora do bloco protegido do `apply`,
+        e quem chama `apply` é o mesmo tick que escolhe e bane
+        campeão — a runa não tem o direito de atrapalhar isso.
+        """
+        try:
+            session = self._client.get(endpoints.GAMEFLOW_SESSION)
+        except LcuError:
+            return DEFAULT_MAP
         if isinstance(session, dict):
             map_id = (session.get("map") or {}).get("id")
             if isinstance(map_id, int):

@@ -474,3 +474,24 @@ def test_a_new_champ_select_starts_over():
     settle(loadout, session())
 
     assert len(source.calls) == 2
+
+
+def test_a_client_hiccup_before_the_search_does_not_reach_the_tick():
+    """Descobrir o mapa é o primeiro passo da busca externa, e
+    ele fala com o cliente. Se essa pergunta falhar, a exceção não
+    pode subir: quem chama `apply` é o mesmo tick que escolhe e
+    bane campeão, e ele roda logo depois.
+    """
+    loadout, _, _ = build(
+        source=SlowSource(OPGG_BUILD),
+        failures={endpoints.GAMEFLOW_SESSION},
+    )
+
+    settle(loadout, session())  # não levanta
+
+
+def test_a_disconnect_during_the_search_does_not_reach_the_tick():
+    loadout, client, _ = build(source=SlowSource(OPGG_BUILD))
+    client.closed = True
+
+    loadout.apply(session())  # não levanta
