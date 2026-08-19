@@ -15,11 +15,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import QUEUES, Config
+from ..config import QUEUES, Config, log_dir
 from ..core.champ_select import ChampSelectController
 from ..core.champions import ChampionCatalog
 from ..core.engine import Engine
 from ..core.icons import IconStore
+from ..core.journal import Journal
 from ..core.phases import GameflowPhase
 from ..core.watcher import PhaseWatcher
 from .advice import ban_notice
@@ -56,6 +57,10 @@ class MainWindow(QWidget):
         # Automação quanto ao lado da lista que ele comanda —, e as duas
         # precisam concordar sem que uma dispare a outra.
         self._boxes: dict[str, list[QCheckBox]] = {}
+        # O painel guarda algumas centenas de linhas e some ao fechar o
+        # app. O arquivo é o que sobra para conferir, depois da partida,
+        # qual lista foi usada e se o banimento entrou.
+        self._journal = Journal(log_dir())
 
         self.setWindowTitle("LoL Queue")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -148,6 +153,7 @@ class MainWindow(QWidget):
 
         layout.addStretch(1)
         self._log = LogPane()
+        self._log.set_folder(self._journal.directory)
         layout.addWidget(self._log)
         return page
 
@@ -373,6 +379,7 @@ class MainWindow(QWidget):
 
     def _log_message(self, message: str) -> None:
         self._log.append(message)
+        self._journal.write(message)
 
     # ---------- janela sem moldura ----------
 

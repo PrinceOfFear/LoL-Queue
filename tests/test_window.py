@@ -110,3 +110,15 @@ def test_the_window_saves_what_the_switches_change(window, tmp_path):
     boxes(window, "auto_pick")[0].setChecked(False)
 
     assert Config.load(tmp_path / "config.json").auto_pick is False
+
+
+def test_every_message_is_also_written_to_the_file(window, tmp_path):
+    """O painel some ao fechar o app; o arquivo é o que sobra."""
+    window._log_message("Banindo Brand.")
+
+    written = (tmp_path / "registro").glob("*.log")
+    assert any("Banindo Brand." in f.read_text(encoding="utf-8") for f in written)
+
+
+def test_the_log_folder_sits_next_to_the_config(window, tmp_path):
+    assert window._journal.directory == tmp_path / "registro"

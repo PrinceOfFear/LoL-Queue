@@ -44,6 +44,11 @@ def config_path() -> Path:
     return Path(base) / "LoLQueue" / "config.json"
 
 
+def log_dir() -> Path:
+    """Onde fica o registro em arquivo, ao lado da config."""
+    return config_path().parent / "registro"
+
+
 def champion_ids(value) -> list[int]:
     """Filtra uma lista de prioridade, deixando só ids plausíveis.
 
