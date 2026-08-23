@@ -13,9 +13,12 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 
 from lolqueue.core.summoner_history import (  # noqa: E402
+    GameDetail,
     MatchSummary,
+    ParticipantDetail,
     Profile,
     RankEntry,
+    TeamDetail,
 )
 from lolqueue.ui.pages.history import HistoryPage  # noqa: E402
 
@@ -69,6 +72,78 @@ def match(**changes):
     )
     base.update(changes)
     return MatchSummary(**base)
+
+
+def participant(**changes):
+    base = dict(
+        is_target=False,
+        game_name="Jogador",
+        tag_line="BR1",
+        champion_id=54,
+        champion_name="Malphite",
+        team_key="BLUE",
+        position="TOP",
+        items=(1056, 3802, 1001),
+        item_names=("Anel de Doran", "Capítulo Perdido", "Botas"),
+        spells=(4, 12),
+        primary_style_id=8200,
+        primary_rune_id=8229,
+        secondary_style_id=8400,
+        champion_level=10,
+        kills=0,
+        deaths=4,
+        assists=0,
+        cs=79,
+        gold=3901,
+        damage_to_champions=4790,
+        result="LOSE",
+    )
+    base.update(changes)
+    return ParticipantDetail(**base)
+
+
+def team(**changes):
+    base = dict(
+        key="BLUE",
+        win=False,
+        kills=8,
+        towers=0,
+        dragons=0,
+        barons=0,
+        heralds=0,
+        gold=24155,
+        banned_champion_ids=(25, 55, 141, 412, 910),
+        banned_champion_names=("Morgana", "Katarina", "Kayn", "Thresh", "Hwei"),
+        participants=tuple(
+            participant(team_key="BLUE", is_target=(i == 0), game_name=f"P{i}")
+            for i in range(5)
+        ),
+    )
+    base.update(changes)
+    return TeamDetail(**base)
+
+
+def detail(**changes):
+    base = dict(
+        match_id="abc",
+        duration_seconds=958,
+        queue_type="SOLORANKED",
+        played_at=datetime(2026, 8, 23, 8, 18, 49, tzinfo=timezone.utc),
+        teams=(
+            team(key="BLUE", win=False),
+            team(
+                key="RED",
+                win=True,
+                participants=tuple(
+                    participant(team_key="RED", is_target=False, game_name=f"R{i}")
+                    for i in range(5)
+                ),
+            ),
+        ),
+        average_tier="EMERALD",
+    )
+    base.update(changes)
+    return GameDetail(**base)
 
 
 def test_it_starts_with_nothing_to_read(page):
@@ -163,6 +238,61 @@ def test_clicking_a_row_emits_the_match_it_represents(page):
     QTest.mouseClick(row, Qt.MouseButton.LeftButton)
 
     assert seen == [target]
+
+
+def test_set_game_detail_shows_the_scoreboard_and_hides_the_list(page):
+    page.set_history(profile(), (match(),))
+
+    page.set_game_detail(detail())
+
+    assert page._list_view.isHidden()
+    assert not page._scoreboard_view.isHidden()
+
+
+def test_the_scoreboard_shows_both_teams_with_five_players_each(page):
+    page.set_history(profile(), (match(),))
+
+    page.set_game_detail(detail())
+
+    assert page._teams_box.count() == 2
+    for i in range(2):
+        block = page._teams_box.itemAt(i).widget()
+        rows = block.findChildren(QtWidgets.QFrame, "optionCard")
+        assert len(rows) == 5
+
+
+def test_the_target_participant_is_marked(page):
+    page.set_history(profile(), (match(),))
+
+    page.set_game_detail(detail())
+
+    marked = []
+    for i in range(2):
+        block = page._teams_box.itemAt(i).widget()
+        for row in block.findChildren(QtWidgets.QFrame, "optionCard"):
+            if row.property("target") == "true":
+                marked.append(row)
+    assert len(marked) == 1
+
+
+def test_a_missing_game_detail_returns_to_the_list(page):
+    page.set_history(profile(), (match(),))
+    page.set_game_detail(detail())
+
+    page.set_game_detail(None)
+
+    assert not page._list_view.isHidden()
+    assert page._scoreboard_view.isHidden()
+
+
+def test_the_back_button_returns_to_the_list(page):
+    page.set_history(profile(), (match(),))
+    page.set_game_detail(detail())
+
+    page._back_button.click()
+
+    assert not page._list_view.isHidden()
+    assert page._scoreboard_view.isHidden()
 
 
 def test_the_refresh_button_asks_for_a_new_query(page):

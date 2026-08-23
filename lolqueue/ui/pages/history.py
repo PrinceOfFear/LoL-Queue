@@ -132,11 +132,23 @@ class HistoryPage(QWidget):
         layout.addWidget(self._content)
         self._content.hide()
 
-        content.addWidget(self._build_hero())
+        # A lista e o placar de uma partida vivem lado a lado dentro do
+        # mesmo conteúdo — só um dos dois fica visível por vez, igual ao
+        # revezamento entre `_empty` e `_content` logo acima.
+        self._list_view = QWidget()
+        list_box = QVBoxLayout(self._list_view)
+        list_box.setContentsMargins(0, 0, 0, 0)
+        list_box.setSpacing(14)
+        list_box.addWidget(self._build_hero())
         self._matches_box = QVBoxLayout()
         self._matches_box.setSpacing(8)
-        content.addLayout(self._matches_box)
-        content.addStretch(1)
+        list_box.addLayout(self._matches_box)
+        list_box.addStretch(1)
+        content.addWidget(self._list_view)
+
+        self._scoreboard_view = self._build_scoreboard()
+        content.addWidget(self._scoreboard_view)
+        self._scoreboard_view.hide()
 
     def _build_hero(self) -> QFrame:
         card = QFrame()
@@ -382,3 +394,164 @@ class HistoryPage(QWidget):
                 )
             )
         return box
+
+    # -- Placar completo de uma partida -----------------------------------
+    #
+    # `MatchSummary` (a linha da lista) e `ParticipantDetail` (a linha do
+    # placar) compartilham os mesmos nomes de campo — champion_id, items,
+    # spells, primary_rune_id, secondary_style_id, champion_level — de
+    # propósito, então `_portrait_with_level`, `_rune_icons`, `_spell_icons`
+    # e `_item_icons` acima servem para os dois sem duplicar nada.
+
+    def _build_scoreboard(self) -> QWidget:
+        view = QWidget()
+        box = QVBoxLayout(view)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(14)
+
+        header = QHBoxLayout()
+        self._back_button = QPushButton("← Voltar")
+        self._back_button.setObjectName("primaryButton")
+        self._back_button.clicked.connect(self._show_list)
+        header.addWidget(self._back_button)
+
+        words = QVBoxLayout()
+        words.setSpacing(1)
+        self._scoreboard_title = QLabel()
+        self._scoreboard_title.setObjectName("heroHeadline")
+        words.addWidget(self._scoreboard_title)
+        self._scoreboard_subtitle = QLabel()
+        self._scoreboard_subtitle.setObjectName("heroDetail")
+        words.addWidget(self._scoreboard_subtitle)
+        header.addLayout(words)
+        header.addStretch(1)
+        box.addLayout(header)
+
+        self._teams_box = QVBoxLayout()
+        self._teams_box.setSpacing(14)
+        box.addLayout(self._teams_box)
+        box.addStretch(1)
+        return view
+
+    def _show_list(self) -> None:
+        self._scoreboard_view.hide()
+        self._list_view.show()
+
+    def set_game_detail(self, detail) -> None:
+        """Desenha o placar completo, ou volta para a lista.
+
+        `detail` vindo `None` é "a busca do placar falhou" — a página
+        fica (ou volta) na lista, em vez de mostrar uma tela quebrada.
+        """
+        if detail is None:
+            self._show_list()
+            return
+
+        target_team = next(
+            (
+                team
+                for team in detail.teams
+                if any(participant.is_target for participant in team.participants)
+            ),
+            None,
+        )
+        result = "Vitória" if target_team is not None and target_team.win else "Derrota"
+        mode = QUEUE_LABELS.get(detail.queue_type, detail.queue_type)
+        when = detail.played_at.astimezone().strftime("%d/%m/%Y %H:%M")
+        self._scoreboard_title.setText(result)
+        self._scoreboard_subtitle.setText(
+            f"{mode} · {_duration_text(detail.duration_seconds)} · {when}"
+        )
+        self._fill_teams(detail.teams)
+
+        self._list_view.hide()
+        self._scoreboard_view.show()
+
+    def _fill_teams(self, teams) -> None:
+        while self._teams_box.count():
+            item = self._teams_box.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        for team in teams:
+            self._teams_box.addWidget(self._team_block(team))
+
+    def _team_block(self, team) -> QFrame:
+        block = QFrame()
+        block.setObjectName("heroCard")
+        box = QVBoxLayout(block)
+        box.setContentsMargins(16, 12, 16, 12)
+        box.setSpacing(8)
+
+        side = "Equipe Azul" if team.key == "BLUE" else "Equipe Vermelha"
+        result = "Vitória" if team.win else "Derrota"
+        header = QLabel(f"{side} · {result}")
+        header.setObjectName("predictionName")
+        box.addWidget(header)
+
+        objectives = QLabel(
+            f"{team.kills} abates · {team.towers} torres · {team.dragons} dragões · "
+            f"{team.barons} barões · {team.heralds} arautos · {team.gold} ouro"
+        )
+        objectives.setObjectName("heroDetail")
+        objectives.setWordWrap(True)
+        box.addWidget(objectives)
+
+        if team.banned_champion_names:
+            bans = QLabel("Banidos: " + ", ".join(team.banned_champion_names))
+            bans.setObjectName("hint")
+            bans.setWordWrap(True)
+            box.addWidget(bans)
+
+        for participant in team.participants:
+            box.addWidget(self._participant_row(participant))
+
+        return block
+
+    def _participant_row(self, participant) -> QFrame:
+        row = QFrame()
+        row.setObjectName("optionCard")
+        row.setProperty("target", "true" if participant.is_target else "false")
+        box = QHBoxLayout(row)
+        box.setContentsMargins(10, 8, 10, 8)
+        box.setSpacing(10)
+
+        box.addWidget(
+            self._portrait_with_level(participant.champion_id, participant.champion_level)
+        )
+
+        icons = QHBoxLayout()
+        icons.setSpacing(3)
+        icons.addLayout(self._spell_icons(participant))
+        icons.addLayout(self._rune_icons(participant))
+        box.addLayout(icons)
+
+        naming = QVBoxLayout()
+        naming.setSpacing(1)
+        name = (
+            self._resolve_name(participant.champion_id) if self._resolve_name else None
+        )
+        champion = QLabel(name or participant.champion_name)
+        champion.setObjectName("predictionName")
+        naming.addWidget(champion)
+        summoner = QLabel(f"{participant.game_name}#{participant.tag_line}")
+        summoner.setObjectName("heroDetail")
+        naming.addWidget(summoner)
+        box.addLayout(naming)
+
+        box.addLayout(self._item_icons(participant))
+        box.addStretch(1)
+
+        kda = QLabel(f"{participant.kills}/{participant.deaths}/{participant.assists}")
+        kda.setObjectName("cardValue")
+        box.addWidget(kda)
+
+        cs = QLabel(f"{participant.cs} CS")
+        cs.setObjectName("heroDetail")
+        box.addWidget(cs)
+
+        gold = QLabel(f"{participant.gold} ouro")
+        gold.setObjectName("heroDetail")
+        box.addWidget(gold)
+        return row
