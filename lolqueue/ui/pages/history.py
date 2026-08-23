@@ -20,6 +20,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -30,6 +31,10 @@ from PySide6.QtWidgets import (
 from ...core.summoner_history import relative_time
 
 MATCH_PORTRAIT = QSize(40, 40)
+LEVEL_BADGE = QSize(16, 16)
+RUNE_ICON = QSize(16, 16)
+SPELL_ICON = QSize(16, 16)
+ITEM_ICON = QSize(20, 20)
 
 #: Como o OP.GG chama a fila, e como se diz aqui.
 QUEUE_LABELS = {
@@ -52,6 +57,23 @@ def _duration_text(seconds: int) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+class _ClickableFrame(QFrame):
+    """Um `QFrame` que também sabe ser clicado — a linha do histórico.
+
+    O `QPushButton` de sempre não serve aqui: a linha inteira precisa
+    ser a área de clique, com o próprio layout de KDA/itens/runas por
+    cima — um botão desenharia sobre isso ou exigiria repassar cada
+    clique de filho manualmente.
+    """
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class HistoryPage(QWidget):
     """Perfil e últimas partidas, puxados do OP.GG sob pedido."""
 
@@ -59,10 +81,18 @@ class HistoryPage(QWidget):
     #: página não fala com a rede.
     refresh_requested = Signal()
 
+    #: A partida que o usuário clicou na lista, para a janela buscar o
+    #: placar completo dela.
+    match_selected = Signal(object)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._resolve_icon = None
         self._resolve_name = None
+        self._resolve_item_icon = None
+        self._resolve_spell_icon = None
+        self._resolve_keystone_icon = None
+        self._resolve_secondary_style_icon = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(36, 20, 36, 20)
@@ -147,6 +177,22 @@ class HistoryPage(QWidget):
         """
         self._resolve_name = resolve
 
+    def set_item_icon_resolver(self, resolve) -> None:
+        """Entrega o tradutor de id de item em caminho de ícone."""
+        self._resolve_item_icon = resolve
+
+    def set_spell_icon_resolver(self, resolve) -> None:
+        """Entrega o tradutor de id de feitiço de invocador em ícone."""
+        self._resolve_spell_icon = resolve
+
+    def set_keystone_icon_resolver(self, resolve) -> None:
+        """Entrega o tradutor de id de runa-chave em ícone."""
+        self._resolve_keystone_icon = resolve
+
+    def set_secondary_style_icon_resolver(self, resolve) -> None:
+        """Entrega o tradutor de id de árvore secundária em ícone."""
+        self._resolve_secondary_style_icon = resolve
+
     def set_history(self, profile, matches) -> None:
         """Mostra perfil e partidas, ou volta ao aviso de vazio.
 
@@ -208,19 +254,22 @@ class HistoryPage(QWidget):
             self._matches_box.addWidget(self._match_row(match, now))
 
     def _match_row(self, match, now) -> QFrame:
-        row = QFrame()
+        row = _ClickableFrame()
         row.setObjectName("optionCard")
+        row.setProperty("result", "win" if match.result == "WIN" else "lose")
+        row.setCursor(Qt.CursorShape.PointingHandCursor)
+        row.clicked.connect(lambda: self.match_selected.emit(match))
         box = QHBoxLayout(row)
         box.setContentsMargins(14, 10, 14, 10)
-        box.setSpacing(14)
+        box.setSpacing(12)
 
-        portrait = QLabel()
-        portrait.setFixedSize(MATCH_PORTRAIT)
-        portrait.setScaledContents(True)
-        path = self._resolve_icon(match.champion_id) if self._resolve_icon else None
-        icon = QIcon(path) if path else QIcon()
-        portrait.setPixmap(icon.pixmap(MATCH_PORTRAIT))
-        box.addWidget(portrait)
+        box.addWidget(self._portrait_with_level(match.champion_id, match.champion_level))
+
+        icons = QHBoxLayout()
+        icons.setSpacing(3)
+        icons.addLayout(self._spell_icons(match))
+        icons.addLayout(self._rune_icons(match))
+        box.addLayout(icons)
 
         naming = QVBoxLayout()
         naming.setSpacing(1)
@@ -234,6 +283,8 @@ class HistoryPage(QWidget):
         detail.setObjectName("heroDetail")
         naming.addWidget(detail)
         box.addLayout(naming)
+
+        box.addLayout(self._item_icons(match))
         box.addStretch(1)
 
         kda = QLabel(f"{match.kills}/{match.deaths}/{match.assists}")
@@ -244,6 +295,10 @@ class HistoryPage(QWidget):
         cs.setObjectName("heroDetail")
         box.addWidget(cs)
 
+        gold = QLabel(f"{match.gold} ouro")
+        gold.setObjectName("heroDetail")
+        box.addWidget(gold)
+
         duration = QLabel(_duration_text(match.duration_seconds))
         duration.setObjectName("heroDetail")
         box.addWidget(duration)
@@ -252,3 +307,78 @@ class HistoryPage(QWidget):
         when.setObjectName("hint")
         box.addWidget(when)
         return row
+
+    def _icon_label(self, object_name: str, size: QSize, resolve, key) -> QLabel:
+        label = QLabel()
+        label.setObjectName(object_name)
+        label.setFixedSize(size)
+        label.setScaledContents(True)
+        path = resolve(key) if resolve else None
+        icon = QIcon(path) if path else QIcon()
+        label.setPixmap(icon.pixmap(size))
+        return label
+
+    def _portrait_with_level(self, champion_id: int, level: int) -> QWidget:
+        """Retrato do campeão com o selo de nível sobreposto no canto.
+
+        As duas peças ocupam a mesma célula de grade — é o jeito mais
+        simples de empilhar sem posicionamento manual em pixel.
+        """
+        holder = QWidget()
+        holder.setFixedSize(MATCH_PORTRAIT)
+        grid = QGridLayout(holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.addWidget(
+            self._icon_label("", MATCH_PORTRAIT, self._resolve_icon, champion_id), 0, 0
+        )
+        badge = QLabel(str(level))
+        badge.setObjectName("levelBadge")
+        badge.setFixedSize(LEVEL_BADGE)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        grid.addWidget(
+            badge, 0, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+        )
+        return holder
+
+    def _rune_icons(self, match) -> QVBoxLayout:
+        """A runa-chave e a árvore secundária, uma sobre a outra."""
+        box = QVBoxLayout()
+        box.setSpacing(2)
+        box.addWidget(
+            self._icon_label(
+                "runeIcon", RUNE_ICON, self._resolve_keystone_icon, match.primary_rune_id
+            )
+        )
+        box.addWidget(
+            self._icon_label(
+                "runeIcon",
+                RUNE_ICON,
+                self._resolve_secondary_style_icon,
+                match.secondary_style_id,
+            )
+        )
+        return box
+
+    def _spell_icons(self, match) -> QVBoxLayout:
+        """Os dois feitiços de invocador, um sobre o outro."""
+        box = QVBoxLayout()
+        box.setSpacing(2)
+        for spell_id in match.spells:
+            box.addWidget(
+                self._icon_label(
+                    "spellIcon", SPELL_ICON, self._resolve_spell_icon, spell_id
+                )
+            )
+        return box
+
+    def _item_icons(self, match) -> QHBoxLayout:
+        """A grade de itens, do tamanho que a partida realmente comprou."""
+        box = QHBoxLayout()
+        box.setSpacing(2)
+        for item_id in match.items:
+            box.addWidget(
+                self._icon_label(
+                    "itemIcon", ITEM_ICON, self._resolve_item_icon, item_id
+                )
+            )
+        return box
