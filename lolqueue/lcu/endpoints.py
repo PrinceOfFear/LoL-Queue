@@ -74,3 +74,10 @@ GAME_QUEUES = "/lol-game-queues/v1/queues"
 #: acrescentar um só. Quem usa Porofessor ou Blitz tem dezenas guardadas
 #: aqui, então toda gravação parte de uma leitura.
 ITEM_SETS = "/lol-item-sets/v1/item-sets/{summoner_id}/sets"
+
+#: Catálogo de itens do patch atual — nome (não usado aqui) e
+#: `iconPath` de cada um. Serve para desenhar a grade de itens do
+#: histórico de partidas, que só vem com o id.
+ITEMS = "/lol-game-data/assets/v1/items.json"
+#: Idem, para os feitiços de invocador (Fulgor, Barreira, ...).
+SUMMONER_SPELLS = "/lol-game-data/assets/v1/summoner-spells.json"
