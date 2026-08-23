@@ -328,3 +328,62 @@ def test_nothing_is_said_when_the_chosen_queue_works(window, monkeypatch):
     window._on_phase_changed("None")
 
     assert said == []
+
+
+# --- histórico e placar ---------------------------------------------------
+
+
+def test_the_history_refreshes_itself_when_a_match_ends(window, monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(window, "_refresh_history", lambda: chamadas.append(True))
+
+    window._on_phase_changed("EndOfGame")
+
+    assert chamadas == [True]
+
+
+def test_other_phase_changes_do_not_refresh_the_history(window, monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(window, "_refresh_history", lambda: chamadas.append(True))
+
+    window._on_phase_changed("InProgress")
+
+    assert chamadas == []
+
+
+def test_a_finished_game_detail_loader_is_let_go(window):
+    loader = FakeLoader()
+    window._game_detail_loader = loader
+
+    window._retire_game_detail_loader(loader)
+
+    assert window._game_detail_loader is None
+    assert loader.descartado
+
+
+def test_a_late_game_detail_loader_does_not_discard_the_current_one(window):
+    velho, atual = FakeLoader(), FakeLoader()
+    window._game_detail_loader = atual
+
+    window._retire_game_detail_loader(velho)
+
+    assert window._game_detail_loader is atual
+    assert velho.descartado
+
+
+def test_open_game_detail_does_nothing_when_one_is_already_running(window):
+    loader = FakeLoader()
+    window._game_detail_loader = loader
+
+    window._open_game_detail(None)
+
+    assert window._game_detail_loader is loader
+
+
+def test_a_ready_game_detail_reaches_the_history_page(window, monkeypatch):
+    seen = []
+    monkeypatch.setattr(window._history, "set_game_detail", lambda detail: seen.append(detail))
+
+    window._on_game_detail_ready("placar-falso")
+
+    assert seen == ["placar-falso"]

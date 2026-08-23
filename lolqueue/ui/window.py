@@ -26,6 +26,7 @@ from ..core.queues import unavailable_queues
 from ..core.summoner_history import SummonerHistorySource
 from ..core.watcher import PhaseWatcher
 from .binding import ConfigBinder
+from .game_detail_loader import GameDetailLoader
 from .history_loader import HistoryLoader
 from .icon_loader import IconLoader
 from .matchup_loader import MatchupLoader
@@ -93,7 +94,13 @@ class MainWindow(QWidget):
         # sobrevivem a uma reconexão: são dados estáticos do cliente.
         self._assets = AssetStore()
         self._perks = None
+        # Os catálogos de item e feitiço, para a grade do histórico —
+        # mesmo motivo do `_perks`: dado estático do cliente, sobrevive
+        # a uma reconexão.
+        self._items = None
+        self._spells = None
         self._icon_loader: IconLoader | None = None
+        self._game_detail_loader: GameDetailLoader | None = None
         self._phase = GameflowPhase.NONE.value
         self._phase_started = time.monotonic()
         self._drag_offset = None
@@ -156,7 +163,12 @@ class MainWindow(QWidget):
         self._history = HistoryPage()
         self._history.set_icon_resolver(self._champion_icon)
         self._history.set_name_resolver(self._champion_name)
+        self._history.set_item_icon_resolver(self._item_icon)
+        self._history.set_spell_icon_resolver(self._spell_icon)
+        self._history.set_keystone_icon_resolver(self._match_keystone_icon)
+        self._history.set_secondary_style_icon_resolver(self._match_tree_icon)
         self._history.refresh_requested.connect(self._refresh_history)
+        self._history.match_selected.connect(self._open_game_detail)
         self._champions = ChampionsPage(self._binder)
         self._queue = QueuePage(self._binder)
 
@@ -283,6 +295,10 @@ class MainWindow(QWidget):
             # runa saem junto: a página só troca enquanto a seleção corre.
             self._on_predicted_pick_changed(None)
             self._dashboard.set_rune_options([], None, {})
+        if phase_value == GameflowPhase.END_OF_GAME.value:
+            # Pedido do usuário: o histórico não pode depender do
+            # clique em "Atualizar" para saber que uma partida acabou.
+            self._refresh_history()
         self._refresh_ring()
 
     def _show_blocked_queues(self, blocked: set[int]) -> None:
@@ -312,13 +328,17 @@ class MainWindow(QWidget):
         if self._icon_loader is not None:
             return
         faltam = self._icons.missing(ids)
-        if not faltam and self._perks is not None:
+        tudo_carregado = (
+            self._perks is not None and self._items is not None and self._spells is not None
+        )
+        if not faltam and tudo_carregado:
             return
         if faltam:
             self._log_message("Baixando os retratos dos campeões…")
         self._icon_loader = IconLoader(ids, self._icons, self._assets, self)
         self._icon_loader.done.connect(self._on_icons_ready)
         self._icon_loader.perks_ready.connect(self._on_perks_ready)
+        self._icon_loader.catalogs_ready.connect(self._on_catalogs_ready)
         self._icon_loader.start()
 
     def _on_icons_ready(self) -> None:
@@ -332,6 +352,11 @@ class MainWindow(QWidget):
         """Entrega a tradução de runa para a tela poder desenhar a grade."""
         self._perks = catalog
         self._dashboard.set_rune_catalog(catalog, self._rune_icon)
+
+    def _on_catalogs_ready(self, items, spells) -> None:
+        """Entrega os catálogos de item e feitiço para o histórico desenhar a grade."""
+        self._items = items
+        self._spells = spells
 
     def _champion_icon(self, champion_id: int) -> str | None:
         """Onde o retrato daquele campeão ficou no disco, se ficou.
@@ -349,6 +374,33 @@ class MainWindow(QWidget):
     def _rune_icon(self, url: str) -> str | None:
         """Onde a imagem daquela runa ficou no disco, se ficou."""
         return str(self._assets.path_for(url)) if self._assets.has(url) else None
+
+    def _item_icon(self, item_id: int) -> str | None:
+        """Onde o ícone daquele item ficou no disco, se ficou."""
+        if self._items is None:
+            return None
+        path = self._items.icon_path(item_id)
+        return self._rune_icon(path) if path else None
+
+    def _spell_icon(self, spell_id: int) -> str | None:
+        """Onde o ícone daquele feitiço ficou no disco, se ficou."""
+        if self._spells is None:
+            return None
+        path = self._spells.icon_path(spell_id)
+        return self._rune_icon(path) if path else None
+
+    def _match_keystone_icon(self, rune_id: int) -> str | None:
+        """Onde o ícone daquela runa-chave ficou no disco, se ficou."""
+        if self._perks is None:
+            return None
+        return self._rune_icon(self._perks.perk(rune_id).icon)
+
+    def _match_tree_icon(self, style_id: int) -> str | None:
+        """Onde o ícone daquela árvore secundária ficou no disco, se ficou."""
+        if self._perks is None:
+            return None
+        style = self._perks.style(style_id)
+        return self._rune_icon(style.icon) if style is not None else None
 
     def _on_predicted_pick_changed(self, champion_id: int | None) -> None:
         self._predicted_champion = champion_id
@@ -407,6 +459,28 @@ class MainWindow(QWidget):
 
     def _on_history_ready(self, profile, matches) -> None:
         self._history.set_history(profile, matches)
+
+    def _open_game_detail(self, match) -> None:
+        """Busca o placar completo de uma partida numa thread só dela.
+
+        Uma consulta por vez, como o histórico: clicar em duas partidas
+        rápido não deve empilhar duas buscas ao mesmo tempo.
+        """
+        if self._game_detail_loader is not None:
+            return
+        loader = GameDetailLoader(self._history_source, match, self)
+        loader.ready.connect(self._on_game_detail_ready)
+        loader.finished.connect(lambda: self._retire_game_detail_loader(loader))
+        self._game_detail_loader = loader
+        loader.start()
+
+    def _retire_game_detail_loader(self, loader) -> None:
+        if self._game_detail_loader is loader:
+            self._game_detail_loader = None
+        loader.deleteLater()
+
+    def _on_game_detail_ready(self, detail) -> None:
+        self._history.set_game_detail(detail)
 
     def _champion_name(self, champion_id: int) -> str | None:
         """O nome em português do campeão, se o catálogo já carregou.
@@ -530,4 +604,6 @@ class MainWindow(QWidget):
             self._matchup_loader.wait(3000)
         if self._history_loader is not None:
             self._history_loader.wait(3000)
+        if self._game_detail_loader is not None:
+            self._game_detail_loader.wait(3000)
         event.accept()
