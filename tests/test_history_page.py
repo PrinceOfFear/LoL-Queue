@@ -55,6 +55,14 @@ def match(**changes):
         queue_type="SOLORANKED",
         position="ADC",
         played_at=datetime(2026, 8, 23, 12, 0, 0, tzinfo=timezone.utc),
+        items=(1001, 1002),
+        item_names=("Botas", "Espada Longa"),
+        spells=(4, 12),
+        primary_style_id=8200,
+        primary_rune_id=8229,
+        secondary_style_id=8400,
+        champion_level=15,
+        gold=8902,
     )
     base.update(changes)
     return MatchSummary(**base)

@@ -30,8 +30,9 @@ PROFILE_FIELDS = (
 )
 MATCH_FIELDS = (
     "data.game_history[].{id,created_at,game_length_second,game_type}",
-    "data.game_history[].participants[].{champion_id,champion_name,position}",
-    "data.game_history[].participants[].stats.{kill,death,assist,minion_kill,neutral_minion_kill,result}",
+    "data.game_history[].participants[].{champion_id,champion_name,position,items,items_names,spells}",
+    "data.game_history[].participants[].rune.{primary_page_id,primary_rune_id,secondary_page_id}",
+    "data.game_history[].participants[].stats.{champion_level,kill,death,assist,minion_kill,neutral_minion_kill,gold_earned,result}",
 )
 
 DEFAULT_LANG = "pt_BR"
@@ -81,6 +82,14 @@ class MatchSummary:
     queue_type: str
     position: str
     played_at: datetime
+    items: tuple[int, ...]
+    item_names: tuple[str, ...]
+    spells: tuple[int, int]
+    primary_style_id: int
+    primary_rune_id: int
+    secondary_style_id: int
+    champion_level: int
+    gold: int
 
 
 def relative_time(played_at: datetime, now: datetime) -> str:
@@ -164,16 +173,42 @@ def _match_summaries(text: str, limit: int) -> tuple[MatchSummary, ...]:
         champion_id = mcp_format.to_int(fields.get("champion_id", ""))
         champion_name = fields.get("champion_name", "").strip().strip('"')
         position = fields.get("position", "").strip().strip('"')
+        items = mcp_format.to_ints(fields.get("items", "[]"))
+        spells = mcp_format.to_ints(fields.get("spells", "[]"))
+        rune = mcp_format.unpack(fields.get("rune"), schema)
         stats = mcp_format.unpack(fields.get("stats"), schema)
-        if champion_id is None or not champion_name or stats is None:
+        if (
+            champion_id is None
+            or not champion_name
+            or items is None
+            or spells is None
+            or len(spells) != 2
+            or rune is None
+            or stats is None
+        ):
             continue
+        primary_style_id = mcp_format.to_int(rune.get("primary_page_id", ""))
+        primary_rune_id = mcp_format.to_int(rune.get("primary_rune_id", ""))
+        secondary_style_id = mcp_format.to_int(rune.get("secondary_page_id", ""))
+        champion_level = mcp_format.to_int(stats.get("champion_level", ""))
         kills = mcp_format.to_int(stats.get("kill", ""))
         deaths = mcp_format.to_int(stats.get("death", ""))
         assists = mcp_format.to_int(stats.get("assist", ""))
         minions = mcp_format.to_int(stats.get("minion_kill", "")) or 0
         neutral = mcp_format.to_int(stats.get("neutral_minion_kill", "")) or 0
+        gold = mcp_format.to_int(stats.get("gold_earned", ""))
         result = stats.get("result", "").strip().strip('"')
-        if kills is None or deaths is None or assists is None or not result:
+        if (
+            primary_style_id is None
+            or primary_rune_id is None
+            or secondary_style_id is None
+            or champion_level is None
+            or kills is None
+            or deaths is None
+            or assists is None
+            or gold is None
+            or not result
+        ):
             continue
         try:
             played_at = datetime.fromisoformat(created_at)
@@ -193,6 +228,14 @@ def _match_summaries(text: str, limit: int) -> tuple[MatchSummary, ...]:
                 queue_type=queue_type,
                 position=position,
                 played_at=played_at,
+                items=tuple(items),
+                item_names=tuple(mcp_format.to_strings(fields.get("items_names", ""))),
+                spells=(spells[0], spells[1]),
+                primary_style_id=primary_style_id,
+                primary_rune_id=primary_rune_id,
+                secondary_style_id=secondary_style_id,
+                champion_level=champion_level,
+                gold=gold,
             )
         )
         if len(found) >= limit:
