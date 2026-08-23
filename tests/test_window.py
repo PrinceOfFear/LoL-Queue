@@ -18,6 +18,13 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lolqueue import config as config_module  # noqa: E402
 from lolqueue.config import Config  # noqa: E402
+from lolqueue.ui.pages.analysis import AnalysisPage  # noqa: E402
+from lolqueue.ui.pages.champions import ChampionsPage  # noqa: E402
+from lolqueue.ui.pages.dashboard import DashboardPage  # noqa: E402
+from lolqueue.ui.pages.history import HistoryPage  # noqa: E402
+from lolqueue.ui.pages.queue import QueuePage  # noqa: E402
+from lolqueue.ui.pages.settings import SettingsPage  # noqa: E402
+from lolqueue.ui.widgets.sidebar import SECTIONS  # noqa: E402
 from lolqueue.ui.window import MainWindow  # noqa: E402
 
 
@@ -91,11 +98,11 @@ def test_turning_the_ban_automation_off_shows_up_on_the_list(window):
     assert "desligado" in window._champions.ban_picker.notice()
 
 
-def test_emptying_the_ban_list_warns_that_nothing_is_banned(window):
+def test_emptying_the_ban_list_explains_that_the_turn_is_passed(window):
     window._champions.ban_picker.set_ids([])
     window._champions.ban_picker._emit()
 
-    assert "banido" in window._champions.ban_picker.notice()
+    assert "passa sozinha" in window._champions.ban_picker.notice()
 
 
 def test_an_empty_general_list_warns_which_lanes_pick_nothing(window):
@@ -122,6 +129,167 @@ def test_every_message_is_also_written_to_the_file(window, tmp_path):
 
 def test_the_log_folder_sits_next_to_the_config(window, tmp_path):
     assert window._journal.directory == tmp_path / "registro"
+
+
+# --- opções de runa ------------------------------------------------------
+#
+# Quem descobre as builds é o equipamento, na thread do watcher; quem
+# mostra é o painel. O clique volta pelo mesmo caminho, mas só deixa um
+# bilhete: falar com o cliente do LoL a partir da thread da GUI é o que
+# não pode acontecer.
+
+
+class FakeLoadout:
+    def __init__(self):
+        self.pedidos = []
+
+    def request_rune_option(self, tier):
+        self.pedidos.append(tier)
+
+
+def test_the_chosen_tier_reaches_the_loadout(window):
+    loadout = FakeLoadout()
+    window._loadout = loadout
+
+    window._dashboard.rune_option_chosen.emit("master")
+
+    assert loadout.pedidos == ["master"]
+
+
+# --- navegação -----------------------------------------------------------
+
+
+def test_every_sidebar_button_opens_the_page_that_matches_it(window):
+    """Botão e página são montados longe um do outro, ligados só pelo índice.
+
+    A lateral monta a partir de `SECTIONS`; a pilha monta numa tupla
+    própria dentro da janela. Inserir uma seção num lugar e esquecer o
+    outro não quebra nada visivelmente — só passa a abrir a página
+    errada, e é o tipo de defeito que ninguém nota lendo o código.
+    """
+    # Casado pelo nome, de propósito: comparar com uma lista na ordem
+    # que eu escrevi aqui só repetiria a ordem da pilha, e passaria
+    # feliz mesmo com as duas trocadas juntas.
+    esperado = {
+        "Painel": DashboardPage,
+        "Análise": AnalysisPage,
+        "Histórico": HistoryPage,
+        "Campeões": ChampionsPage,
+        "Fila": QueuePage,
+        "Ajustes": SettingsPage,
+    }
+    assert {name for name, _ in SECTIONS} == set(esperado)
+
+    for index, (name, _icon) in enumerate(SECTIONS):
+        window._sidebar.navigated.emit(index)
+        # Cada página vive dentro de um QScrollArea; quem interessa é o
+        # que está dentro dele.
+        aberta = window._pages.currentWidget().widget()
+        assert isinstance(aberta, esperado[name]), f"{name} abriu {type(aberta).__name__}"
+
+
+def test_the_stack_has_exactly_one_page_per_section(window):
+    assert window._pages.count() == len(SECTIONS)
+
+
+# --- confronto -----------------------------------------------------------
+
+
+class FakeLoader:
+    def __init__(self):
+        self.descartado = False
+
+    def deleteLater(self):  # noqa: N802 (imita a API do Qt)
+        self.descartado = True
+
+
+def test_a_finished_loader_is_let_go(window):
+    """Terminada a consulta, a thread não fica pendurada na janela.
+
+    Ela nasce filha da janela para o Python não coletá-la no meio da
+    busca; sem soltá-la depois, cada troca de adversário deixaria uma
+    thread morta acumulada pelo resto da sessão.
+    """
+    loader = FakeLoader()
+    window._matchup_loader = loader
+
+    window._retire_matchup_loader(loader)
+
+    assert window._matchup_loader is None
+    assert loader.descartado
+
+
+def test_a_late_loader_does_not_discard_the_current_one(window):
+    """Uma consulta abandonada termina depois da que a substituiu.
+
+    Se ela limpasse a referência ao terminar, `closeEvent` deixaria de
+    esperar pela busca que ainda está rodando.
+    """
+    velho, atual = FakeLoader(), FakeLoader()
+    window._matchup_loader = atual
+
+    window._retire_matchup_loader(velho)
+
+    assert window._matchup_loader is atual
+    assert velho.descartado
+
+
+def test_a_matchup_asked_before_a_champion_is_locked_goes_nowhere(window):
+    """Sem saber quem somos, não há confronto que se possa pedir."""
+    window._analysis_alias = ""
+
+    window._analysis.matchup_requested.emit("Zed", "middle")
+
+    assert window._matchup_loader is None
+
+
+def test_a_click_without_a_client_connected_does_nothing(window):
+    window._loadout = None
+
+    window._dashboard.rune_option_chosen.emit("master")  # não levanta
+
+
+def test_a_reconnect_does_not_lose_the_loadout_to_a_late_disconnect(window):
+    """Quem escreve o equipamento é a thread do watcher; a da GUI só lê.
+
+    O “desconectou” chega à GUI por sinal, ou seja, com atraso. Se a
+    reconexão acontecer antes de a GUI processar esse sinal — cliente do
+    LoL que cai e volta enquanto a janela está ocupada pintando —, apagar
+    a referência aqui apagaria a do equipamento novo, e os botões de runa
+    ficariam mortos até o app ser reaberto.
+    """
+    novo = FakeLoadout()
+    window._loadout = novo
+
+    window._on_connection_changed(False)
+    window._dashboard.rune_option_chosen.emit("master")
+
+    assert novo.pedidos == ["master"]
+
+
+def test_the_options_leave_the_screen_when_the_selection_ends(window):
+    window._dashboard.set_rune_options(["master", "challenger"], "master")
+
+    window._on_phase_changed("InProgress")
+
+    assert window._dashboard._runes.isHidden()
+
+
+def test_only_the_tiers_that_answered_become_buttons(window):
+    window._dashboard.set_rune_options(["diamond_plus", "challenger"], "diamond_plus")
+
+    options = window._dashboard._rune_options
+    rotulos = [options.itemAt(i).widget().text() for i in range(options.count())]
+    assert rotulos == ["Diamante+", "Desafiante"]
+
+
+def test_the_tier_already_applied_is_not_clickable(window):
+    """Pedir de novo o que já está no cliente só renderia uma linha."""
+    window._dashboard.set_rune_options(["diamond_plus", "challenger"], "diamond_plus")
+
+    options = window._dashboard._rune_options
+    assert options.itemAt(0).widget().isEnabled() is False
+    assert options.itemAt(1).widget().isEnabled() is True
 
 
 # --- filas que a Riot desligou -------------------------------------------
