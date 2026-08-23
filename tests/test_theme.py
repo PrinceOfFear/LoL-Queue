@@ -26,3 +26,16 @@ def test_labels_are_in_portuguese_not_api_names():
 def test_stylesheet_uses_the_palette():
     assert Palette.BACKGROUND in STYLESHEET
     assert Palette.ACCENT in STYLESHEET
+
+
+def test_history_row_has_win_lose_and_target_states():
+    assert '#optionCard[result="win"]' in STYLESHEET
+    assert '#optionCard[result="lose"]' in STYLESHEET
+    assert '#optionCard[target="true"]' in STYLESHEET
+
+
+def test_scoreboard_has_badge_and_icon_selectors():
+    assert "#levelBadge" in STYLESHEET
+    assert "#itemIcon" in STYLESHEET
+    assert "#runeIcon" in STYLESHEET
+    assert "#spellIcon" in STYLESHEET
