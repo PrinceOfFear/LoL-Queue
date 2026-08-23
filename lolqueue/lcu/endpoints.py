@@ -25,6 +25,10 @@ BANNABLE_CHAMPIONS = "/lol-champ-select/v1/bannable-champion-ids"
 CHAMPION_SUMMARY = "/lol-game-data/assets/v1/champion-summary.json"
 CHAMPION_ICON = "/lol-game-data/assets/v1/champion-icons/{champion_id}.png"
 CURRENT_SUMMONER = "/lol-summoner/v1/current-summoner"
+#: Rota do Riot Client (não do LCU), servida pela mesma conexão. O
+#: campo `region` vem em maiúsculas ("BR", "KR", "EUNE") — exatamente
+#: o formato que o MCP do OP.GG pede para identificar o servidor.
+RIOT_REGION_LOCALE = "/riotclient/region-locale"
 #: Sessão do gameflow. Usada só para descobrir o mapa: a recomendação de
 #: runas muda entre a Fenda (11) e o Abismo (12), e a sessão da seleção
 #: de campeões não diz em qual dos dois se está.
@@ -41,6 +45,15 @@ PERK_INVENTORY = "/lol-perks/v1/inventory"
 #: Ativa uma página. O corpo é o id cru, um inteiro solto — não um
 #: objeto com o id dentro.
 PERK_CURRENT_PAGE = "/lol-perks/v1/currentpage"
+#: As cinco árvores de runa, com os slots de cada uma na ordem em que o
+#: jogo as desenha: a chave (`kKeyStone`), três fileiras comuns
+#: (`kMixedRegularSplashable`) e três de fragmento (`kStatMod`). É o que
+#: permite mostrar a página no formato da tela do jogo em vez de uma
+#: lista solta de ids.
+PERK_STYLES = "/lol-perks/v1/styles"
+#: Cada runa individual: nome, descrição curta e `iconPath`. Os ícones
+#: saem de `/lol-game-data/assets/...`, servidos pelo próprio cliente.
+PERKS = "/lol-perks/v1/perks"
 #: Recomendação da Riot para um campeão numa rota. Devolve três opções;
 #: a primeira é a padrão. Traz as runas e também `summonerSpellIds`, o
 #: que resolve feitiços e runas numa chamada só. `position` aceita
