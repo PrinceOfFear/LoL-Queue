@@ -195,7 +195,22 @@ STYLESHEET = f"""
    placar completo, onde as dez linhas se parecem. */
 #optionCard[result="win"] {{ border-left: 3px solid {Palette.ACTIVE}; }}
 #optionCard[result="lose"] {{ border-left: 3px solid {Palette.DANGER}; }}
-#optionCard[target="true"] {{ background: rgba(200, 170, 110, 26); }}
+/* Placar completo: cada linha herda a cor do próprio time, do mesmo
+   jeito que o cliente do jogo separa os dois lados de relance. */
+#optionCard[team="blue"] {{ border-left: 3px solid {Palette.SKY}; }}
+#optionCard[team="red"] {{ border-left: 3px solid {Palette.DANGER}; }}
+#optionCard[target="true"] {{ background: rgba(200, 170, 110, 46); }}
+/* Selo "VOCÊ" ao lado do nome, na própria linha do jogador conectado. */
+#youBadge {{
+    background: rgba(200, 170, 110, 46);
+    border: 1px solid rgba(200, 170, 110, 150);
+    border-radius: 8px;
+    color: #EEDCAA;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    padding: 3px 8px;
+}}
 /* Selo de nível sobre o retrato do campeão. */
 #levelBadge {{
     background: rgba(6, 18, 35, 235);

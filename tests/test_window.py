@@ -387,3 +387,53 @@ def test_a_ready_game_detail_reaches_the_history_page(window, monkeypatch):
     window._on_game_detail_ready("placar-falso")
 
     assert seen == ["placar-falso"]
+
+
+class FakeThread:
+    """Substitui `HistoryLoader`/`GameDetailLoader` sem abrir thread de verdade.
+
+    Só precisa parecer um `QThread` o bastante para `_refresh_history`
+    e `_open_game_detail` ligarem os sinais e chamarem `start()` sem
+    quebrar — o que interessa ao teste é o que acontece *antes* disso.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.ready = _FakeSignal()
+        self.finished = _FakeSignal()
+
+    def start(self):
+        pass
+
+
+class _FakeSignal:
+    def connect(self, callback):
+        pass
+
+
+def test_refresh_history_shows_a_loading_state_before_asking_for_data(
+    window, monkeypatch
+):
+    """Sem isto, uma consulta lenta e uma travada pareciam a mesma coisa."""
+    import lolqueue.ui.window as window_module
+
+    monkeypatch.setattr(window_module, "HistoryLoader", FakeThread)
+    marcado = []
+    monkeypatch.setattr(window._history, "set_loading", marcado.append)
+
+    window._refresh_history()
+
+    assert marcado == [True]
+
+
+def test_open_game_detail_shows_a_loading_state_before_asking_for_data(
+    window, monkeypatch
+):
+    import lolqueue.ui.window as window_module
+
+    monkeypatch.setattr(window_module, "GameDetailLoader", FakeThread)
+    marcado = []
+    monkeypatch.setattr(window._history, "set_loading", marcado.append)
+
+    window._open_game_detail("partida-falsa")
+
+    assert marcado == [True]

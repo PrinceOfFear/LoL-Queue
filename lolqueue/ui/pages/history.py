@@ -32,9 +32,9 @@ from ...core.summoner_history import relative_time
 
 MATCH_PORTRAIT = QSize(40, 40)
 LEVEL_BADGE = QSize(16, 16)
-RUNE_ICON = QSize(16, 16)
-SPELL_ICON = QSize(16, 16)
-ITEM_ICON = QSize(20, 20)
+RUNE_ICON = QSize(20, 20)
+SPELL_ICON = QSize(20, 20)
+ITEM_ICON = QSize(24, 24)
 
 #: Como o OP.GG chama a fila, e como se diz aqui.
 QUEUE_LABELS = {
@@ -205,12 +205,28 @@ class HistoryPage(QWidget):
         """Entrega o tradutor de id de árvore secundária em ícone."""
         self._resolve_secondary_style_icon = resolve
 
+    def set_loading(self, loading: bool) -> None:
+        """Avisa que uma consulta ao OP.GG está em andamento.
+
+        Sem isto, uma resposta demorada (rede lenta, cliente do LoL
+        ocupado) e uma travada pareciam a mesma coisa — a tela ficava
+        exatamente igual até a consulta terminar. O botão muda de
+        rótulo e a lista para de aceitar clique novo enquanto isso.
+        """
+        self._refresh_button.setEnabled(not loading)
+        self._refresh_button.setText("Atualizando…" if loading else "Atualizar")
+        self._list_view.setEnabled(not loading)
+        self.setCursor(
+            Qt.CursorShape.WaitCursor if loading else Qt.CursorShape.ArrowCursor
+        )
+
     def set_history(self, profile, matches) -> None:
         """Mostra perfil e partidas, ou volta ao aviso de vazio.
 
         `profile` vindo `None` é "sem identidade resolvida ou o OP.GG
         não respondeu" — a página toda some, como na análise.
         """
+        self.set_loading(False)
         if profile is None:
             self._content.hide()
             self._empty.show()
@@ -443,6 +459,7 @@ class HistoryPage(QWidget):
         `detail` vindo `None` é "a busca do placar falhou" — a página
         fica (ou volta) na lista, em vez de mostrar uma tela quebrada.
         """
+        self.set_loading(False)
         if detail is None:
             self._show_list()
             return
@@ -513,8 +530,12 @@ class HistoryPage(QWidget):
         row = QFrame()
         row.setObjectName("optionCard")
         row.setProperty("target", "true" if participant.is_target else "false")
+        # Time do jogador, para a mesma leitura de relance por cor que o
+        # cliente do jogo usa — sem isto, as dez linhas do placar
+        # completo se pareciam demais para diferenciar de relance.
+        row.setProperty("team", participant.team_key.lower())
         box = QHBoxLayout(row)
-        box.setContentsMargins(10, 8, 10, 8)
+        box.setContentsMargins(12, 10, 12, 10)
         box.setSpacing(10)
 
         box.addWidget(
@@ -539,6 +560,14 @@ class HistoryPage(QWidget):
         summoner.setObjectName("heroDetail")
         naming.addWidget(summoner)
         box.addLayout(naming)
+
+        if participant.is_target:
+            # O fundo sutil sozinho (`target="true"` no QSS) some no meio
+            # de dez linhas parecidas — o selo deixa "essa aqui sou eu"
+            # óbvio sem precisar ler nick#tag.
+            you = QLabel("VOCÊ")
+            you.setObjectName("youBadge")
+            box.addWidget(you, 0, Qt.AlignmentFlag.AlignVCenter)
 
         box.addLayout(self._item_icons(participant))
         box.addStretch(1)

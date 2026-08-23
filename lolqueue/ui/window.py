@@ -446,6 +446,7 @@ class MainWindow(QWidget):
         """
         if self._history_loader is not None:
             return
+        self._history.set_loading(True)
         loader = HistoryLoader(self._history_source, self)
         loader.ready.connect(self._on_history_ready)
         loader.finished.connect(lambda: self._retire_history_loader(loader))
@@ -468,6 +469,7 @@ class MainWindow(QWidget):
         """
         if self._game_detail_loader is not None:
             return
+        self._history.set_loading(True)
         loader = GameDetailLoader(self._history_source, match, self)
         loader.ready.connect(self._on_game_detail_ready)
         loader.finished.connect(lambda: self._retire_game_detail_loader(loader))

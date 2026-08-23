@@ -295,6 +295,67 @@ def test_the_back_button_returns_to_the_list(page):
     assert page._scoreboard_view.isHidden()
 
 
+def test_the_scoreboard_colors_each_row_by_team(page):
+    page.set_history(profile(), (match(),))
+
+    page.set_game_detail(detail())
+
+    blue_block = page._teams_box.itemAt(0).widget()
+    red_block = page._teams_box.itemAt(1).widget()
+    blue_rows = blue_block.findChildren(QtWidgets.QFrame, "optionCard")
+    red_rows = red_block.findChildren(QtWidgets.QFrame, "optionCard")
+    assert len(blue_rows) == 5 and len(red_rows) == 5
+    assert all(row.property("team") == "blue" for row in blue_rows)
+    assert all(row.property("team") == "red" for row in red_rows)
+
+
+def test_the_target_row_wears_a_you_badge(page):
+    page.set_history(profile(), (match(),))
+
+    page.set_game_detail(detail())
+
+    badges = page._scoreboard_view.findChildren(QtWidgets.QLabel, "youBadge")
+    assert len(badges) == 1
+
+
+def test_set_loading_relabels_and_disables_the_refresh_button(page):
+    page.set_loading(True)
+
+    assert page._refresh_button.isEnabled() is False
+    assert "Atualizando" in page._refresh_button.text()
+
+    page.set_loading(False)
+
+    assert page._refresh_button.isEnabled() is True
+    assert page._refresh_button.text() == "Atualizar"
+
+
+def test_set_history_clears_a_loading_state_left_over(page):
+    page.set_loading(True)
+
+    page.set_history(profile(), ())
+
+    assert page._refresh_button.isEnabled() is True
+
+
+def test_set_game_detail_clears_a_loading_state_left_over(page):
+    page.set_history(profile(), (match(),))
+    page.set_loading(True)
+
+    page.set_game_detail(detail())
+
+    assert page._refresh_button.isEnabled() is True
+
+
+def test_a_missing_game_detail_also_clears_the_loading_state(page):
+    page.set_history(profile(), (match(),))
+    page.set_loading(True)
+
+    page.set_game_detail(None)
+
+    assert page._refresh_button.isEnabled() is True
+
+
 def test_the_refresh_button_asks_for_a_new_query(page):
     seen = []
     page.refresh_requested.connect(lambda: seen.append(True))
