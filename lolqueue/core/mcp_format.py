@@ -176,6 +176,20 @@ def to_float(value: str) -> float | None:
         return None
 
 
+def to_bool(value: str) -> bool | None:
+    """Lê o `true`/`false` cru que o servidor manda para booleano.
+
+    Sem aspas e sem `True`/`False` do Python — o valor chega
+    exatamente como veio no campo `is_win`/`is_target` da resposta.
+    """
+    text = value.strip()
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    return None
+
+
 def send_tool(endpoint: str, tool: str, arguments: dict) -> str:
     """Chama uma ferramenta MCP e devolve o texto da resposta.
 
