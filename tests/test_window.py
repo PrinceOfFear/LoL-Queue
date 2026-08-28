@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lolqueue import config as config_module  # noqa: E402
-from lolqueue.config import Config  # noqa: E402
+from lolqueue.config import JUNGLE_VOICES, Config  # noqa: E402
 from lolqueue.ui.pages.analysis import AnalysisPage  # noqa: E402
 from lolqueue.ui.pages.champions import ChampionsPage  # noqa: E402
 from lolqueue.ui.pages.dashboard import DashboardPage  # noqa: E402
@@ -142,9 +142,13 @@ def test_the_log_folder_sits_next_to_the_config(window, tmp_path):
 class FakeLoadout:
     def __init__(self):
         self.pedidos = []
+        self.confrontos = []
 
     def request_rune_option(self, tier):
         self.pedidos.append(tier)
+
+    def request_matchup(self, opponent, matchup):
+        self.confrontos.append((opponent, matchup))
 
 
 def test_the_chosen_tier_reaches_the_loadout(window):
@@ -247,6 +251,33 @@ def test_a_click_without_a_client_connected_does_nothing(window):
     window._loadout = None
 
     window._dashboard.rune_option_chosen.emit("master")  # não levanta
+
+
+def test_the_guide_of_the_matchup_reaches_the_loadout(window):
+    """A tela busca o guia numa thread; quem o instala é o equipamento."""
+    loadout = FakeLoadout()
+    window._loadout = loadout
+    guia = object()
+
+    window._install_matchup("Ezreal", guia)
+
+    assert loadout.confrontos == [("Ezreal", guia)]
+
+
+def test_a_matchup_that_answered_nothing_installs_nothing(window):
+    """O OP.GG às vezes não tem o confronto: nada a instalar."""
+    loadout = FakeLoadout()
+    window._loadout = loadout
+
+    window._install_matchup("Ezreal", None)
+
+    assert loadout.confrontos == []
+
+
+def test_a_guide_without_a_client_connected_does_nothing(window):
+    window._loadout = None
+
+    window._install_matchup("Ezreal", object())  # não levanta
 
 
 def test_a_reconnect_does_not_lose_the_loadout_to_a_late_disconnect(window):
@@ -437,3 +468,46 @@ def test_open_game_detail_shows_a_loading_state_before_asking_for_data(
     window._open_game_detail("partida-falsa")
 
     assert marcado == [True]
+
+
+# --- aviso do jungler inimigo --------------------------------------------
+
+
+def settings_page(window):
+    """A página de Ajustes como a janela a monta, não uma cópia solta."""
+    for index in range(window._pages.count()):
+        pagina = window._pages.widget(index).widget()
+        if isinstance(pagina, SettingsPage):
+            return pagina
+    raise AssertionError("a página de Ajustes sumiu da pilha")
+
+
+def test_the_jungle_callout_has_a_switch_on_the_settings_page(window):
+    assert len(boxes(window, "jungle_callouts")) == 1
+    assert boxes(window, "jungle_callouts")[0].isChecked() is True
+
+
+def test_turning_the_jungle_callout_off_is_saved(window, tmp_path):
+    boxes(window, "jungle_callouts")[0].setChecked(False)
+
+    assert Config.load(tmp_path / "config.json").jungle_callouts is False
+
+
+def test_the_voice_selector_offers_every_voice(window):
+    seletor = settings_page(window)._voice
+
+    escolhas = [seletor.itemData(i) for i in range(seletor.count())]
+
+    assert escolhas == list(JUNGLE_VOICES)
+    assert seletor.currentData() == window._config.jungle_voice
+
+
+def test_choosing_another_voice_is_saved(window, tmp_path):
+    seletor = settings_page(window)._voice
+
+    seletor.setCurrentIndex(seletor.findData("pt-BR-FranciscaNeural"))
+
+    assert window._config.jungle_voice == "pt-BR-FranciscaNeural"
+    assert Config.load(tmp_path / "config.json").jungle_voice == (
+        "pt-BR-FranciscaNeural"
+    )

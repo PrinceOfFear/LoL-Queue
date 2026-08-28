@@ -16,10 +16,12 @@ levantar exceção nenhuma para fora.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Callable
 
 from . import mcp_format
+from .buildblocks import MAX_ALTERNATIVES, Block, slot
 
 ENDPOINT = "https://mcp-api.op.gg/mcp"
 TOOL = "lol_get_champion_analysis"
@@ -80,26 +82,33 @@ ITEM_BLOCKS = (
 #: situacional, e tem que ficar no lugar dele na ordem da loja.
 CORE_FIELDS = frozenset({"starter_items", "boots", "core_items"})
 
-#: O rótulo do bloco que junta os slots do quarto item em diante. Eles
-#: chegam separados do OP.GG e vão juntos para a loja, na ordem de
-#: compra: ver `_pages`.
-SITUATIONAL_LABEL = "Situacionais"
+#: Quem julga cada degrau é `core/ranking.py`, através de
+#: `buildblocks.slot`: limite
+#: inferior de Wilson, piso de amostra e piso de frequência de escolha.
+#: Havia aqui um `MIN_SAMPLE = 30` e a comparação era por taxa crua, o
+#: que resolvia metade do problema — barrava o item de três partidas,
+#: mas não o item que só se compra com a partida já ganha. Mejai's
+#: Soulstealer a 83,2% em 107 partidas passava folgado.
 
-#: Os dois critérios que os dados sustentam, e que dão nome às páginas.
-#: O OP.GG mede cada slot por uso e por vitória, então estas duas
-#: leituras existem de verdade; uma terceira aba seria numeração sem
-#: dizer o que muda entre uma e outra.
-MOST_PLAYED_LABEL = "Mais jogada"
-BEST_RATE_LABEL = "Maior taxa"
+#: Quantas alternativas cada degrau mostra, quando o degrau não é um
+#: dos três primeiros. O padrão é `MAX_ALTERNATIVES`, de
+#: `core/buildblocks.py`.
+#:
+#: O núcleo é a exceção, e por um motivo de leitura: `core_items` não é
+#: um item, é a trinca inteira. Três alternativas ali seriam nove
+#: lendários empilhados num bloco só, e a ordem de compra — que é a
+#: única coisa que aquele bloco comunica — deixaria de existir.
+#: Iniciais e botas são compra única e cabem duas lado a lado.
+ALTERNATIVES = {
+    "starter_items": 2,
+    "boots": 2,
+    "core_items": 1,
+}
 
-#: Amostra mínima para um item disputar a página da maior taxa. Sem
-#: piso, um slot de três partidas elege o que venceu a única que jogou
-#: — foi assim que "Banshee's Veil — 100% de vitórias" virou
-#: recomendação principal. Quando nenhum item do slot alcança o piso,
-#: o slot repete o mais jogado; se isso acontecer em todos, as duas
-#: páginas coincidem e o arsenal sai com uma aba só, que é a resposta
-#: honesta para dado insuficiente.
-MIN_SAMPLE = 30
+#: Os degraus que não disputam espaço com nenhum outro: consumível se
+#: compra de novo a cada volta, e botas não ocupam a vaga de lendário.
+#: Ficam fora do controle de itens repetidos.
+FRESH_FIELDS = frozenset({"starter_items", "boots"})
 
 #: Os dois modos com dados: fila ranqueada e Abismo. Normal e URF
 #: existem no servidor mas voltam vazios.
@@ -119,28 +128,32 @@ POSITIONS = {
     "utility": "SUPPORT",
 }
 
+#: O guia de confronto não aceita o campeão como o cliente o escreve.
+#: Com apóstrofo ou espaço — `Kai'Sa`, `Lee Sin` — o servidor responde
+#: "Invalid position or champion specified", e como toda falha daqui
+#: vira ``None``, o guia sumia da tela sem deixar rastro. Foram os
+#: campeões de nome composto que ficaram permanentemente sem confronto.
+#:
+#: O que ele aceita é o nome em minúsculas, sem pontuação, com o que
+#: separa palavras virando `_`. Conferido contra o servidor real:
+#: `kaisa`, `kogmaw`, `reksai`, `lee_sin`, `miss_fortune`, `dr_mundo`,
+#: `nunu_willump`, `xin_zhao`, `jarvan_iv`, `renata_glasc`, `leblanc`
+#: e `wukong` — este último sendo o nome que o cliente usa para MonkeyKing.
+_SLUG_DROP = str.maketrans("", "", "'’.")
+_SLUG_SPLIT = re.compile(r"[&\-\s]+")
+
+
+def champion_slug(name: str) -> str:
+    """O nome do campeão como o OP.GG quer recebê-lo no pedido."""
+    limpo = (name or "").translate(_SLUG_DROP).strip().lower()
+    return _SLUG_SPLIT.sub("_", limpo).strip("_")
+
 #: Quantas runas o cliente espera: quatro da árvore principal, duas da
 #: secundária, três fragmentos.
 PERK_COUNT = 9
 
 #: A chamada que embrulha a resposta inteira.
 ROOT = "LolGetChampionAnalysis"
-
-
-@dataclass(frozen=True)
-class Block:
-    """Um bloco do arsenal: o rótulo na loja e o que comprar nele.
-
-    `games` é o tamanho da amostra que mediu este bloco, e existe para
-    ordenar alternativas. Sem ele a ordem sairia por taxa de vitória
-    pura, e um item de três partidas com 100% passaria na frente do que
-    todo mundo compra — conselho fabricado a partir de ruído.
-    """
-
-    label: str
-    items: tuple[int, ...]
-    win_rate: float
-    games: int = 0
 
 
 @dataclass(frozen=True)
@@ -203,13 +216,37 @@ class Stats:
 
 
 @dataclass(frozen=True)
+class RunePage:
+    """Uma página de runa inteira, com o critério que a elegeu.
+
+    É o mesmo trio que o `loadout` instala no cliente — árvore
+    primária, secundária e as nove runas na ordem que o LCU espera —
+    mais a amostra que a sustenta, para que a escolha entre duas
+    páginas seja informada e não estética.
+
+    `label` é o critério ("Mais jogada", "Maior taxa"), e fica vazio
+    quando só há uma página: aí não existe escolha a sinalizar.
+    """
+
+    label: str
+    style: int
+    sub_style: int
+    perks: tuple[int, ...]
+    win_rate: float = 0.0
+    games: int = 0
+    pick_rate: float = 0.0
+
+
+@dataclass(frozen=True)
 class Build:
     """O que o cliente precisa para montar página, feitiços e arsenal.
 
-    `pages` é uma página de arsenal por critério de leitura: a build
-    mais jogada e a de maior taxa de vitória. Cada slot situacional é
-    resolvido pelo ranking que o OP.GG já mede — nunca por uma
-    combinação que ele não tenha medido.
+    `pages` é o arsenal da loja: uma página só, sem etiqueta, com um
+    bloco por degrau da compra (iniciais, botas, principais, cada slot
+    situacional) e até três alternativas medidas dentro de cada um, na
+    ordem em que o ranking do OP.GG as sustenta. Nunca uma combinação
+    que ele não tenha medido — e nunca um item só por degrau, que era
+    justamente o que escondia a variação do jogador.
 
     Do `skill_order` para baixo é tudo material de leitura: nada disso
     o cliente sabe aplicar sozinho. A ordem de habilidade, em especial,
@@ -217,6 +254,13 @@ class Build:
     isso esses campos são opcionais e falham para vazio, enquanto runas
     e feitiços continuam sendo tudo-ou-nada: perder a grade de counters
     não estraga uma partida, entrar com meia página de runas estraga.
+
+    `rune_pages` são páginas de runa alternativas, cada uma com o
+    critério que a elegeu no nome. Fica vazio nesta fonte — o
+    `champion_analysis` devolve uma página só, e é justamente essa
+    pobreza que o guia de confronto (`core/matchup.py`) resolve. O
+    campo mora aqui, e não lá, porque quem consome é o `loadout`, e
+    ele não deve precisar saber de qual das duas fontes a build veio.
     """
 
     style: int
@@ -224,6 +268,7 @@ class Build:
     perks: tuple[int, ...]
     spells: tuple[int, int]
     pages: tuple[Page, ...] = ()
+    rune_pages: tuple[RunePage, ...] = ()
     skill_order: tuple[str, ...] = ()
     skill_max: tuple[str, ...] = ()
     strong_against: tuple[Counter, ...] = ()
@@ -361,132 +406,60 @@ def _field_options(
                 items=tuple(ids),
                 win_rate=win / play if play else 0.0,
                 games=play,
+                pick_rate=mcp_format.to_float(fields.get("pick_rate", "")) or 0.0,
             )
         )
     return options
 
 
-def _slot_choice(options: list[Block], by_rate: bool) -> Block:
-    """A opção deste slot para uma das duas páginas.
-
-    `options` chega ordenado por amostra, então o mais jogado é o
-    primeiro. Para a página da maior taxa só concorre quem passou de
-    `MIN_SAMPLE`; se ninguém passou, o slot repete o mais jogado em vez
-    de eleger o campeão de três partidas.
-    """
-    if not by_rate:
-        return options[0]
-    solid = [block for block in options if block.games >= MIN_SAMPLE]
-    if not solid:
-        return options[0]
-    return max(solid, key=lambda block: (block.win_rate, block.games))
-
-
-def _situational(chosen: list[Block], core: Iterable[int] = ()) -> tuple[int, ...]:
-    """Os slots situacionais na ordem de compra, sem item repetido.
-
-    Um mesmo item pode encabeçar dois slots — o OP.GG mede cada um por
-    conta, e Zhonya's lidera tanto o 4º quanto o 6º. Em blocos
-    separados isso só parecia estranho; numa lista de compra única
-    viraria "compre Zhonya's duas vezes", que o jogo não permite.
-
-    `core` é o que os blocos anteriores já mandaram comprar, e sai
-    daqui pelo mesmo motivo. A estatística de "6º item" conta também
-    quem montou o núcleo tarde, então o OP.GG devolve Malignance como
-    sexto item da Annie — que é o primeiro item dela. Na loja isso
-    apareceria como o mesmo lendário em dois blocos.
-    """
-    items: list[int] = list(core)
-    guarded = len(items)
-    for block in chosen:
-        items.extend(item for item in block.items if item not in items)
-    return tuple(items[guarded:])
-
-
-def _pages(
-    data: dict[str, str], schema: dict[str, list[str]]
-) -> tuple[Page, ...]:
-    """Monta as páginas do arsenal com o que veio na resposta.
+def _pages(data: dict[str, str], schema: dict[str, list[str]]) -> tuple[Page, ...]:
+    """Monta a lista de compra com o que veio na resposta.
 
     Item é enfeite: se um campo faltar ou vier vazio, ele some e o
-    resto segue. `starter_items`, `boots` e `core_items` chegam como um
-    valor só — o núcleo do build, igual em toda página.
+    resto segue.
 
-    **Os slots finais viram um bloco só.** Do quarto item em diante o
-    OP.GG manda alternativas por slot, e havia aqui um bloco por slot:
-    a loja ficava com "4º item", "5º item", "6º item" e "Último item"
-    lado a lado, cada um com um único item dentro. Ler aquilo durante a
-    partida era catar item em quatro títulos separados. Agora a
-    sequência inteira vai num bloco `SITUATIONAL_LABEL`, na ordem em
-    que se compra, como fazem os outros apps do gênero.
+    **Um bloco por degrau, com as alternativas dentro.** Duas versões
+    anteriores erraram por lados opostos. A primeira dava um bloco por
+    slot com um único item dentro — a loja ficava com "4º item", "5º
+    item", "6º item" lado a lado, cada um mandando comprar uma coisa
+    só, como se não houvesse decisão a tomar. A segunda juntou os
+    quatro num bloco "Situacionais" e escolheu por slot, o que apagou a
+    variação de vez: sobrava uma fila de itens sem dizer onde se podia
+    trocar. Agora cada degrau mostra até três alternativas medidas, na
+    ordem em que `ranking` as sustenta — que é o que Blitz e Porofessor
+    põem na tela, e o que o jogador precisa para adaptar a compra à
+    partida que está jogando.
 
-    **As páginas são critérios, não posições.** Havia aqui uma página
-    por alternativa — a primeira com a melhor de cada slot, a segunda
-    com a seguinte —, e o número da aba não dizia o que mudava dentro
-    dela. Agora são duas leituras do mesmo dado, cada uma com nome: a
-    build mais jogada e a de maior taxa. Quando as duas dão no mesmo
-    conjunto, sai uma aba só, sem rótulo — não havia escolha a
-    oferecer.
+    **Uma página só.** As duas leituras que davam nome às abas ("Mais
+    jogada" e "Maior taxa") agora convivem dentro do mesmo bloco, uma
+    ao lado da outra: não há um segundo critério para uma segunda aba
+    oferecer. A aba que sobra na loja para o confronto vem de
+    `core/matchup.py`, que é variação de verdade — a build contra
+    aquele adversário.
+
+    `bought` atravessa os degraus: o OP.GG mede cada profundidade por
+    conta, e o mesmo lendário encabeça o 4º e o 6º item de vários
+    campeões. Sem esse controle a loja mandaria comprá-lo duas vezes.
     """
-    core: list[Block] = []
-    situational: list[list[Block]] = []
+    blocks: list[Block] = []
+    bought: set[int] = set()
     for field, label in ITEM_BLOCKS:
         raw = data.get(field)
         if raw is None:
             continue
-        is_core = field in CORE_FIELDS
         options = _field_options(mcp_format.entries(raw), label, schema)
         if not options:
             continue
-        if is_core:
-            core.append(options[0])
-        else:
-            options.sort(key=lambda block: (block.games, block.win_rate), reverse=True)
-            situational.append(options)
-
-    if not situational:
-        if not core:
-            return ()
-        return (Page(label="", blocks=tuple(core)),)
-
-    # O que o núcleo já compra não volta na lista situacional.
-    comprado = tuple(item for block in core for item in block.items)
-
-    pages: list[Page] = []
-    seen: set[frozenset[int]] = set()
-    for label, by_rate in ((MOST_PLAYED_LABEL, False), (BEST_RATE_LABEL, True)):
-        items = _situational(
-            [_slot_choice(o, by_rate) for o in situational], comprado
+        block = slot(
+            options,
+            set() if field in FRESH_FIELDS else bought,
+            ALTERNATIVES.get(field, MAX_ALTERNATIVES),
         )
-        if not items:
-            continue
-        assinatura = frozenset(items)
-        if assinatura in seen:
-            continue
-        seen.add(assinatura)
-        pages.append(
-            Page(
-                label=label,
-                blocks=tuple(core)
-                + (
-                    Block(
-                        label=SITUATIONAL_LABEL,
-                        items=items,
-                        # Taxa e amostra ficam de fora: são de cada item,
-                        # e estampar a de um só no título do bloco inteiro
-                        # daria a entender que vale para todos.
-                        win_rate=0.0,
-                        games=0,
-                    ),
-                ),
-            )
-        )
-
-    if len(pages) == 1:
-        # Critério só nomeia o que se contrapõe a outro. Sozinho na
-        # loja, "Mais jogada" sugeriria uma segunda aba que não existe.
-        pages = [Page(label="", blocks=pages[0].blocks)]
-    return tuple(pages)
+        if block is not None:
+            blocks.append(block)
+    if not blocks:
+        return ()
+    return (Page(label="", blocks=tuple(blocks)),)
 
 
 def parse_build(text: str) -> Build | None:

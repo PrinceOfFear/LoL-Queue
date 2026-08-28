@@ -12,11 +12,19 @@ Duas regras guiam quase tudo aqui:
 import threading
 import time
 
+import pytest
+
 from lolqueue.config import Config
 from lolqueue.core.champions import ChampionCatalog
-from lolqueue.core.loadout import PAGE_PREFIX, Loadout, align_spells
-from lolqueue.core.opgg import Block, Build as OpggBuild
+from lolqueue.core.loadout import (
+    PAGE_PREFIX,
+    WAIT_SECONDS,
+    Loadout,
+    align_spells,
+)
+from lolqueue.core.opgg import Block, Build as OpggBuild, Page
 from lolqueue.lcu import endpoints
+from lolqueue.lcu.client import ClientClosed
 from tests.fakes import FakeLcuClient
 
 SUMMARY = [{"id": 96, "name": "Kog Maw", "alias": "KogMaw"}]
@@ -57,7 +65,14 @@ def session(champion_id=96, position="bottom", spell1=4, spell2=14):
     }
 
 
-def build(config=None, responses=None, failures=None, source=None, now=None):
+def build(
+    config=None,
+    responses=None,
+    failures=None,
+    source=None,
+    now=None,
+    on_options=None,
+):
     base = {
         endpoints.CHAMPION_SUMMARY: SUMMARY,
         endpoints.CURRENT_SUMMONER: {"summonerId": 42},
@@ -82,6 +97,7 @@ def build(config=None, responses=None, failures=None, source=None, now=None):
         log=messages.append,
         source=source,
         now=now or (lambda: 0.0),
+        on_rune_options=on_options,
     )
     return loadout, client, messages
 
@@ -321,9 +337,14 @@ class SlowSource:
         self.gate = threading.Event()
         self.gate.set()
         self.calls = []
+        # Guardado à parte, sem entrar em `calls`: mudar a assinatura
+        # de `fetch` não pode desmanchar as asserções que já comparam
+        # `calls` com uma tupla exata.
+        self.tiers = []
 
-    def fetch(self, champion, position, aram):
+    def fetch(self, champion, position, aram, tier=None):
         self.calls.append((champion, position, aram))
+        self.tiers.append(tier)
         self.gate.wait(timeout=5)
         if self.boom:
             raise RuntimeError("fonte quebrada")
@@ -343,9 +364,31 @@ COM_ARSENAL = OpggBuild(
     sub_style=8200,
     perks=(8112, 8126, 8140, 8105, 8224, 8233, 5008, 5008, 5001),
     spells=(4, 14),
-    blocks=(
-        Block(label="Iniciais", items=(1055, 2003), win_rate=0.5),
-        Block(label="Principais", items=(3031, 3094), win_rate=0.53),
+    pages=(
+        Page(
+            label="",
+            blocks=(
+                Block(label="Iniciais", items=(1055, 2003), win_rate=0.5),
+                Block(label="Principais", items=(3031, 3094), win_rate=0.53),
+            ),
+        ),
+    ),
+)
+
+COM_VARIAS_PAGINAS = OpggBuild(
+    style=8100,
+    sub_style=8200,
+    perks=(8112, 8126, 8140, 8105, 8224, 8233, 5008, 5008, 5001),
+    spells=(4, 14),
+    pages=(
+        Page(
+            label="Mais jogada",
+            blocks=(Block(label="Situacionais", items=(3135,), win_rate=0.0),),
+        ),
+        Page(
+            label="Maior taxa",
+            blocks=(Block(label="Situacionais", items=(3157,), win_rate=0.0),),
+        ),
     ),
 )
 
@@ -355,11 +398,23 @@ def page_body(client):
     return next(p for p in client.payloads if p[0] == endpoints.PERK_PAGES)[1]
 
 
-def settle(loadout, session_data, tries=50):
-    """Aplica em ticks, como a janela faz, até a busca terminar."""
+def quieto(loadout):
+    """Nenhuma busca em voo — nem a principal, nem a das opções."""
+    if loadout._pending is not None:
+        return False
+    thread = loadout._options_thread
+    return thread is None or not thread.is_alive()
+
+
+def settle(loadout, session_data, tries=200):
+    """Aplica em ticks, como a janela faz, até a busca terminar.
+
+    Espera também pelos elos de comparação: eles correm numa thread
+    própria, que termina depois da principal.
+    """
     for _ in range(tries):
         loadout.apply(session_data)
-        if loadout._pending is None:
+        if quieto(loadout):
             return
         time.sleep(0.01)
 
@@ -395,6 +450,17 @@ def test_it_asks_the_opgg_about_the_champion_and_the_lane():
     settle(loadout, session())
 
     assert source.calls == [("KogMaw", "bottom", False)]
+
+
+def test_the_chosen_tier_travels_to_the_opgg():
+    """O elo é dos ajustes, não um valor fixo dentro do módulo."""
+    source = SlowSource(OPGG_BUILD)
+    config = Config(auto_spells=True, auto_runes=True, opgg_tier="platinum_plus")
+    loadout, _, _ = build(config=config, source=source)
+
+    settle(loadout, session())
+
+    assert source.tiers == ["platinum_plus"]
 
 
 def test_the_abyss_is_announced_to_the_opgg():
@@ -506,11 +572,22 @@ def test_a_client_hiccup_before_the_search_does_not_reach_the_tick():
     settle(loadout, session())  # não levanta
 
 
-def test_a_disconnect_during_the_search_does_not_reach_the_tick():
-    loadout, client, _ = build(source=SlowSource(OPGG_BUILD))
+def test_a_closed_client_is_the_watchers_business_not_a_rune_error():
+    """Cliente fechado é a única falha que sobe daqui.
+
+    “Não atrapalhar o pick e o ban” não quer dizer nada quando não há
+    mais cliente para escolher nem banir. Quem espera por esta exceção é
+    o watcher, que reconecta; engolindo-a, o app trocava o “Cliente do
+    LoL fechado.” por um erro de runa que não explica coisa alguma, e
+    ainda esperava o próximo tick para descobrir o óbvio. É a mesma
+    regra que o motor já segue nas chamadas dele.
+    """
+    loadout, client, messages = build(source=SlowSource(OPGG_BUILD))
     client.closed = True
 
-    loadout.apply(session())  # não levanta
+    with pytest.raises(ClientClosed):
+        loadout.apply(session())
+    assert messages == []
 
 
 def test_the_journal_says_the_runes_came_from_the_opgg():
@@ -532,6 +609,464 @@ def test_the_journal_says_when_the_riot_answered_instead():
     assert any("Riot" in message for message in messages)
 
 
+# ---------- opções de runa por elo ----------
+#
+# O OP.GG devolve builds diferentes conforme o elo consultado, e é essa
+# a única variedade honesta disponível aqui. O elo dos Ajustes continua
+# mandando no que é aplicado sozinho; os elos de comparação só abastecem
+# os botões da tela.
+
+
+class TieredSource:
+    """Fonte que responde uma build por elo, como o OP.GG faz.
+
+    Elo fora do mapa devolve `None` — é assim que o OP.GG trata campeão
+    sem amostra naquela faixa.
+    """
+
+    def __init__(self, builds, boom=()):
+        self.builds = dict(builds)
+        self.boom = set(boom)
+        self.tiers = []
+
+    def fetch(self, champion, position, aram, tier=None):
+        self.tiers.append(tier)
+        if tier in self.boom:
+            raise RuntimeError("fonte quebrada")
+        return self.builds.get(tier)
+
+
+def rune_build(first_perk):
+    """Uma build de runa reconhecível pelo primeiro id."""
+    return OpggBuild(
+        style=8100,
+        sub_style=8200,
+        perks=(first_perk, 8126, 8140, 8105, 8224, 8233, 5008, 5008, 5001),
+        spells=(4, 14),
+    )
+
+
+DIAMANTE = rune_build(8112)
+MESTRE = rune_build(8124)
+DESAFIANTE = rune_build(8128)
+
+TRES_ELOS = {
+    "diamond_plus": DIAMANTE,
+    "master": MESTRE,
+    "challenger": DESAFIANTE,
+}
+
+
+def com_opcoes(**extra):
+    return Config(auto_runes=True, auto_runes_options=True, **extra)
+
+
+def pages_created(client):
+    """Corpos dos POST que criaram páginas de runa, na ordem."""
+    return [b for p, b in client.payloads if p == endpoints.PERK_PAGES]
+
+
+def test_without_the_option_only_the_configured_tier_is_asked():
+    """Desligada, a feature não custa nem uma consulta a mais."""
+    source = TieredSource(TRES_ELOS)
+    published = []
+    loadout, _, _ = build(
+        config=Config(auto_runes=True),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+
+    settle(loadout, session())
+
+    assert source.tiers == ["diamond_plus"]
+    assert published == []
+
+
+def test_the_comparison_tiers_are_offered_when_the_option_is_on():
+    source = TieredSource(TRES_ELOS)
+    published = []
+    loadout, _, _ = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+
+    settle(loadout, session())
+
+    # O elo dos Ajustes já foi consultado para o build automático; não é
+    # perguntado de novo só por também ser um dos de comparação.
+    assert source.tiers == ["diamond_plus", "master", "challenger"]
+    assert published[-1] == (["diamond_plus", "master", "challenger"], "diamond_plus")
+
+
+def test_the_screen_gets_the_builds_not_just_the_tier_names():
+    """A tela desenha a árvore de cada elo, então precisa das runas de
+    cada um — só o nome do elo não dá para desenhar nada."""
+    source = TieredSource(TRES_ELOS)
+    published = []
+    loadout, _, _ = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append(builds),
+    )
+
+    settle(loadout, session())
+
+    builds = published[-1]
+    assert sorted(builds) == ["challenger", "diamond_plus", "master"]
+    assert builds["master"].perks == TRES_ELOS["master"].perks
+
+
+def test_the_published_builds_do_not_change_under_the_screen():
+    """A tela lê no seu tempo; a thread das opções troca o dicionário
+    inteiro. Sem uma cópia, uma seleção nova mexeria no que a tela ainda
+    está desenhando."""
+    source = TieredSource(TRES_ELOS)
+    published = []
+    loadout, _, _ = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append(builds),
+    )
+
+    settle(loadout, session())
+    entregue = published[-1]
+    loadout.reset()
+
+    assert sorted(entregue) == ["challenger", "diamond_plus", "master"]
+
+
+def test_the_comparison_tiers_do_not_follow_the_settings_tier():
+    """O elo dos Ajustes manda no que é aplicado, não no leque."""
+    source = TieredSource(TRES_ELOS)
+    loadout, _, _ = build(config=com_opcoes(opgg_tier="gold"), source=source)
+
+    settle(loadout, session())
+
+    assert source.tiers == ["gold", "diamond_plus", "master", "challenger"]
+
+
+def test_two_tiers_with_the_same_page_become_one_option():
+    """Dois botões idênticos lado a lado só ocupariam espaço."""
+    source = TieredSource({**TRES_ELOS, "master": DIAMANTE})
+    published = []
+    loadout, _, _ = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+
+    settle(loadout, session())
+
+    assert published[-1][0] == ["diamond_plus", "challenger"]
+
+
+def test_a_tier_that_does_not_answer_is_not_offered():
+    """Vaga vazia fica vazia: repetir outra build seria inventar dado."""
+    source = TieredSource({"diamond_plus": DIAMANTE, "challenger": DESAFIANTE})
+    published = []
+    loadout, _, _ = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+
+    settle(loadout, session())
+
+    assert published[-1][0] == ["diamond_plus", "challenger"]
+
+
+def test_a_tier_that_breaks_does_not_take_the_others_down():
+    source = TieredSource(TRES_ELOS, boom={"master"})
+    published = []
+    loadout, client, _ = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+
+    settle(loadout, session())
+
+    assert published[-1][0] == ["diamond_plus", "challenger"]
+    assert pages_created(client)[0]["selectedPerkIds"] == list(DIAMANTE.perks)
+
+
+def test_the_automatic_page_is_still_the_settings_tier():
+    """A tela oferece; quem entra em partida sem clicar em nada não fica
+    sem runa nem com a de outro elo."""
+    source = TieredSource(TRES_ELOS)
+    loadout, client, _ = build(
+        config=com_opcoes(opgg_tier="challenger"), source=source
+    )
+
+    settle(loadout, session())
+
+    assert pages_created(client) == [
+        {
+            "name": PAGE_PREFIX + ": Kog Maw",
+            "primaryStyleId": 8100,
+            "subStyleId": 8200,
+            "selectedPerkIds": list(DESAFIANTE.perks),
+        }
+    ]
+
+
+def test_choosing_another_tier_swaps_the_page_in_the_client():
+    source = TieredSource(TRES_ELOS)
+    loadout, client, _ = build(config=com_opcoes(), source=source)
+    settle(loadout, session())
+
+    loadout.request_rune_option("challenger")
+    loadout.apply(session())
+
+    assert pages_created(client)[-1]["selectedPerkIds"] == list(DESAFIANTE.perks)
+    assert client.payloads[-1] == (endpoints.PERK_CURRENT_PAGE, 77)
+
+
+def test_the_swap_reuses_the_single_page_the_app_keeps():
+    """Trocar de opção não pode ir enchendo o cliente de páginas nossas."""
+    source = TieredSource(TRES_ELOS)
+    loadout, client, _ = build(
+        config=com_opcoes(),
+        source=source,
+        responses={endpoints.PERK_PAGES: [USER_PAGE, MY_PAGE]},
+    )
+    settle(loadout, session())
+
+    loadout.request_rune_option("master")
+    loadout.apply(session())
+
+    assert client.paths("DELETE") == [endpoints.PERK_PAGE.format(page_id=1)] * 2
+
+
+def test_the_swap_is_written_down_and_the_tela_hears_about_it():
+    source = TieredSource(TRES_ELOS)
+    published = []
+    loadout, _, messages = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+    settle(loadout, session())
+
+    loadout.request_rune_option("master")
+    loadout.apply(session())
+
+    assert any("Mestre" in message for message in messages)
+    assert published[-1][1] == "master"
+
+
+def test_the_click_only_touches_the_client_on_the_next_tick():
+    """O clique chega pela thread da GUI e só deixa um bilhete."""
+    source = TieredSource(TRES_ELOS)
+    loadout, client, _ = build(config=com_opcoes(), source=source)
+    settle(loadout, session())
+    before = len(client.calls)
+
+    loadout.request_rune_option("master")
+
+    assert len(client.calls) == before
+
+
+def test_a_tier_that_was_not_offered_is_ignored():
+    source = TieredSource({"diamond_plus": DIAMANTE})
+    loadout, client, _ = build(config=com_opcoes(), source=source)
+    settle(loadout, session())
+    before = len(client.calls)
+
+    loadout.request_rune_option("master")
+    loadout.apply(session())
+
+    assert len(client.calls) == before
+
+
+def test_a_new_champ_select_takes_the_options_off_the_screen():
+    source = TieredSource(TRES_ELOS)
+    published = []
+    loadout, _, _ = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+    settle(loadout, session())
+
+    loadout.reset()
+
+    assert published[-1] == ([], None)
+
+
+def test_the_riot_fallback_offers_nothing():
+    """Sem resposta do OP.GG não há opção nenhuma para oferecer."""
+    published = []
+    loadout, client, _ = build(
+        config=com_opcoes(),
+        source=TieredSource({}),
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+
+    settle(loadout, session())
+
+    assert published == []
+    assert pages_created(client)[0]["selectedPerkIds"] == PERK_IDS
+
+
+class GatedTierSource:
+    """Fonte em que só os elos de comparação demoram.
+
+    Medido contra o OP.GG de verdade, as três consultas somam de dez a
+    quatorze segundos, e o teto de espera do equipamento é oito. É esse
+    descompasso que os testes abaixo reproduzem sem esperar de verdade.
+    """
+
+    def __init__(self, builds, settings_tier="diamond_plus"):
+        self.builds = dict(builds)
+        self.settings_tier = settings_tier
+        self.gate = threading.Event()
+        self.tiers = []
+
+    def fetch(self, champion, position, aram, tier=None):
+        self.tiers.append(tier)
+        if tier != self.settings_tier:
+            self.gate.wait(timeout=5)
+        return self.builds.get(tier)
+
+
+def test_the_comparison_tiers_do_not_spend_the_waiting_budget():
+    """O teto de oito segundos é da build principal, e só dela.
+
+    Somadas, as consultas dos elos de comparação passam do teto. Se
+    corressem no mesmo orçamento, ligar as opções jogaria as runas e o
+    arsenal na reserva da Riot em toda seleção — justamente as duas
+    coisas que já funcionavam.
+    """
+    source = GatedTierSource(TRES_ELOS)
+    relogio = [0.0]
+    loadout, client, messages = build(
+        config=com_opcoes(), source=source, now=lambda: relogio[0]
+    )
+    dados = session()
+
+    loadout.apply(dados)
+    loadout._pending.thread.join(timeout=5)
+    # Os elos de comparação ainda estão presos no portão; o tempo passa
+    # do teto e a build principal já está em mãos há muito.
+    relogio[0] = WAIT_SECONDS + 1
+    loadout.apply(dados)
+    source.gate.set()
+
+    assert pages_created(client)[0]["selectedPerkIds"] == list(DIAMANTE.perks)
+    assert not any("demorou" in message for message in messages)
+
+
+def test_a_slow_comparison_tier_does_not_hold_up_the_arsenal():
+    """Mesma raiz do teste acima, pelo lado da loja."""
+    source = GatedTierSource({**TRES_ELOS, "diamond_plus": COM_ARSENAL})
+    relogio = [0.0]
+    loadout, client, _ = build(
+        config=com_opcoes(auto_items=True), source=source, now=lambda: relogio[0]
+    )
+    dados = session()
+
+    loadout.apply(dados)
+    loadout._pending.thread.join(timeout=5)
+    relogio[0] = WAIT_SECONDS + 1
+    loadout.apply(dados)
+    source.gate.set()
+
+    assert ITEM_SETS in client.paths("PUT")
+
+
+def test_the_options_still_reach_the_screen_after_the_budget_is_gone():
+    """Chegando tarde, elas ainda valem: a seleção dura minutos."""
+    source = GatedTierSource(TRES_ELOS)
+    relogio = [0.0]
+    published = []
+    loadout, _, _ = build(
+        config=com_opcoes(),
+        source=source,
+        now=lambda: relogio[0],
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+    dados = session()
+
+    loadout.apply(dados)
+    loadout._pending.thread.join(timeout=5)
+    relogio[0] = WAIT_SECONDS + 1
+    loadout.apply(dados)
+    source.gate.set()
+    settle(loadout, dados)
+
+    assert published[-1] == (["diamond_plus", "master", "challenger"], "diamond_plus")
+
+
+def test_the_options_show_up_even_when_nothing_could_be_applied():
+    """Elo dos Ajustes sem amostra e Riot calada: é a hora em que
+    escolher à mão vale mais, e era justo quando a tela ficava vazia."""
+    published = []
+    loadout, _, _ = build(
+        config=com_opcoes(opgg_tier="gold"),
+        source=TieredSource({"master": MESTRE, "challenger": DESAFIANTE}),
+        responses={recommended_path(): []},
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+
+    settle(loadout, session())
+
+    assert published[-1] == (["master", "challenger"], None)
+
+
+def test_a_page_of_the_user_that_starts_like_ours_is_left_alone():
+    """“LoL Queue Ranqueada”, feita à mão, não é nossa: o nome que o app
+    reconhece é o dele inteiro, com os dois pontos."""
+    quase = {"id": 3, "name": PAGE_PREFIX + " Ranqueada", "isDeletable": True}
+    loadout, client, _ = build(
+        responses={endpoints.PERK_PAGES: [USER_PAGE, quase]}
+    )
+
+    loadout.apply(session())
+
+    assert endpoints.PERK_PAGE.format(page_id=3) not in client.paths("DELETE")
+
+
+def test_a_failed_swap_leaves_the_player_with_a_page():
+    """Apagar antes de ter substituta é como o jogador entrava na
+    partida sem runa nenhuma quando o cliente recusava o POST."""
+    source = TieredSource(TRES_ELOS)
+    loadout, client, _ = build(
+        config=com_opcoes(),
+        source=source,
+        responses={endpoints.PERK_PAGES: [USER_PAGE, MY_PAGE]},
+    )
+    settle(loadout, session())
+    antes = len(client.paths("DELETE"))
+    client.failures.add(("POST", endpoints.PERK_PAGES))
+
+    loadout.request_rune_option("master")
+    loadout.apply(session())
+
+    assert len(client.paths("DELETE")) == antes
+
+
+def test_a_failed_swap_leaves_the_screen_telling_the_truth():
+    """Recusado o POST, nada mudou no cliente: a página de antes segue
+    ativa, e é ela que a tela tem que continuar marcando."""
+    source = TieredSource(TRES_ELOS)
+    published = []
+    loadout, client, messages = build(
+        config=com_opcoes(),
+        source=source,
+        on_options=lambda tiers, active, builds: published.append((tiers, active)),
+    )
+    settle(loadout, session())
+    client.failures.add(("POST", endpoints.PERK_PAGES))
+
+    loadout.request_rune_option("master")
+    loadout.apply(session())
+
+    assert published[-1][1] == "diamond_plus"
+    assert any("trocar" in message for message in messages)
+
+
 # ---------- o arsenal na loja ----------
 
 
@@ -545,6 +1080,24 @@ def test_the_arsenal_reaches_the_shop():
 
     gravado = next(b for p, b in client.payloads if p == ITEM_SETS)
     assert gravado["itemSets"][0]["title"] == "LoL Queue: Kog Maw"
+
+
+def test_several_pages_become_several_sets_in_the_shop():
+    """O pedido: mais de uma aba de arsenal, não um bloco por
+    alternativa dentro de um conjunto só."""
+    loadout, client, _ = build(
+        config=Config(auto_items=True),
+        source=SlowSource(COM_VARIAS_PAGINAS),
+    )
+
+    settle(loadout, session())
+
+    gravado = next(b for p, b in client.payloads if p == ITEM_SETS)
+    titulos = [s["title"] for s in gravado["itemSets"]]
+    assert titulos == [
+        "LoL Queue: Kog Maw — Mais jogada",
+        "LoL Queue: Kog Maw — Maior taxa",
+    ]
 
 
 def test_without_the_option_the_shop_is_left_alone():
@@ -600,3 +1153,164 @@ def test_a_shop_failure_does_not_reach_the_tick():
     settle(loadout, session())
 
     assert messages == [] or all(isinstance(m, str) for m in messages)
+
+
+# ---------- o confronto no cliente ----------
+
+
+class Guia:
+    """O guia de confronto como o `Loadout` o enxerga: só a build."""
+
+    def __init__(self, build=None):
+        self.build = build
+
+
+DO_CONFRONTO = OpggBuild(
+    style=8000,
+    sub_style=8300,
+    perks=(8005, 9101, 9104, 8014, 8345, 8347, 5005, 5008, 5002),
+    spells=(4, 7),
+    pages=(
+        Page(
+            label="",
+            blocks=(
+                Block(label="Iniciais", items=(1055, 2003), win_rate=0.51),
+                Block(label="Principais", items=(6672, 3094), win_rate=0.55),
+            ),
+        ),
+    ),
+)
+
+
+def com_arsenal(**extra):
+    """Um `Loadout` com o campeão já equipado e o arsenal na loja."""
+    config = Config(auto_runes=True, auto_items=True, **extra)
+    loadout, client, messages = build(config=config, source=SlowSource(COM_ARSENAL))
+    settle(loadout, session())
+    return loadout, client, messages
+
+
+def titulos(client):
+    caminho, corpo = next(
+        (p, b) for p, b in reversed(client.payloads) if p == ITEM_SETS
+    )
+    return [item["title"] for item in corpo["itemSets"]]
+
+
+def test_the_matchup_becomes_one_more_tab_in_the_shop():
+    """A aba “vs Fulano”, do jeito que Blitz e Porofessor a põem lá."""
+    loadout, client, _ = com_arsenal()
+
+    loadout.request_matchup("Ezreal", Guia(DO_CONFRONTO))
+    loadout.apply(session())
+
+    assert titulos(client) == [
+        "LoL Queue: Kog Maw",
+        "LoL Queue: Kog Maw — vs Ezreal",
+    ]
+
+
+def test_the_champion_tab_survives_the_matchup_tab():
+    """A loja só aceita a lista inteira: gravar uma apagaria a outra."""
+    loadout, client, _ = com_arsenal()
+
+    loadout.request_matchup("Ezreal", Guia(DO_CONFRONTO))
+    loadout.apply(session())
+
+    caminho, corpo = next(
+        (p, b) for p, b in reversed(client.payloads) if p == ITEM_SETS
+    )
+    geral = corpo["itemSets"][0]
+    assert [entry["id"] for entry in geral["blocks"][1]["items"]] == ["3031", "3094"]
+
+
+def test_a_guide_with_nothing_to_say_installs_nothing():
+    loadout, client, _ = com_arsenal()
+    antes = len([p for p, _ in client.payloads if p == ITEM_SETS])
+
+    loadout.request_matchup("Ezreal", Guia(None))
+    loadout.apply(session())
+
+    assert len([p for p, _ in client.payloads if p == ITEM_SETS]) == antes
+
+
+def test_the_matchup_rune_becomes_one_more_option():
+    vistos = []
+    config = Config(auto_runes=True, auto_items=True, auto_runes_options=True)
+    loadout, client, _ = build(
+        config=config,
+        source=SlowSource(COM_ARSENAL),
+        on_options=lambda tiers, active, builds: vistos.append(tiers),
+    )
+    settle(loadout, session())
+
+    loadout.request_matchup("Ezreal", Guia(DO_CONFRONTO))
+    loadout.apply(session())
+
+    assert "vs Ezreal" in vistos[-1]
+
+
+def test_the_matchup_rune_waits_for_the_click():
+    """Trocar a página ativa sozinho seria decidir pelo jogador."""
+    config = Config(auto_runes=True, auto_items=True, auto_runes_options=True)
+    loadout, client, _ = build(config=config, source=SlowSource(COM_ARSENAL))
+    settle(loadout, session())
+    antes = len(client.paths("POST"))
+
+    loadout.request_matchup("Ezreal", Guia(DO_CONFRONTO))
+    loadout.apply(session())
+
+    assert len(client.paths("POST")) == antes
+
+
+def test_clicking_the_matchup_option_installs_that_page():
+    config = Config(auto_runes=True, auto_items=True, auto_runes_options=True)
+    loadout, client, messages = build(config=config, source=SlowSource(COM_ARSENAL))
+    settle(loadout, session())
+
+    loadout.request_matchup("Ezreal", Guia(DO_CONFRONTO))
+    loadout.apply(session())
+    loadout.request_rune_option("vs Ezreal")
+    loadout.apply(session())
+
+    criada = [b for p, b in client.payloads if p == endpoints.PERK_PAGES][-1]
+    assert criada["selectedPerkIds"] == list(DO_CONFRONTO.perks)
+    assert any("confronto contra Ezreal" in linha for linha in messages)
+
+
+def test_the_previous_opponent_leaves_the_list():
+    """Um botão por confronto: o da rota de agora, não os de antes."""
+    vistos = []
+    config = Config(auto_runes=True, auto_items=True, auto_runes_options=True)
+    loadout, client, _ = build(
+        config=config,
+        source=SlowSource(COM_ARSENAL),
+        on_options=lambda tiers, active, builds: vistos.append(tiers),
+    )
+    settle(loadout, session())
+
+    loadout.request_matchup("Ezreal", Guia(DO_CONFRONTO))
+    loadout.apply(session())
+    loadout.request_matchup("Jinx", Guia(DO_CONFRONTO))
+    loadout.apply(session())
+
+    assert vistos[-1].count("vs Jinx") == 1
+    assert "vs Ezreal" not in vistos[-1]
+
+
+def test_a_matchup_rune_equal_to_one_already_listed_does_not_repeat():
+    """Dois botões com a mesma página só ocupariam espaço."""
+    vistos = []
+    config = Config(auto_runes=True, auto_items=True, auto_runes_options=True)
+    loadout, client, _ = build(
+        config=config,
+        source=SlowSource(COM_ARSENAL),
+        on_options=lambda tiers, active, builds: vistos.append(tiers),
+    )
+    settle(loadout, session())
+    antes = list(vistos[-1])
+
+    loadout.request_matchup("Ezreal", Guia(COM_ARSENAL))
+    loadout.apply(session())
+
+    assert vistos[-1] == antes

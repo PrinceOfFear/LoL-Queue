@@ -1,5 +1,7 @@
+import lolqueue.core.champions as champions_module
 from lolqueue.core.champions import ChampionCatalog
 from lolqueue.lcu import endpoints
+from lolqueue.lcu.client import LcuError
 from tests.fakes import FakeLcuClient
 
 SUMMARY = [
@@ -14,6 +16,27 @@ def make_catalog(payload=SUMMARY, failures=None):
         responses={endpoints.CHAMPION_SUMMARY: payload}, failures=failures
     )
     return ChampionCatalog(client)
+
+
+class FlakyClient(FakeLcuClient):
+    """Falha nas primeiras N chamadas a um caminho, depois responde normal.
+
+    `FakeLcuClient.failures` falha sempre — não serve para simular a
+    corrida de inicialização, onde a API do LCU já responde mas um
+    endpoint específico só fica pronto um instante depois.
+    """
+
+    def __init__(self, fail_times, **kwargs):
+        super().__init__(**kwargs)
+        self._fail_times = dict(fail_times)
+
+    def get(self, path):
+        self.calls.append(("GET", path))
+        remaining = self._fail_times.get(path, 0)
+        if remaining > 0:
+            self._fail_times[path] = remaining - 1
+            raise LcuError(f"ainda não, {path}")
+        return self.responses.get(path)
 
 
 def test_maps_id_to_name():
@@ -120,3 +143,59 @@ def test_an_unknown_champion_has_no_alias():
     catalog = make_catalog()
     catalog.load()
     assert catalog.alias(999) == ""
+
+
+# --- corrida de inicialização: API de pé, dados estáticos ainda não ------
+#
+# Ao reconectar bem no instante em que o cliente do LoL termina de subir, a
+# API já aceita chamadas mas `CHAMPION_SUMMARY` pode responder erro por
+# mais um instante. Antes, `load()` engolia isso pra sempre e nada
+# chamava de novo — o catálogo ficava vazio pelo resto da conexão.
+
+
+def test_load_with_retries_recovers_from_a_slow_start(monkeypatch):
+    monkeypatch.setattr(champions_module.time, "sleep", lambda _: None)
+    client = FlakyClient(
+        {endpoints.CHAMPION_SUMMARY: 2},
+        responses={endpoints.CHAMPION_SUMMARY: SUMMARY},
+    )
+    catalog = ChampionCatalog(client)
+
+    catalog.load_with_retries()
+
+    assert catalog.loaded is True
+    assert catalog.name(64) == "Lee Sin"
+    assert client.paths("GET").count(endpoints.CHAMPION_SUMMARY) == 3
+
+
+def test_load_with_retries_gives_up_after_the_bound_and_stays_tolerant(monkeypatch):
+    """Se a falha for de verdade (não só o instante da corrida), desiste.
+
+    Sem limite, uma falha permanente do endpoint travaria a reconexão
+    pra sempre — o resto do app já sabe seguir com o catálogo vazio.
+    """
+    monkeypatch.setattr(champions_module.time, "sleep", lambda _: None)
+    client = FlakyClient(
+        {endpoints.CHAMPION_SUMMARY: 999},
+        responses={endpoints.CHAMPION_SUMMARY: SUMMARY},
+    )
+    catalog = ChampionCatalog(client)
+
+    catalog.load_with_retries(attempts=3, delay=0.01)
+
+    assert catalog.loaded is False
+    assert catalog.all() == []
+    assert client.paths("GET").count(endpoints.CHAMPION_SUMMARY) == 3
+
+
+def test_load_with_retries_does_not_sleep_after_succeeding_on_the_first_try(
+    monkeypatch,
+):
+    slept = []
+    monkeypatch.setattr(champions_module.time, "sleep", slept.append)
+    catalog = make_catalog()
+
+    catalog.load_with_retries()
+
+    assert catalog.loaded is True
+    assert slept == []

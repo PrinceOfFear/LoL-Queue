@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
 from ...core.phases import GameflowPhase
@@ -30,7 +30,7 @@ class StatusRing(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(240, 240)
+        self.setMinimumSize(258, 258)
         self._phase = GameflowPhase.NONE.value
         self._elapsed = 0.0
         self._connected = False
@@ -57,7 +57,7 @@ class StatusRing(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        side = min(self.width(), self.height()) - RING_THICKNESS * 2
+        side = min(self.width(), self.height()) - RING_THICKNESS * 6
         rect = QRectF(
             (self.width() - side) / 2,
             (self.height() - side) / 2,
@@ -65,12 +65,36 @@ class StatusRing(QWidget):
             side,
         )
 
-        painter.setPen(QPen(QColor(Palette.BORDER), RING_THICKNESS))
-        painter.drawEllipse(rect)
-
         color = QColor(PHASE_COLORS.get(self._phase, Palette.TEXT_MUTED))
         if not self._connected:
             color = QColor(Palette.TEXT_MUTED)
+
+        # O disco interno separa o estado do fundo ilustrado, e o halo bem
+        # suave deixa o anel parecer parte de um painel de controle em vez de
+        # um indicador técnico isolado.
+        inner = rect.adjusted(RING_THICKNESS * 3, RING_THICKNESS * 3, -RING_THICKNESS * 3, -RING_THICKNESS * 3)
+        core = QRadialGradient(inner.center(), inner.width() * 0.62)
+        core.setColorAt(0, QColor(18, 48, 75, 242))
+        core.setColorAt(0.72, QColor(9, 26, 49, 230))
+        core.setColorAt(1, QColor(4, 15, 30, 218))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(core)
+        painter.drawEllipse(inner)
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(Palette.BORDER), RING_THICKNESS))
+        painter.drawEllipse(rect)
+
+        glow = QColor(color)
+        glow.setAlpha(40)
+        glow_pen = QPen(glow, RING_THICKNESS + 14)
+        glow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(glow_pen)
+        if self._phase in self.ACTIVE_PHASES:
+            painter.drawArc(rect, self._angle, SWEEP_LENGTH)
+        else:
+            painter.drawArc(rect, 90 * 16, -360 * 16)
+
         pen = QPen(color, RING_THICKNESS)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
@@ -86,7 +110,7 @@ class StatusRing(QWidget):
             caption = PHASE_LABELS.get(self._phase, "—")
 
         font = QFont(self.font())
-        font.setPointSize(30 if self._connected else 15)
+        font.setPointSize(30 if self._connected else 14)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.setPen(QColor(Palette.TEXT))
@@ -98,6 +122,6 @@ class StatusRing(QWidget):
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.0)
         painter.setFont(font)
         painter.setPen(color)
-        bottom = QRectF(rect.x(), rect.y() + side * 0.56, side, side * 0.16)
+        bottom = QRectF(rect.x(), rect.y() + side * 0.58, side, side * 0.14)
         painter.drawText(bottom, Qt.AlignmentFlag.AlignCenter, caption)
         painter.end()

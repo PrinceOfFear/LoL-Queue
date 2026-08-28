@@ -86,3 +86,77 @@ class IconStore:
             if self.fetch(client, champion_id):
                 downloaded += 1
         return downloaded
+
+
+class AssetStore:
+    """Imagens do cliente guardadas pelo caminho de onde vieram.
+
+    O `IconStore` sabe montar a URL de um retrato a partir do id do
+    campeão. As runas não funcionam assim: o catálogo já entrega o
+    caminho pronto de cada ícone, e eles moram em pastas diferentes por
+    árvore. Então aqui a chave é a própria URL.
+
+    Mesmas garantias do outro: grava por temporário, e nada estoura —
+    um ícone que não veio vira um quadrado vazio, não um app quebrado.
+    """
+
+    def __init__(self, directory: Path | None = None) -> None:
+        self._dir = directory or (icons_dir() / "perks")
+
+    @property
+    def directory(self) -> Path:
+        return self._dir
+
+    def path_for(self, url: str) -> Path:
+        """Um nome de arquivo estável e único para a URL.
+
+        O caminho inteiro vira o nome, com as barras viradas em
+        sublinhado: dois ícones de árvores diferentes podem ter o mesmo
+        nome de arquivo na origem, e só a pasta os separa. Guardar o
+        caminho todo é o que impede um sobrescrever o outro.
+        """
+        cleaned = url.strip("/").replace("/lol-game-data/assets/", "")
+        flat = cleaned.replace("/", "_").replace("\\", "_").lower()
+        return self._dir / (flat or "sem-nome")
+
+    def has(self, url: str) -> bool:
+        try:
+            return self.path_for(url).stat().st_size > 0
+        except OSError:
+            return False
+
+    def missing(self, urls: Iterable[str]) -> list[str]:
+        return [url for url in urls if url and not self.has(url)]
+
+    def fetch(self, client, url: str) -> bool:
+        """Baixa uma imagem. Devolve False se não deu, sem estourar."""
+        try:
+            data = client.raw(url)
+        except LcuError:
+            return False
+        if not data:
+            return False
+        target = self.path_for(url)
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            temp = target.with_name(target.name + ".part")
+            temp.write_bytes(data)
+            temp.replace(target)
+        except OSError:
+            return False
+        return True
+
+    def fetch_missing(
+        self,
+        client,
+        urls: Iterable[str],
+        should_continue: Callable[[], bool] | None = None,
+    ) -> int:
+        keep_going = should_continue or (lambda: True)
+        downloaded = 0
+        for url in self.missing(urls):
+            if not keep_going():
+                break
+            if self.fetch(client, url):
+                downloaded += 1
+        return downloaded

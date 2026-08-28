@@ -1,67 +1,303 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
     QWidget,
 )
 
+from ...config import (
+    ACCEPT_DELAY_CEILING,
+    JUNGLE_VOICE_LABELS,
+    OPGG_TIERS,
+    PICK_INTENT_CEILING,
+)
 from ..binding import ConfigBinder
 
 
 class SettingsPage(QWidget):
-    """Os interruptores da automação e o atraso antes de travar."""
+    """Os interruptores da automação e as faixas de atraso."""
 
     def __init__(self, binder: ConfigBinder, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._binder = binder
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 24, 40, 28)
-        layout.setSpacing(14)
+        layout.setContentsMargins(36, 24, 36, 28)
+        layout.setSpacing(16)
 
-        title = QLabel("AUTOMAÇÃO")
-        title.setObjectName("sectionTitle")
+        title = QLabel("AJUSTES")
+        title.setObjectName("pageTitle")
         layout.addWidget(title)
+        subtitle = QLabel("Decida o quanto o LoL Queue deve agir por você.")
+        subtitle.setObjectName("pageSubtitle")
+        layout.addWidget(subtitle)
+
+        automation = QFrame()
+        automation.setObjectName("settingsCard")
+        automation_layout = QVBoxLayout(automation)
+        automation_layout.setContentsMargins(24, 20, 24, 20)
+        automation_layout.setSpacing(7)
+        automation_title = QLabel("AUTOMAÇÃO")
+        automation_title.setObjectName("sectionTitle")
+        automation_layout.addWidget(automation_title)
 
         for label, attribute in (
             ("Aceitar partida automaticamente", "auto_accept"),
             ("Escolher campeão automaticamente", "auto_pick"),
+        ):
+            automation_layout.addWidget(binder.checkbox(label, attribute))
+
+        # Indentada porque depende da linha acima: o retrato que aparece
+        # no cliente é o que aquela lista vai travar, e sem a escolha
+        # automática não há nada a antecipar.
+        intent_row = QHBoxLayout()
+        intent_row.setContentsMargins(22, 0, 0, 0)
+        intent_row.addWidget(
+            binder.checkbox(
+                "Mostrar no cliente do LoL, antes da sua vez, o campeão que "
+                "será escolhido",
+                "show_pick_intent",
+            )
+        )
+        intent_row.addStretch(1)
+        automation_layout.addLayout(intent_row)
+
+        # Também indentada: sem o retrato ligado acima, não há o que
+        # atrasar.
+        self._intent_delay = self._seconds_row(
+            automation_layout,
+            "Esperar antes de mostrar, para o time não ver o pick cedo demais",
+            "pick_intent_delay",
+            ceiling=PICK_INTENT_CEILING,
+            indent=22,
+        )
+
+        for label, attribute in (
             ("Banir campeão automaticamente", "auto_ban"),
             ("Aplicar os feitiços recomendados", "auto_spells"),
             ("Aplicar as runas recomendadas", "auto_runes"),
-            ("Montar o arsenal na loja", "auto_items"),
         ):
-            layout.addWidget(binder.checkbox(label, attribute))
+            automation_layout.addWidget(binder.checkbox(label, attribute))
+
+        # Indentada porque depende da linha acima: sem as runas
+        # automáticas ligadas, esta não tem efeito nenhum.
+        options_row = QHBoxLayout()
+        options_row.setContentsMargins(22, 0, 0, 0)
+        options_row.addWidget(
+            binder.checkbox(
+                "Oferecer até 3 opções de runa, uma por elo, para escolher "
+                "na Central",
+                "auto_runes_options",
+            )
+        )
+        options_row.addStretch(1)
+        automation_layout.addLayout(options_row)
+
+        automation_layout.addWidget(
+            binder.checkbox("Montar o arsenal na loja", "auto_items")
+        )
+        automation_layout.addWidget(
+            binder.checkbox(
+                "Silenciar chat e emotes durante a seleção",
+                "mute_before_game",
+            )
+        )
+        mute_note = QLabel(
+            "Desliga, nas opções do próprio jogo, o chat dos aliados, o chat "
+            "de todos e os emotes dos inimigos — antes de a partida abrir, "
+            "que é a única hora em que isso ainda dá para fazer. O jogo não "
+            "expõe uma opção para os emotes dos aliados; essa fica de fora. "
+            "Tudo volta ao que estava quando a partida termina, ou quando "
+            "você desliga o motor."
+        )
+        mute_note.setObjectName("hint")
+        mute_note.setWordWrap(True)
+        automation_layout.addWidget(mute_note)
+
+        tier_row = QHBoxLayout()
+        tier_row.addWidget(QLabel("Elo das builds do OP.GG"))
+        self._tier = QComboBox()
+        self._tier.setObjectName("tierSelector")
+        for tier, label in OPGG_TIERS.items():
+            self._tier.addItem(label, tier)
+        index = self._tier.findData(binder.config.opgg_tier)
+        if index >= 0:
+            self._tier.setCurrentIndex(index)
+        self._tier.currentIndexChanged.connect(self._on_tier_changed)
+        tier_row.addWidget(self._tier)
+        tier_row.addStretch(1)
+        automation_layout.addLayout(tier_row)
 
         # Estas três não têm lista para configurar, e sem uma linha de
         # explicação "recomendados" não diz por quem — nem que a
         # resposta vem de fora do cliente.
         note = QLabel(
-            "Feitiços, runas e itens saem do que mais venceu no OP.GG "
-            "(Diamante+) para o campeão e a rota da partida; se o OP.GG "
-            "não responder, valem os do próprio cliente do LoL. O app "
+            "Feitiços, runas e itens saem do que mais venceu no OP.GG, no "
+            "elo escolhido acima, para o campeão e a rota da partida; se o "
+            "OP.GG não responder, valem os do próprio cliente do LoL. O app "
             "mantém uma página de runas e um conjunto de itens, ambos "
-            "chamados “LoL Queue”, e não mexe nos seus."
+            "chamados “LoL Queue”, e não mexe nos seus. As opções de runa "
+            "comparam Diamante+, Mestre e Desafiante: a do elo acima "
+            "continua entrando sozinha, e as outras ficam na Central para "
+            "você trocar com um clique durante a seleção."
         )
         note.setObjectName("hint")
         note.setWordWrap(True)
-        layout.addWidget(note)
+        automation_layout.addWidget(note)
 
-        delay_row = QHBoxLayout()
-        delay_row.addWidget(QLabel("Atraso antes de travar o campeão"))
-        self._delay = QDoubleSpinBox()
-        self._delay.setRange(0.0, 15.0)
-        self._delay.setSingleStep(0.5)
-        self._delay.setSuffix(" s")
-        self._delay.setValue(binder.config.lock_delay_seconds)
-        self._delay.valueChanged.connect(
-            lambda value: binder.set("lock_delay_seconds", value)
+        jungle_row = QHBoxLayout()
+        jungle_row.addWidget(
+            binder.checkbox(
+                "Avisar o jungler inimigo por voz",
+                "jungle_callouts",
+            )
         )
-        delay_row.addWidget(self._delay)
-        delay_row.addStretch(1)
-        layout.addLayout(delay_row)
+        self._voice = QComboBox()
+        self._voice.setObjectName("voiceSelector")
+        for voice, label in JUNGLE_VOICE_LABELS.items():
+            self._voice.addItem(label, voice)
+        voice_index = self._voice.findData(binder.config.jungle_voice)
+        if voice_index >= 0:
+            self._voice.setCurrentIndex(voice_index)
+        self._voice.currentIndexChanged.connect(self._on_voice_changed)
+        jungle_row.addWidget(self._voice)
+        jungle_row.addStretch(1)
+        automation_layout.addLayout(jungle_row)
+
+        jungle_note = QLabel(
+            "Durante a partida, o app procura o retrato do jungler inimigo "
+            "no minimapa e diz em voz alta onde ele apareceu — quem está "
+            "olhando a própria rota não está olhando o canto da tela. As "
+            "frases são preparadas assim que a partida abre e ficam "
+            "guardadas para as próximas; se a internet estiver fora no "
+            "momento do preparo, o aviso fica mudo em vez de atrasar."
+        )
+        jungle_note.setObjectName("hint")
+        jungle_note.setWordWrap(True)
+        automation_layout.addWidget(jungle_note)
+
+        layout.addWidget(automation)
+
+        timing_card = QFrame()
+        timing_card.setObjectName("settingsCard")
+        timing_layout = QVBoxLayout(timing_card)
+        timing_layout.setContentsMargins(24, 20, 24, 20)
+        timing_layout.setSpacing(11)
+        timing = QLabel("TEMPO DE REAÇÃO")
+        timing.setObjectName("sectionTitle")
+        timing_layout.addWidget(timing)
+
+        self._lock_delay = self._delay_row(
+            timing_layout, "Mostrar o campeão antes de travar",
+            "lock_delay_min", "lock_delay_max", ceiling=30.0,
+        )
+        self._accept_delay = self._delay_row(
+            timing_layout, "Esperar antes de aceitar a partida",
+            "accept_delay_min", "accept_delay_max", ceiling=ACCEPT_DELAY_CEILING,
+        )
+        self._postgame_delay = self._delay_row(
+            timing_layout, "Esperar depois da partida antes de buscar outra",
+            "postgame_delay_min", "postgame_delay_max", ceiling=120.0,
+        )
+
+        timing_note = QLabel(
+            "O app sorteia um tempo dentro da faixa a cada partida. Os dois "
+            "primeiros te dão margem de intervir — cancelar a fila, trocar "
+            "de campeão. O aceite tem teto de "
+            f"{ACCEPT_DELAY_CEILING:.0f} s porque a janela do “Partida "
+            "encontrada” fecha por volta dos 12. Já a espera depois da "
+            "partida evita erro: o cliente do LoL recusa a fila enquanto "
+            "encerra a anterior, o que leva de 5 a 10 segundos."
+        )
+        timing_note.setObjectName("hint")
+        timing_note.setWordWrap(True)
+        timing_layout.addWidget(timing_note)
+        layout.addWidget(timing_card)
 
         layout.addStretch(1)
+
+    def _on_tier_changed(self, index: int) -> None:
+        self._binder.set("opgg_tier", self._tier.itemData(index))
+
+    def _on_voice_changed(self, index: int) -> None:
+        self._binder.set("jungle_voice", self._voice.itemData(index))
+
+    def _seconds_row(
+        self,
+        layout: QVBoxLayout,
+        label: str,
+        attribute: str,
+        ceiling: float,
+        indent: int = 0,
+    ) -> QDoubleSpinBox:
+        """Uma linha de um número só de segundos, ligada a um campo.
+
+        Irmã de `_delay_row`, para o caso em que não há faixa a sortear:
+        a espera é fixa porque o que ela protege é a hora de aparecer,
+        não o compasso do app.
+        """
+        row = QHBoxLayout()
+        row.setContentsMargins(indent, 0, 0, 0)
+        row.addWidget(QLabel(label))
+        box = QDoubleSpinBox()
+        box.setRange(0.0, ceiling)
+        box.setSingleStep(0.5)
+        box.setSuffix(" s")
+        box.setValue(getattr(self._binder.config, attribute))
+        box.valueChanged.connect(lambda value: self._binder.set(attribute, value))
+        row.addWidget(box)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return box
+
+    def _delay_row(
+        self,
+        layout: QVBoxLayout,
+        label: str,
+        low_attr: str,
+        high_attr: str,
+        ceiling: float,
+    ) -> tuple[QDoubleSpinBox, QDoubleSpinBox]:
+        """Uma linha "de X a Y segundos" ligada a dois campos da config.
+
+        Os dois se empurram: mexer no mínimo levanta o máximo junto, e
+        vice-versa. Sem isso dá para deixar a faixa invertida na tela —
+        a config endireita ao gravar, mas o número na tela mentiria.
+        """
+        row = QHBoxLayout()
+        row.addWidget(QLabel(label))
+
+        low = QDoubleSpinBox()
+        high = QDoubleSpinBox()
+        for box in (low, high):
+            box.setRange(0.0, ceiling)
+            box.setSingleStep(0.5)
+            box.setSuffix(" s")
+        low.setValue(getattr(self._binder.config, low_attr))
+        high.setValue(getattr(self._binder.config, high_attr))
+
+        def on_low(value: float) -> None:
+            self._binder.set(low_attr, value)
+            if value > high.value():
+                high.setValue(value)
+
+        def on_high(value: float) -> None:
+            if value < low.value():
+                value = low.value()
+                high.setValue(value)
+            self._binder.set(high_attr, value)
+
+        low.valueChanged.connect(on_low)
+        high.valueChanged.connect(on_high)
+
+        row.addWidget(low)
+        row.addWidget(QLabel("a"))
+        row.addWidget(high)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return (low, high)

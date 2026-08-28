@@ -113,11 +113,16 @@ def test_the_ban_list_says_when_the_automation_is_off():
     assert alert is True
 
 
-def test_an_empty_ban_list_warns_that_nothing_is_banned():
+def test_an_empty_ban_list_explains_that_the_turn_is_passed():
+    """Lista vazia com o ban ligado virou escolha, não descuido.
+
+    O alerta some junto: pintar de vermelho o que o usuário pediu
+    ensina a ignorar a cor.
+    """
     text, alert = ban_notice([], auto_ban=True)
 
-    assert "banido" in text
-    assert alert is True
+    assert "passa sozinha" in text
+    assert alert is False
 
 
 def test_a_filled_ban_list_explains_the_order():

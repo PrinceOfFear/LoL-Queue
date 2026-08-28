@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QLabel, QVBoxLayout, QWidget
 
 from ...config import QUEUES
 from ..binding import ConfigBinder
@@ -20,42 +20,67 @@ class QueuePage(QWidget):
         self._binder = binder
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 24, 40, 28)
-        layout.setSpacing(14)
+        layout.setContentsMargins(36, 24, 36, 28)
+        layout.setSpacing(16)
 
         title = QLabel("FILA")
-        title.setObjectName("sectionTitle")
+        title.setObjectName("pageTitle")
         layout.addWidget(title)
+        subtitle = QLabel("Defina onde a automação deve procurar a próxima partida.")
+        subtitle.setObjectName("pageSubtitle")
+        layout.addWidget(subtitle)
+
+        card = QFrame()
+        card.setObjectName("contentCard")
+        content = QVBoxLayout(card)
+        content.setContentsMargins(24, 22, 24, 22)
+        content.setSpacing(13)
+        label = QLabel("MODO DE PARTIDA")
+        label.setObjectName("sectionTitle")
+        content.addWidget(label)
+        helper = QLabel("A opção fica salva e é usada sempre que a automação iniciar.")
+        helper.setObjectName("hint")
+        content.addWidget(helper)
 
         self._combo = QComboBox()
+        self._combo.setObjectName("queueSelector")
         for queue_id, name in QUEUES.items():
             self._combo.addItem(name, queue_id)
         index = self._combo.findData(binder.config.queue_id)
         if index >= 0:
             self._combo.setCurrentIndex(index)
         self._combo.currentIndexChanged.connect(self._on_changed)
-        layout.addWidget(self._combo)
+        content.addWidget(self._combo)
 
-        layout.addWidget(
+        content.addSpacing(7)
+        behavior = QFrame()
+        behavior.setObjectName("optionCard")
+        behavior_layout = QVBoxLayout(behavior)
+        behavior_layout.setContentsMargins(16, 12, 16, 12)
+        behavior_layout.setSpacing(7)
+        behavior_title = QLabel("COMPORTAMENTO DA FILA")
+        behavior_title.setObjectName("cardLabel")
+        behavior_layout.addWidget(behavior_title)
+        behavior_layout.addWidget(
             binder.checkbox("Entrar na fila e voltar a ela automaticamente", "auto_queue")
         )
-        layout.addWidget(
+        behavior_layout.addWidget(
             binder.checkbox(
                 "Só mexer na fila quando eu for o dono da sala",
                 "queue_only_as_host",
             )
         )
+        content.addWidget(behavior)
 
         note = QLabel(
-            "Na sala de um amigo, quem conduz a fila é o dono dela. Com isto "
-            "ligado o app não inicia a busca nem abre uma sala própria quando "
-            "a partida acaba — continua aceitando, banindo e escolhendo "
-            "campeão normalmente."
+            "Em uma sala de amigo, o dono conduz a busca. Com esta proteção "
+            "ligada, o app continua cuidando de aceite, banimento e campeão, "
+            "mas não cria sala própria nem muda a fila dele."
         )
         note.setObjectName("hint")
         note.setWordWrap(True)
-        layout.addWidget(note)
-
+        content.addWidget(note)
+        layout.addWidget(card)
         layout.addStretch(1)
 
     def set_unavailable(self, queue_ids) -> None:

@@ -104,6 +104,28 @@ class PositionPicker(QWidget):
         self._automatic = enabled
         self._refresh_notice()
 
+    def set_list(self, position: str, ids) -> None:
+        """Escreve uma lista vinda de fora sem devolver o eco.
+
+        A Central de Fila edita a mesma prioridade que esta página; sem
+        um caminho mudo para receber a ordem nova, cada reordenação lá
+        voltaria como `changed` daqui e seria gravada de novo, em laço.
+        """
+        if position not in self._lists:
+            return
+        ids = [int(champion_id) for champion_id in ids]
+        if self._lists[position] == ids:
+            return
+        self._lists[position] = ids
+        if position == self._current:
+            # `set_ids` faz a grade emitir `changed`; desligar o eco
+            # aqui é o que impede a gravação de voltar em círculo.
+            self._picker.changed.disconnect(self._on_ids_changed)
+            self._picker.set_ids(ids)
+            self._picker.changed.connect(self._on_ids_changed)
+        self._refresh_marks()
+        self._refresh_notice()
+
     # ---------- interação ----------
 
     def _tooltip(self, key: str) -> str:

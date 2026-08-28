@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import time
+
 from ..lcu import endpoints
 from ..lcu.client import LcuError
+
+#: Tentativas de `load_with_retries` e a pausa entre elas. Cobre a corrida
+#: comum de reconexão: o lockfile aparece e a API já responde, mas os
+#: dados estáticos (a lista de campeões entre eles) levam mais um
+#: instante para ficar prontos.
+CATALOG_LOAD_ATTEMPTS = 5
+CATALOG_LOAD_RETRY_DELAY = 0.4
 
 
 class ChampionCatalog:
@@ -61,6 +70,30 @@ class ChampionCatalog:
         self._by_name = by_name
         self._by_alias = by_alias
         self._loaded = True
+
+    def load_with_retries(
+        self,
+        attempts: int = CATALOG_LOAD_ATTEMPTS,
+        delay: float = CATALOG_LOAD_RETRY_DELAY,
+    ) -> None:
+        """Dá ao catálogo algumas chances antes de aceitar a falha.
+
+        `load()` sozinho tenta uma vez e, se falhar, o catálogo fica vazio
+        para sempre — nada mais o chama de novo. Reconectar bem no instante
+        em que o cliente do LoL termina de subir cai exatamente nessa
+        corrida: a API já aceita chamadas, mas `CHAMPION_SUMMARY` ainda
+        responde erro por um instante. Sem repetir aqui, só fechar e
+        reabrir o app dava tempo suficiente para o cliente terminar de
+        subir — o que essa função agora faz sozinha, dentro da mesma
+        conexão. Se a falha for de verdade (não só o instante da corrida),
+        desiste após `attempts` tentativas e segue tolerante: o resto do
+        app já sabe lidar com o catálogo vazio.
+        """
+        for attempt in range(attempts):
+            self.load()
+            if self._loaded or attempt == attempts - 1:
+                return
+            time.sleep(delay)
 
     def name(self, champion_id: int) -> str:
         return self._by_id.get(champion_id, f"#{champion_id}")

@@ -11,7 +11,9 @@ class FakeLcuClient:
     - `responses` mapeia caminho -> payload devolvido pelo GET
     - `posts` mapeia caminho -> payload devolvido pelo POST, para quando
       a resposta importa (criar página de runas devolve o id da nova)
-    - `failures` são caminhos que levantam LcuError
+    - `failures` são caminhos que levantam LcuError; para derrubar só um
+      verbo do mesmo caminho — o POST de `/lol-perks/v1/pages` sem levar
+      junto o GET — vale a tupla `("POST", caminho)`
     - `closed` faz qualquer chamada levantar ClientClosed
     - `calls` grava (método, caminho) na ordem
     """
@@ -28,7 +30,7 @@ class FakeLcuClient:
         self.calls.append((method, path))
         if self.closed:
             raise ClientClosed("cliente fechado")
-        if path in self.failures:
+        if path in self.failures or (method, path) in self.failures:
             raise LcuError(f"falha simulada em {path}")
 
     def get(self, path):

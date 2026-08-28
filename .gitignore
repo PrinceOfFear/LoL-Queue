@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 build/
 dist/
+build_log.txt
 *.egg-info/
 tests/fixtures/*.json
 
@@ -13,3 +14,4 @@ _legado/
 
 # Atalho gerado por tools/criar-atalho.ps1 (aponta para o pythonw desta máquina)
 *.lnk
+dist-standalone/

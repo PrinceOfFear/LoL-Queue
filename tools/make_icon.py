@@ -22,8 +22,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QBuffer, QByteArray, QRectF, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QImage, QPainter, QPen  # noqa: E402
+from PySide6.QtCore import QBuffer, QByteArray, QPointF, QRectF, Qt  # noqa: E402
+from PySide6.QtGui import (  # noqa: E402
+    QColor,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from lolqueue.resources import icon_path  # noqa: E402
@@ -46,13 +54,28 @@ def draw(size: int) -> QImage:
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    # Placa de fundo arredondada, para o ícone ter silhueta própria
-    # sobre qualquer papel de parede.
+    plate = QRectF(0, 0, size, size)
+    radius = size * 0.22
+
+    # Placa de fundo com gradiente radial: mais clara no centro, funda
+    # nas quinas. Dá o mesmo ar de vidro/joia dos cards da interface em
+    # vez de uma silhueta lisa.
+    plate_path = QPainterPath()
+    plate_path.addRoundedRect(plate, radius, radius)
+    fundo = QRadialGradient(plate.center(), size * 0.72, plate.center())
+    fundo.setColorAt(0.0, QColor(Palette.SURFACE_HIGH))
+    fundo.setColorAt(0.55, QColor(Palette.BACKGROUND))
+    fundo.setColorAt(1.0, QColor(Palette.INK))
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(Palette.BACKGROUND))
-    painter.drawRoundedRect(
-        QRectF(0, 0, size, size), size * 0.22, size * 0.22
-    )
+    painter.setBrush(fundo)
+    painter.drawPath(plate_path)
+
+    # Contorno fino e claro na borda da placa: a lâmina de luz que separa
+    # o "vidro" do que está atrás dele.
+    if size >= 32:
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 28), max(1.0, size * 0.012)))
+        painter.drawPath(plate_path)
 
     thickness = max(1.0, size * 0.105)
     # Nos tamanhos grandes a moldura dá respiro; nos pequenos ela come o
@@ -60,11 +83,29 @@ def draw(size: int) -> QImage:
     inset = size * (0.24 if size >= 48 else 0.15)
     ring = QRectF(inset, inset, size - inset * 2, size - inset * 2)
 
+    # Trilho do anel com leve gradiente vertical — dá volume sem pesar.
+    trilho = QLinearGradient(ring.topLeft(), ring.bottomRight())
+    trilho.setColorAt(0.0, QColor(Palette.SURFACE_HIGH))
+    trilho.setColorAt(1.0, QColor(Palette.BORDER))
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.setPen(QPen(QColor(Palette.BORDER), thickness))
+    painter.setPen(QPen(trilho, thickness))
     painter.drawEllipse(ring)
 
-    pen = QPen(QColor(Palette.ACCENT), thickness)
+    # Halo por trás do arco dourado: um traço mais grosso e translúcido,
+    # como um brilho suave, antes do traço nítido por cima.
+    if size >= 48:
+        glow = QPen(QColor(Palette.ACCENT), thickness * 1.9)
+        glow.setCapStyle(Qt.PenCapStyle.RoundCap)
+        glow_color = QColor(Palette.ACCENT)
+        glow_color.setAlpha(70)
+        glow.setColor(glow_color)
+        painter.setPen(glow)
+        painter.drawArc(ring, START_ANGLE, SWEEP)
+
+    arco = QLinearGradient(ring.topLeft(), ring.bottomRight())
+    arco.setColorAt(0.0, QColor("#E8D2A0"))
+    arco.setColorAt(1.0, QColor(Palette.ACCENT))
+    pen = QPen(arco, thickness)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.setPen(pen)
     painter.drawArc(ring, START_ANGLE, SWEEP)
@@ -72,17 +113,24 @@ def draw(size: int) -> QImage:
     # A ponta turquesa some abaixo de 24px: vira um borrão que suja o
     # anel em vez de acrescentar informação.
     if size >= 24:
+        tip = QPointF(ring.center().x() + ring.width() / 2, ring.center().y())
+        dot_radius = thickness * 0.62
+
+        if size >= 48:
+            halo = QRadialGradient(tip, dot_radius * 2.6)
+            halo_color = QColor(Palette.ACTIVE)
+            halo_color.setAlpha(130)
+            halo.setColorAt(0.0, halo_color)
+            halo_edge = QColor(Palette.ACTIVE)
+            halo_edge.setAlpha(0)
+            halo.setColorAt(1.0, halo_edge)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(halo)
+            painter.drawEllipse(tip, dot_radius * 2.6, dot_radius * 2.6)
+
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(Palette.ACTIVE))
-        radius = thickness * 0.62
-        painter.drawEllipse(
-            QRectF(
-                ring.center().x() + ring.width() / 2 - radius,
-                ring.center().y() - radius,
-                radius * 2,
-                radius * 2,
-            )
-        )
+        painter.drawEllipse(tip, dot_radius, dot_radius)
 
     painter.end()
     return image

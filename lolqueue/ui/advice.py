@@ -88,5 +88,5 @@ def ban_notice(ids: list[int], auto_ban: bool) -> tuple[str, bool]:
     if not auto_ban:
         return "O banimento automático está desligado — esta lista não é usada.", True
     if not ids:
-        return "Vazia — nenhum campeão será banido.", True
+        return "Vazia — a vez de banir passa sozinha, sem escolher ninguém.", False
     return "Bane o primeiro da lista que ainda estiver livre.", False

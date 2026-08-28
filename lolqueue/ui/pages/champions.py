@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QHBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ..advice import ban_notice
 from ..binding import ConfigBinder
@@ -21,9 +21,19 @@ class ChampionsPage(QWidget):
         self._binder = binder
         config = binder.config
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(32, 14, 32, 20)
-        layout.setSpacing(24)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(36, 24, 36, 26)
+        outer.setSpacing(16)
+        title = QLabel("CAMPEÕES")
+        title.setObjectName("pageTitle")
+        outer.addWidget(title)
+        subtitle = QLabel("Organize suas prioridades de escolha e banimento por rota.")
+        subtitle.setObjectName("pageSubtitle")
+        outer.addWidget(subtitle)
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
 
         self.pick_picker = PositionPicker(
             "PRIORIDADE DE ESCOLHA",
@@ -34,7 +44,12 @@ class ChampionsPage(QWidget):
         self.pick_picker.set_title_widget(
             binder.checkbox("automática", "auto_pick", object_name="autoSwitch")
         )
-        layout.addWidget(self.pick_picker, 1)
+        pick_card = QFrame()
+        pick_card.setObjectName("championCard")
+        pick_layout = QVBoxLayout(pick_card)
+        pick_layout.setContentsMargins(18, 16, 18, 18)
+        pick_layout.addWidget(self.pick_picker)
+        layout.addWidget(pick_card, 1)
 
         self.ban_picker = ChampionPicker("PRIORIDADE DE BANIMENTO")
         self.ban_picker.set_ids(config.ban_priority)
@@ -44,7 +59,13 @@ class ChampionsPage(QWidget):
         self.ban_picker.set_title_widget(
             binder.checkbox("automático", "auto_ban", object_name="autoSwitch")
         )
-        layout.addWidget(self.ban_picker, 1)
+        ban_card = QFrame()
+        ban_card.setObjectName("championCard")
+        ban_layout = QVBoxLayout(ban_card)
+        ban_layout.setContentsMargins(18, 16, 18, 18)
+        ban_layout.addWidget(self.ban_picker)
+        layout.addWidget(ban_card, 1)
+        outer.addLayout(layout, 1)
 
         binder.changed.connect(self._on_config_changed)
         self.refresh_advice()
@@ -54,6 +75,15 @@ class ChampionsPage(QWidget):
     def set_icons(self, store) -> None:
         for picker in (self.pick_picker, self.ban_picker):
             picker.set_icons(store)
+
+    def set_pick_list(self, position: str, ids) -> None:
+        """Recebe a ordem que foi reordenada na Central de Fila.
+
+        Sem este repasse a página continuaria mostrando a ordem antiga
+        até o app reabrir — e um arrasto aqui depois disso desfaria, sem
+        querer, o que tinha sido decidido lá.
+        """
+        self.pick_picker.set_list(position, ids)
 
     def set_catalog(self, catalog) -> None:
         for picker in (self.pick_picker, self.ban_picker):

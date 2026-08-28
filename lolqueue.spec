@@ -58,9 +58,9 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    # O ícone é lido em tempo de execução por `lolqueue.resources`, e
-    # precisa estar no mesmo caminho relativo de dentro do pacote.
-    datas=[("lolqueue/assets/icon.ico", "lolqueue/assets")],
+    # Fundo, ícones e marca são lidos em tempo de execução por
+    # `lolqueue.resources`, no mesmo caminho relativo de dentro do pacote.
+    datas=[("lolqueue/assets", "lolqueue/assets")],
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],

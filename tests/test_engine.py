@@ -1,16 +1,53 @@
 import pytest
 
 from lolqueue.config import Config
-from lolqueue.core.engine import MAX_FAILURES, SEARCH_CHECK_SECONDS, Engine
+from lolqueue.core.engine import (
+    MAX_FAILURES,
+    POSTGAME_GRACE_SECONDS,
+    QUEUE_RETRY_SECONDS,
+    SEARCH_CHECK_SECONDS,
+    Engine,
+)
 from lolqueue.core.phases import GameflowPhase
 from lolqueue.lcu import endpoints
 from lolqueue.lcu.client import ClientClosed
 from tests.fakes import FakeLcuClient
 
 
-def make_engine(config=None, responses=None, failures=None, closed=False):
+def sem_atraso(**kwargs):
+    """Config que aceita na hora.
+
+    A maioria dos testes daqui é sobre outra coisa — retentativa,
+    backoff, fila parada — e não teria por que ficar avançando relógio.
+    """
+    kwargs.setdefault("accept_delay_min", 0.0)
+    kwargs.setdefault("accept_delay_max", 0.0)
+    return Config(**kwargs)
+
+
+class Relogio:
+    """Relógio de mentira: só anda quando o teste manda."""
+
+    def __init__(self):
+        self.agora = 0.0
+
+    def __call__(self):
+        return self.agora
+
+    def avanca(self, segundos):
+        self.agora += segundos
+
+
+def make_engine(
+    config=None, responses=None, failures=None, closed=False, now=None, rng=None
+):
     client = FakeLcuClient(responses=responses, failures=failures, closed=closed)
-    engine = Engine(client, config or Config())
+    extra = {}
+    if now is not None:
+        extra["now"] = now
+    if rng is not None:
+        extra["rng"] = rng
+    engine = Engine(client, config or sem_atraso(), **extra)
     engine.set_enabled(True)
     return engine, client
 
@@ -205,7 +242,7 @@ def test_client_closed_propagates_to_the_watcher():
 def test_failures_are_logged_not_swallowed():
     messages = []
     client = FakeLcuClient(failures={endpoints.READY_CHECK_ACCEPT})
-    engine = Engine(client, Config(), log=messages.append)
+    engine = Engine(client, sem_atraso(), log=messages.append)
     engine.set_enabled(True)
     engine.handle_phase(GameflowPhase.READY_CHECK)
     assert messages
@@ -347,6 +384,32 @@ def test_champ_select_delegates_to_the_controller():
     assert spy.reset_calls == 1
 
 
+def test_champ_select_resets_even_with_the_engine_disabled():
+    """O controlador sobrevive a reconexões, não a seleções.
+
+    Se o motor está desligado quando uma seleção nova começa e o
+    usuário religa a automação no meio dela, sem isto o controlador
+    entraria com trava e prévia de campeão da seleção anterior — a
+    fase muda, mas ninguém chama `reset()`.
+    """
+    class Spy:
+        def __init__(self):
+            self.reset_calls = 0
+
+        def reset(self):
+            self.reset_calls += 1
+
+        def tick(self):
+            pass
+
+    spy = Spy()
+    engine, _ = make_engine()
+    engine.set_champ_select(spy)
+    engine.set_enabled(False)
+    engine.handle_phase(GameflowPhase.CHAMP_SELECT)
+    assert spy.reset_calls == 1
+
+
 def test_champ_select_without_controller_does_not_crash():
     engine, _ = make_engine()
     engine.handle_phase(GameflowPhase.CHAMP_SELECT)
@@ -378,7 +441,7 @@ def test_it_does_not_start_the_queue_in_someone_elses_lobby():
 
 def test_it_still_accepts_the_match_in_someone_elses_lobby():
     engine, client = make_engine(
-        Config(auto_queue=True, auto_accept=True), responses=GUEST_LOBBY
+        sem_atraso(auto_queue=True, auto_accept=True), responses=GUEST_LOBBY
     )
 
     engine.handle_phase(GameflowPhase.LOBBY)
@@ -463,3 +526,457 @@ def test_a_lobby_without_the_leader_flag_is_treated_as_our_own():
     engine.handle_phase(GameflowPhase.LOBBY)
 
     assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")
+
+
+# ---------- o atraso antes de aceitar ----------
+
+
+def test_the_match_is_not_accepted_the_instant_it_is_found():
+    """O ponto do atraso: existir uma janela para o usuário desistir."""
+    relogio = Relogio()
+    engine, client = make_engine(Config(), now=relogio, rng=lambda a, b: 3.0)
+
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+
+    assert client.paths("POST") == []
+
+
+def test_the_match_is_accepted_once_the_delay_runs_out():
+    relogio = Relogio()
+    engine, client = make_engine(Config(), now=relogio, rng=lambda a, b: 3.0)
+
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+    relogio.avanca(2.9)
+    engine.tick()
+    assert client.paths("POST") == []
+
+    relogio.avanca(0.2)
+    engine.tick()
+    assert endpoints.READY_CHECK_ACCEPT in client.paths("POST")
+
+
+def test_the_draw_uses_the_configured_range():
+    pedidos = []
+    relogio = Relogio()
+    engine, _ = make_engine(
+        Config(accept_delay_min=1.5, accept_delay_max=4.5),
+        now=relogio,
+        rng=lambda low, high: pedidos.append((low, high)) or low,
+    )
+
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+
+    assert pedidos == [(1.5, 4.5)]
+
+
+def test_the_wait_is_announced_so_it_does_not_look_frozen():
+    messages = []
+    relogio = Relogio()
+    client = FakeLcuClient()
+    engine = Engine(
+        client, Config(), log=messages.append, now=relogio, rng=lambda a, b: 3.0
+    )
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+
+    assert any("3" in m for m in messages), messages
+
+
+def test_the_delay_is_drawn_again_for_the_next_match():
+    """Uma partida recusada não pode deixar o relógio da próxima vencido."""
+    pedidos = []
+    relogio = Relogio()
+    engine, client = make_engine(
+        Config(),
+        now=relogio,
+        rng=lambda low, high: pedidos.append((low, high)) or 3.0,
+    )
+
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+    relogio.avanca(10.0)
+    engine.tick()
+    engine.handle_phase(GameflowPhase.NONE)
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+
+    assert len(pedidos) == 2
+    assert len(client.paths("POST")) == 1, "a segunda não podia sair na hora"
+
+
+def test_only_one_accept_goes_out_however_many_ticks_pass():
+    relogio = Relogio()
+    engine, client = make_engine(Config(), now=relogio, rng=lambda a, b: 1.0)
+
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+    for _ in range(10):
+        relogio.avanca(1.0)
+        engine.tick()
+
+    assert len(client.paths("POST")) == 1
+
+
+def test_a_zero_range_still_accepts_immediately():
+    """Quem não quer atraso nenhum continua sendo atendido na hora."""
+    engine, client = make_engine(sem_atraso())
+
+    engine.handle_phase(GameflowPhase.READY_CHECK)
+
+    assert endpoints.READY_CHECK_ACCEPT in client.paths("POST")
+
+
+def test_the_delay_does_not_leak_into_other_phases():
+    """Só o "aceitar" espera; entrar na fila continua imediato."""
+    relogio = Relogio()
+    engine, client = make_engine(
+        sem_atraso(auto_queue=True),
+        responses=LOBBY_READY,
+        now=relogio,
+        rng=lambda a, b: 5.0,
+    )
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")
+
+
+# ---------- a espera depois da partida ----------
+#
+# O cliente do LoL leva alguns segundos para soltar a partida anterior e
+# recusa a fila com 400/ALREADY_IN_GAME até lá. Antes disto o app
+# torrava as três tentativas em dois segundos e desistia.
+
+
+def fila_apos_partida(**kwargs):
+    kwargs.setdefault("auto_queue", True)
+    kwargs.setdefault("postgame_delay_min", 8.0)
+    kwargs.setdefault("postgame_delay_max", 8.0)
+    return sem_atraso(**kwargs)
+
+
+def buscas(client):
+    return [p for p in client.paths("POST") if p == endpoints.MATCHMAKING_SEARCH]
+
+
+def test_the_queue_waits_for_the_client_to_settle_after_a_match():
+    relogio = Relogio()
+    engine, client = make_engine(
+        fila_apos_partida(), responses=LOBBY_READY, now=relogio
+    )
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    assert buscas(client) == [], "buscou antes de o cliente assentar"
+
+    relogio.avanca(8.1)
+    engine.tick()
+    assert buscas(client), "não buscou depois da espera"
+
+
+def test_the_wait_is_drawn_from_the_configured_range():
+    pedidos = []
+    relogio = Relogio()
+    engine, _ = make_engine(
+        fila_apos_partida(postgame_delay_min=6.0, postgame_delay_max=10.0),
+        responses=LOBBY_READY,
+        now=relogio,
+        rng=lambda low, high: pedidos.append((low, high)) or 7.0,
+    )
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    assert pedidos == [(6.0, 10.0)]
+
+
+def test_the_wait_is_announced_once():
+    messages = []
+    relogio = Relogio()
+    client = FakeLcuClient(responses=LOBBY_READY)
+    engine = Engine(client, fila_apos_partida(), log=messages.append, now=relogio)
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    for _ in range(10):
+        relogio.avanca(0.2)
+        engine.tick()
+
+    esperas = [m for m in messages if "entrando na fila em" in m.casefold()]
+    assert len(esperas) == 1, messages
+
+
+def test_a_lobby_with_no_match_before_it_does_not_wait():
+    """Ligar o motor no lobby não é volta de partida — entra na hora."""
+    engine, client = make_engine(fila_apos_partida(), responses=LOBBY_READY)
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+
+    assert buscas(client)
+
+
+def test_a_refusal_right_after_the_match_does_not_burn_the_retries():
+    """400/ALREADY_IN_GAME é "ainda não", não falha que gasta chance."""
+    relogio = Relogio()
+    engine, client = make_engine(
+        fila_apos_partida(),
+        responses=LOBBY_READY,
+        failures={endpoints.MATCHMAKING_SEARCH},
+        now=relogio,
+    )
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(8.1)
+    for _ in range(60):  # 12 segundos de ticks
+        relogio.avanca(0.2)
+        engine.tick()
+
+    insistiu = len(buscas(client))
+    assert insistiu > MAX_FAILURES, f"desistiu como antes: {insistiu} tentativas"
+
+    # e assim que o cliente aceita, a fila entra de verdade
+    client.failures.clear()
+    relogio.avanca(QUEUE_RETRY_SECONDS + 0.1)
+    engine.tick()
+    assert len(buscas(client)) == insistiu + 1
+
+
+def test_the_retries_after_a_match_are_spaced_out():
+    """Marteladas de 200ms viram enxurrada de erro no registro."""
+    relogio = Relogio()
+    engine, client = make_engine(
+        fila_apos_partida(),
+        responses=LOBBY_READY,
+        failures={endpoints.MATCHMAKING_SEARCH},
+        now=relogio,
+    )
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(8.1)
+    for _ in range(50):  # 10 segundos de ticks
+        relogio.avanca(0.2)
+        engine.tick()
+
+    assert len(buscas(client)) <= 10 / QUEUE_RETRY_SECONDS + 1
+
+
+def test_the_settling_client_is_reported_once_not_every_tick():
+    messages = []
+    relogio = Relogio()
+    client = FakeLcuClient(
+        responses=LOBBY_READY, failures={endpoints.MATCHMAKING_SEARCH}
+    )
+    engine = Engine(client, fila_apos_partida(), log=messages.append, now=relogio)
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(8.1)
+    for _ in range(50):
+        relogio.avanca(0.2)
+        engine.tick()
+
+    falhas = [m for m in messages if "Falha em" in m]
+    assert falhas == [], falhas
+    encerrando = [m for m in messages if "encerrando a partida" in m]
+    assert len(encerrando) == 1, messages
+
+
+def test_a_failure_far_from_any_match_still_gives_up():
+    """Fora da janela pós-partida nada muda: erro é erro."""
+    relogio = Relogio()
+    engine, client = make_engine(
+        fila_apos_partida(),
+        responses=LOBBY_READY,
+        failures={endpoints.MATCHMAKING_SEARCH},
+        now=relogio,
+    )
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(POSTGAME_GRACE_SECONDS + 1.0)
+    for _ in range(30):
+        relogio.avanca(0.2)
+        engine.tick()
+
+    assert len(buscas(client)) == MAX_FAILURES
+
+
+def test_the_wait_does_not_carry_over_to_the_next_lobby():
+    """Entrou na fila uma vez, a espera daquela partida morreu ali."""
+    relogio = Relogio()
+    engine, client = make_engine(
+        fila_apos_partida(), responses=LOBBY_READY, now=relogio
+    )
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(8.1)
+    engine.tick()
+    assert len(buscas(client)) == 1
+
+    engine.handle_phase(GameflowPhase.MATCHMAKING)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.tick()
+    assert len(buscas(client)) == 2, "esperou de novo sem partida no meio"
+
+
+def test_getting_into_the_queue_is_always_announced_after_a_wait():
+    """Quem viu "entrando em 7s" precisa ver o desfecho.
+
+    A retomada da busca entra calada de propósito, para não repetir a
+    mesma linha a cada poucos segundos. Mas depois de uma espera
+    anunciada, o silêncio vira dúvida: entrou ou travou?
+    """
+    messages = []
+    relogio = Relogio()
+    client = FakeLcuClient(
+        responses=LOBBY_READY, failures={endpoints.MATCHMAKING_SEARCH}
+    )
+    engine = Engine(client, fila_apos_partida(), log=messages.append, now=relogio)
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(8.1)
+    for _ in range(20):
+        relogio.avanca(0.2)
+        engine.tick()
+
+    client.failures.clear()
+    relogio.avanca(QUEUE_RETRY_SECONDS + 0.1)
+    engine.tick()
+
+    assert any("Entrando na fila" in m for m in messages), messages
+
+
+def test_a_stalled_search_right_after_the_match_is_not_reported_as_a_problem():
+    """No pós-jogo a busca "parada" é o cliente encerrando, não anomalia."""
+    messages = []
+    relogio = Relogio()
+    client = FakeLcuClient(
+        responses={
+            **LOBBY_READY,
+            SEARCH_STATE: {"searchState": "Error", "errors": []},
+        },
+        failures={endpoints.MATCHMAKING_SEARCH},
+    )
+    engine = Engine(client, fila_apos_partida(), log=messages.append, now=relogio)
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(8.1)
+    for _ in range(30):
+        relogio.avanca(0.2)
+        engine.tick()
+
+    assert not any("Busca parada" in m for m in messages), messages
+
+
+def test_far_from_a_match_a_stalled_search_is_still_reported():
+    """Fora do pós-jogo a busca parada é anomalia de verdade e tem de aparecer."""
+    messages = []
+    relogio = Relogio()
+    client = FakeLcuClient(
+        responses={
+            **LOBBY_READY,
+            SEARCH_STATE: {"searchState": "Error", "errors": []},
+        }
+    )
+    engine = Engine(client, fila_apos_partida(), log=messages.append, now=relogio)
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(SEARCH_CHECK_SECONDS + 0.1)
+    engine.tick()
+
+    assert any("Busca parada" in m for m in messages), messages
+
+
+def test_there_is_no_recovery_notice_for_a_problem_never_announced():
+    """"Fila retomada" sem "Busca parada" antes é resposta sem pergunta."""
+    messages = []
+    relogio = Relogio()
+    client = FakeLcuClient(
+        responses={
+            **LOBBY_READY,
+            SEARCH_STATE: {"searchState": "Error", "errors": []},
+        }
+    )
+    engine = Engine(client, fila_apos_partida(), log=messages.append, now=relogio)
+    engine.set_enabled(True)
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    relogio.avanca(8.1)
+    engine.tick()
+    client.responses[SEARCH_STATE] = {"searchState": "Searching", "errors": []}
+    relogio.avanca(SEARCH_CHECK_SECONDS + 0.1)
+    engine.tick()
+
+    assert not any("Fila retomada" in m for m in messages), messages
+
+
+# ---------------------------------------------------------------------
+# A vigilância do jungler inimigo: liga com a partida, para quando ela
+# acaba, e não depende do motor de fila estar ligado.
+# ---------------------------------------------------------------------
+
+
+class VigiaFalso:
+    def __init__(self):
+        self.starts = 0
+        self.stops = 0
+
+    def start(self) -> bool:
+        self.starts += 1
+        return True
+
+    def stop(self) -> None:
+        self.stops += 1
+
+
+def com_vigia(config=None):
+    vigia = VigiaFalso()
+    engine = Engine(FakeLcuClient(), config or Config(jungle_callouts=True))
+    engine.set_jungle_watch(vigia)
+    return engine, vigia
+
+
+def test_the_match_starts_the_jungle_watch():
+    engine, vigia = com_vigia()
+    engine.handle_phase(GameflowPhase.IN_PROGRESS)
+    assert vigia.starts == 1
+
+
+def test_the_end_of_the_match_stops_the_watch():
+    """Sair da partida por qualquer porta tem de parar a captura de tela."""
+    engine, vigia = com_vigia()
+    engine.handle_phase(GameflowPhase.IN_PROGRESS)
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    assert vigia.stops == 1
+
+
+def test_the_watch_does_not_need_the_queue_engine_on():
+    """Quem quer só o aviso não deve ter de ligar a fila automática."""
+    engine, vigia = com_vigia()
+    engine.set_enabled(False)
+    engine.handle_phase(GameflowPhase.IN_PROGRESS)
+    assert vigia.starts == 1
+
+
+def test_the_setting_off_keeps_the_watch_quiet():
+    engine, vigia = com_vigia(Config(jungle_callouts=False))
+    engine.handle_phase(GameflowPhase.IN_PROGRESS)
+    assert (vigia.starts, vigia.stops) == (0, 0)
+
+
+def test_the_lobby_stops_the_watch_even_without_an_end_of_game():
+    """Fechar o jogo pela janela não passa por EndOfGame."""
+    engine, vigia = com_vigia()
+    engine.handle_phase(GameflowPhase.IN_PROGRESS)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert vigia.stops == 1

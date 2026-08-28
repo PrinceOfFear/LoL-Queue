@@ -81,3 +81,7 @@ ITEM_SETS = "/lol-item-sets/v1/item-sets/{summoner_id}/sets"
 ITEMS = "/lol-game-data/assets/v1/items.json"
 #: Idem, para os feitiços de invocador (Fulgor, Barreira, ...).
 SUMMONER_SPELLS = "/lol-game-data/assets/v1/summoner-spells.json"
+
+#: Opções do jogo. O cliente aceita PATCH parcial: manda só a seção e as
+#: chaves que mudam, e devolve o resto intacto.
+GAME_SETTINGS = "/lol-game-settings/v1/game-settings"

@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import OPGG_TIERS, Config, log_dir, queue_name
+from ..config import OPGG_TIERS, Config, log_dir, position_name, queue_name
+from ..core.antitoxic import MuteGuard
 from ..core.champ_select import ChampSelectController
 from ..core.champions import ChampionCatalog
 from ..core.engine import Engine
@@ -25,6 +26,7 @@ from ..core.phases import GameflowPhase
 from ..core.queues import unavailable_queues
 from ..core.summoner_history import SummonerHistorySource
 from ..core.watcher import PhaseWatcher
+from ..vision.session import JungleSession
 from .binding import ConfigBinder
 from .game_detail_loader import GameDetailLoader
 from .history_loader import HistoryLoader
@@ -68,10 +70,19 @@ class MainWindow(QWidget):
         # é dele que a prévia do próximo pick tira o nome do campeão.
         self._latest_catalog: ChampionCatalog | None = None
         self._predicted_champion: int | None = None
+        # A rota desta seleção, publicada pelo motor. Diz qual lista de
+        # prioridade está de fato valendo, e é essa que a Central mostra
+        # e deixa reordenar — reordenar a outra não mudaria a escolha.
+        self._pick_position = ""
         # O equipamento da conexão atual. Nasce na thread do watcher e é
         # lido na da GUI, como o catálogo: o clique numa opção de runa só
         # deixa um bilhete nele, que o tick seguinte executa.
         self._loadout: Loadout | None = None
+        self._antitoxic: MuteGuard | None = None
+        # A vigilância do minimapa. Guardada aqui pelo mesmo motivo do
+        # guarda acima: fechar o app no meio da partida escaparia do
+        # motor e deixaria uma thread capturando tela.
+        self._jungle: JungleSession | None = None
         # Filas que a Riot desligou nesta região. Descobertas na thread
         # do watcher e lidas na da GUI, igual ao catálogo.
         self._blocked_queues: set[int] | None = None
@@ -156,6 +167,8 @@ class MainWindow(QWidget):
         self._dashboard = DashboardPage()
         self._dashboard.toggled.connect(self.toggle_engine)
         self._dashboard.rune_option_chosen.connect(self._on_rune_option_chosen)
+        self._dashboard.pick_order_changed.connect(self._on_pick_order_changed)
+        self._dashboard.set_pick_resolvers(self._champion_name, self._champion_icon)
         self._dashboard.set_log_folder(self._journal.directory)
         self._analysis = AnalysisPage()
         self._analysis.set_icon_resolver(self._champion_icon)
@@ -186,6 +199,12 @@ class MainWindow(QWidget):
             self._pages.addWidget(self._scroll_page(page))
         right.addWidget(self._pages, 1)
         columns.addLayout(right, 1)
+
+        # A Central e a página Campeões editam a mesma prioridade; ouvir a
+        # config é o que mantém as duas contando a mesma história, venha a
+        # mudança de qual das duas vier.
+        self._binder.changed.connect(self._on_pick_config_changed)
+        self._render_pick_order()
 
     @staticmethod
     def _scroll_page(page: QWidget) -> QScrollArea:
@@ -218,6 +237,7 @@ class MainWindow(QWidget):
         self._watcher.connection_changed.connect(self._on_connection_changed)
         self._watcher.message.connect(self._log_message)
         self._watcher.predicted_pick_changed.connect(self._on_predicted_pick_changed)
+        self._watcher.pick_scope_changed.connect(self._on_pick_scope_changed)
         self._watcher.rune_options_changed.connect(self._dashboard.set_rune_options)
         self._watcher.analysis_changed.connect(self._on_analysis_changed)
         self._watcher.start()
@@ -244,6 +264,19 @@ class MainWindow(QWidget):
             on_analysis=self._watcher.analysis_changed.emit,
         )
         self._loadout = loadout
+        # O mesmo guarda nos dois lados: a seleção liga o silêncio, e o
+        # motor devolve as opções quando a partida acaba.
+        antitoxic = MuteGuard(client, self._config, log=self._watcher.message.emit)
+        # Guardado também aqui porque fechar o app no meio da partida é
+        # o único caminho que escaparia do motor — e deixaria o jogador
+        # mudo sem saber por quê.
+        self._antitoxic = antitoxic
+        engine.set_antitoxic(antitoxic)
+        # O aviso do jungler. O motor liga quando a partida aparece na
+        # tela e desliga quando ela sai, por qualquer porta.
+        jungle = JungleSession(self._config, log=self._watcher.message.emit)
+        self._jungle = jungle
+        engine.set_jungle_watch(jungle)
         engine.set_champ_select(
             ChampSelectController(
                 client,
@@ -251,7 +284,9 @@ class MainWindow(QWidget):
                 catalog,
                 log=self._watcher.message.emit,
                 loadout=loadout,
+                antitoxic=antitoxic,
                 on_pick_predicted=self._watcher.predicted_pick_changed.emit,
+                on_position=self._watcher.pick_scope_changed.emit,
             )
         )
         engine.set_enabled(self._enabled)
@@ -294,6 +329,7 @@ class MainWindow(QWidget):
             # boneco de uma partida que já ficou para trás. As opções de
             # runa saem junto: a página só troca enquanto a seleção corre.
             self._on_predicted_pick_changed(None)
+            self._on_pick_scope_changed("")
             self._dashboard.set_rune_options([], None, {})
         if phase_value == GameflowPhase.END_OF_GAME.value:
             # Pedido do usuário: o histórico não pode depender do
@@ -347,6 +383,7 @@ class MainWindow(QWidget):
         # O campeão previsto pode ter chegado antes do retrato dele —
         # sem isto a prévia ficava presa no nome até a próxima troca.
         self._render_prediction()
+        self._render_pick_order()
 
     def _on_perks_ready(self, catalog) -> None:
         """Entrega a tradução de runa para a tela poder desenhar a grade."""
@@ -416,14 +453,32 @@ class MainWindow(QWidget):
         mine = self._analysis_alias
         if not mine:
             return
+        # O nome é lido agora, não quando a resposta chegar: até lá o
+        # jogador pode ter trocado de adversário no seletor.
+        opponent_name = self._analysis.opponent_name or opponent_alias
         loader = MatchupLoader(self._matchups, mine, opponent_alias, position, self)
         loader.ready.connect(self._analysis.set_matchup)
+        loader.ready.connect(
+            lambda _alias, found, name=opponent_name: self._install_matchup(name, found)
+        )
         # Sem isto cada troca de adversário deixa uma thread morta
         # pendurada na janela pelo resto da sessão: o pai a mantém viva
         # justamente para o Python não coletá-la cedo demais.
         loader.finished.connect(lambda: self._retire_matchup_loader(loader))
         self._matchup_loader = loader
         loader.start()
+
+    def _install_matchup(self, opponent_name: str, matchup) -> None:
+        """Leva o guia ao equipamento, que o instala no tick seguinte.
+
+        Aqui é a thread da tela; quem fala com o cliente é a do
+        watcher. O guia fica guardado e vira aba de arsenal e opção de
+        runa no próximo tick da seleção — o mesmo acordo do clique numa
+        opção de runa.
+        """
+        loadout = self._loadout
+        if loadout is not None and matchup is not None:
+            loadout.request_matchup(opponent_name, matchup)
 
     def _retire_matchup_loader(self, loader) -> None:
         """Descarta o loader que terminou, se ainda for o da vez.
@@ -547,6 +602,68 @@ class MainWindow(QWidget):
         )
         self._dashboard.set_predicted_pick(name, icon_path)
 
+    # ---------- ordem de escolha ----------
+
+    def _pick_scope(self) -> str:
+        """Qual lista o motor vai consultar nesta seleção.
+
+        A rota só manda se tiver lista própria: sem ela a escolha cai na
+        geral, e é a geral que a Central precisa deixar editar — senão o
+        usuário reordenaria uma lista vazia e veria a partida ignorar.
+        """
+        position = self._pick_position
+        if position and self._config.pick_priority_by_position.get(position):
+            return position
+        return ""
+
+    def _scope_label(self, scope: str) -> str:
+        # A automação desligada vem primeiro: sem ela nenhuma das listas
+        # é consultada, e caprichar na ordem aqui não mudaria a partida.
+        if not self._config.auto_pick:
+            return "Escolha automática desligada — esta ordem não será usada."
+        if scope:
+            return f"Lista de {position_name(scope)} — é ela que vale agora."
+        if self._pick_position:
+            return (
+                f"Lista geral — {position_name(self._pick_position)} não tem "
+                "lista própria."
+            )
+        return "Lista geral. O primeiro disponível é o escolhido."
+
+    def _on_pick_scope_changed(self, position: str) -> None:
+        # O cliente publica a rota em maiúsculas e as chaves da config são
+        # minúsculas; sem normalizar aqui, toda rota pareceria não ter
+        # lista própria e a Central editaria sempre a geral.
+        self._pick_position = position.casefold()
+        self._render_pick_order()
+
+    def _on_pick_config_changed(self, attribute: str) -> None:
+        if attribute in ("pick_priority", "pick_priority_by_position", "auto_pick"):
+            self._render_pick_order()
+
+    def _render_pick_order(self) -> None:
+        scope = self._pick_scope()
+        ids = (
+            self._config.pick_priority_by_position.get(scope, [])
+            if scope
+            else self._config.pick_priority
+        )
+        self._dashboard.set_pick_order(ids, self._scope_label(scope))
+
+    def _on_pick_order_changed(self, ids: list) -> None:
+        """Grava a ordem arrastada na Central na lista que está valendo."""
+        scope = self._pick_scope()
+        if scope:
+            by_position = dict(self._config.pick_priority_by_position)
+            by_position[scope] = list(ids)
+            self._binder.set("pick_priority_by_position", by_position)
+        else:
+            self._binder.set("pick_priority", list(ids))
+        # A página Campeões guarda uma cópia própria das listas; sem este
+        # aviso ela continuaria mostrando a ordem antiga e o próximo
+        # arrasto de lá desfaria o que foi decidido aqui.
+        self._champions.set_pick_list(scope, ids)
+
     def _on_connection_changed(self, connected: bool) -> None:
         self._sidebar.set_connected(connected)
         self._dashboard.ring.set_connected(connected)
@@ -563,6 +680,7 @@ class MainWindow(QWidget):
             # velha não custa nada: sem ninguém a rodar, o bilhete que ela
             # guardaria não é lido por ninguém.
             self._on_predicted_pick_changed(None)
+            self._on_pick_scope_changed("")
             self._dashboard.set_rune_options([], None, {})
 
     def _refresh_ring(self) -> None:
@@ -593,6 +711,14 @@ class MainWindow(QWidget):
         self._drag_offset = None
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if self._antitoxic is not None:
+            # Antes de parar o watcher: o cliente da LCU é dele, e
+            # depois do stop não há mais por onde escrever.
+            self._antitoxic.restore()
+        if self._jungle is not None:
+            # Antes do watcher também: são threads próprias, e o Qt
+            # não espera por elas na saída.
+            self._jungle.stop()
         self._watcher.stop()
         self._watcher.wait(3000)
         if self._icon_loader is not None:

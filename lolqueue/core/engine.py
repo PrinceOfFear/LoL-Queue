@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import time
 from functools import partial
 from typing import Callable, Protocol
@@ -7,7 +8,8 @@ from typing import Callable, Protocol
 from ..config import Config, queue_name
 from ..lcu import endpoints
 from ..lcu.client import ClientClosed, LcuError
-from .phases import END_PHASES, GameflowPhase
+from .delay import Rng, sample
+from .phases import END_PHASES, PLAYING_PHASES, GameflowPhase
 
 MAX_FAILURES = 3
 
@@ -35,6 +37,32 @@ SEARCH_PHASES = (GameflowPhase.LOBBY, GameflowPhase.MATCHMAKING)
 #: Intervalo entre conferências do estado da busca. Espaçado de propósito:
 #: o polling roda a cada 0,25 s e essa pergunta não precisa dessa pressa.
 SEARCH_CHECK_SECONDS = 3.0
+
+#: Janela depois da partida em que a recusa do cliente é esperada, não
+#: erro. Ao voltar da partida o cliente ainda responde 400 com
+#: ALREADY_IN_GAME por alguns segundos, e o registro mostrou isso durar
+#: de 5 a 9. Quarenta e cinco dá margem larga para um cliente lento sem
+#: engolir uma falha de verdade para sempre.
+POSTGAME_GRACE_SECONDS = 45.0
+
+#: Intervalo entre tentativas enquanto o cliente ainda está assentando.
+#: O polling roda a cada 0,2 s: sem isto as três chances queimavam em
+#: dois segundos e o app desistia antes de o cliente ficar pronto.
+QUEUE_RETRY_SECONDS = 2.0
+
+
+#: Fases em que o silêncio da seleção já não serve. Devolver as opções
+#: aqui é o que impede o app de deixar o chat desligado para sempre.
+MUTE_OVER_PHASES = END_PHASES | {GameflowPhase.NONE, GameflowPhase.LOBBY}
+
+
+class MuteController(Protocol):
+    def restore(self) -> bool: ...
+
+
+class JungleWatch(Protocol):
+    def start(self) -> bool: ...
+    def stop(self) -> None: ...
 
 
 class ChampSelectController(Protocol):
@@ -66,20 +94,37 @@ class Engine:
         config: Config,
         log: Callable[[str], None] | None = None,
         now: Callable[[], float] = time.monotonic,
+        rng: Rng = random.uniform,
     ) -> None:
         self._client = client
         self._config = config
         self._log = log or (lambda message: None)
         self._now = now
+        self._rng = rng
         self._enabled = False
         self._phase = GameflowPhase.UNKNOWN
         self._champ_select: ChampSelectController | None = None
+        self._antitoxic: MuteController | None = None
+        self._jungle: JungleWatch | None = None
         self._pending: Callable[[], None] | None = None
         self._acted = False
         self._action_failures = 0
         self._champ_failures = 0
         self._checked_search = 0.0
         self._search_stalled = False
+        # Se a parada chegou a ser anunciada. "Fila retomada" sem a
+        # linha da parada antes é resposta a pergunta que ninguém fez.
+        self._stall_announced = False
+        # Instante em que esta partida pode ser aceita. Sorteado uma vez
+        # por checagem de prontidão e zerado ao trocar de fase.
+        self._accept_at: float | None = None
+        # Fim da última partida, e o instante em que a fila pode começar.
+        # Sobrevivem à troca de fase de propósito: a espera nasce em
+        # EndOfGame e precisa valer quando o lobby aparece.
+        self._match_ended_at: float | None = None
+        self._queue_at: float | None = None
+        self._retry_at = 0.0
+        self._settling = False
         # Convidado = está numa sala de outra pessoa. Fica lembrado
         # depois que a sala some: é justamente ao voltar para a tela
         # inicial que o app abriria uma sala própria e entraria na fila
@@ -99,10 +144,20 @@ class Engine:
         # aconteceu antes disso não vale mais.
         self._guest = False
         self._warned_guest = False
+        # Desligar o motor devolve o chat: quem para o app não deve
+        # continuar mudo sem saber por quê.
+        if not enabled and self._antitoxic is not None:
+            self._antitoxic.restore()
         self._clear_pending()
 
     def set_champ_select(self, controller: ChampSelectController | None) -> None:
         self._champ_select = controller
+
+    def set_antitoxic(self, guard: MuteController | None) -> None:
+        self._antitoxic = guard
+
+    def set_jungle_watch(self, watch: JungleWatch | None) -> None:
+        self._jungle = watch
 
     def handle_phase(self, phase: GameflowPhase) -> None:
         """Reage a uma transição de fase."""
@@ -110,11 +165,39 @@ class Engine:
             self._clear_pending()
         self._phase = phase
 
+        if self._antitoxic is not None and phase in MUTE_OVER_PHASES:
+            # Fora de qualquer proteção do motor ligado: a partida
+            # acabou, e o que era do jogador volta a ser dele.
+            self._antitoxic.restore()
+
+        if self._jungle is not None:
+            # Fora da trava do motor de propósito: quem quer só o aviso
+            # do jungler não deveria ser obrigado a deixar a fila
+            # automática ligada para tê-lo. Só a partida na tela e a
+            # opção marcada decidem.
+            if phase in PLAYING_PHASES:
+                if getattr(self._config, "jungle_callouts", False):
+                    self._jungle.start()
+            else:
+                # Inclui sair da partida por qualquer porta: fim normal,
+                # queda de conexão ou volta ao lobby. Nenhuma delas pode
+                # deixar o app capturando tela.
+                self._jungle.stop()
+
+        if phase is GameflowPhase.CHAMP_SELECT and self._champ_select is not None:
+            # Também com o motor desligado: o controlador é reaproveitado
+            # entre seleções da mesma conexão, então sem isto religar a
+            # automação no meio de uma seleção nova herdava trava e prévia
+            # de campeão da seleção anterior, já encerrada.
+            self._champ_select.reset()
+
         if not self._enabled:
             return
 
-        if phase is GameflowPhase.CHAMP_SELECT and self._champ_select is not None:
-            self._champ_select.reset()
+        if phase in END_PHASES:
+            # Marcado mesmo com a fila automática desligada: se ela for
+            # ligada logo depois, a espera ainda vale.
+            self._note_match_end()
 
         self._pending = self._action_for(phase)
         self._run_pending()
@@ -131,8 +214,12 @@ class Engine:
 
     def _action_for(self, phase: GameflowPhase) -> Callable[[], None] | None:
         if phase is GameflowPhase.READY_CHECK and self._config.auto_accept:
+            if self._waiting_to_accept():
+                return None
             return self._accept_ready_check
         if phase is GameflowPhase.LOBBY and self._config.auto_queue:
+            if self._waiting_after_game():
+                return None
             return self._start_queue
         if phase in END_PHASES and self._config.auto_queue:
             return self._play_again
@@ -142,6 +229,8 @@ class Engine:
 
     def _clear_pending(self) -> None:
         self._pending = None
+        self._accept_at = None
+        self._retry_at = 0.0
         self._acted = False
         self._action_failures = 0
         self._champ_failures = 0
@@ -169,6 +258,11 @@ class Engine:
         """
         if not self._config.auto_queue or self._phase not in SEARCH_PHASES:
             return
+        # Durante a espera ninguém mexe: a busca "parada" logo depois da
+        # partida é o próprio cliente encerrando, e cutucá-la aqui era
+        # metade do barulho que aparecia no registro.
+        if self._waiting_after_game():
+            return
         # A busca de uma sala alheia não é nossa para retomar.
         if self._guest and self._config.queue_only_as_host:
             return
@@ -185,14 +279,21 @@ class Engine:
         if name in LIVE_SEARCH_STATES:
             if self._search_stalled:
                 self._search_stalled = False
-                self._log("Fila retomada.")
+                if self._stall_announced:
+                    self._stall_announced = False
+                    self._log("Fila retomada.")
             return
 
         if not self._search_stalled:
             self._search_stalled = True
-            self._log(f"Busca parada ({name}) — retomando a fila.")
-            for detail in self._search_errors(state):
-                self._log(detail)
+            # Logo depois da partida a busca "parada" é o próprio cliente
+            # encerrando a anterior. A retomada acontece igual; o que não
+            # cabe é chamar de problema o que é rotina.
+            if not self._in_postgame_grace():
+                self._stall_announced = True
+                self._log(f"Busca parada ({name}) — retomando a fila.")
+                for detail in self._search_errors(state):
+                    self._log(detail)
 
         if name in STUCK_SEARCH_STATES and not self._cancel_search():
             return
@@ -249,11 +350,25 @@ class Engine:
         action = self._pending
         if action is None:
             return
+        if self._now() < self._retry_at:
+            return
         try:
             action()
         except ClientClosed:
             raise
         except LcuError as exc:
+            if self._in_postgame_grace():
+                # O cliente ainda está soltando a partida anterior. Isso
+                # não é falha nossa e não pode gastar as tentativas —
+                # era exatamente assim que a fila contínua morria.
+                self._retry_at = self._now() + QUEUE_RETRY_SECONDS
+                if not self._settling:
+                    self._settling = True
+                    self._log(
+                        "O cliente ainda está encerrando a partida "
+                        "— tento de novo em instantes."
+                    )
+                return
             self._action_failures += 1
             self._log(
                 f"Falha em {self._phase.value} "
@@ -268,6 +383,8 @@ class Engine:
             self._pending = None
             self._acted = True
             self._action_failures = 0
+            self._retry_at = 0.0
+            self._settling = False
 
     def _run_champ_select(self) -> None:
         if self._champ_failures >= MAX_FAILURES:
@@ -284,6 +401,61 @@ class Engine:
             )
         else:
             self._champ_failures = 0
+
+    def _note_match_end(self) -> None:
+        """Registra que uma partida acabou agora."""
+        self._match_ended_at = self._now()
+        self._queue_at = None
+        self._settling = False
+
+    def _in_postgame_grace(self) -> bool:
+        """True enquanto a recusa do cliente ainda é o normal do pós-jogo."""
+        if self._match_ended_at is None:
+            return False
+        return self._now() - self._match_ended_at < POSTGAME_GRACE_SECONDS
+
+    def _waiting_after_game(self) -> bool:
+        """Segura a fila pelo tempo que o usuário escolheu.
+
+        O cliente recusa a fila enquanto encerra a partida anterior, e
+        insistir contra isso só rendia erro no registro. Esperar não é
+        perda: a fila não andaria mesmo.
+        """
+        if self._match_ended_at is None:
+            return False
+        if self._queue_at is None:
+            wait = sample(
+                self._config.postgame_delay_min,
+                self._config.postgame_delay_max,
+                self._rng,
+            )
+            self._queue_at = self._match_ended_at + wait
+            if wait:
+                self._log(f"Partida encerrada — entrando na fila em {wait:.0f}s.")
+        return self._now() < self._queue_at
+
+    def _waiting_to_accept(self) -> bool:
+        """Segura o aceite pelo tempo sorteado para esta partida.
+
+        Aceitar no mesmo instante em que a fase muda não deixa janela
+        nenhuma para quem mudou de ideia. Devolver `None` de
+        `_action_for` enquanto a espera corre reaproveita o `_rearm`,
+        que já reavalia a fase a cada tick — uma segunda máquina de
+        espera ao lado dela só teria como discordar.
+
+        Nada aqui protege de nada: a Riot tolera o aceite automático. O
+        que o atraso compra é tempo de reagir.
+        """
+        if self._accept_at is None:
+            wait = sample(
+                self._config.accept_delay_min,
+                self._config.accept_delay_max,
+                self._rng,
+            )
+            self._accept_at = self._now() + wait
+            if wait:
+                self._log(f"Partida encontrada — aceitando em {wait:.1f}s.")
+        return self._now() < self._accept_at
 
     def _accept_ready_check(self) -> None:
         self._client.post(endpoints.READY_CHECK_ACCEPT)
@@ -305,7 +477,16 @@ class Engine:
                 self._log("Sem permissão para iniciar a fila neste lobby.")
             return
         self._client.post(endpoints.MATCHMAKING_SEARCH)
-        if announce:
+        # A retomada de uma busca parada entra calada, senão repetiria a
+        # mesma linha de poucos em poucos segundos. Mas quando houve uma
+        # espera anunciada, ficar calado agora vira dúvida: entrou ou
+        # travou? Então o desfecho sai de qualquer jeito.
+        esperou = self._queue_at is not None
+        # A partida anterior deixou de importar: sem isto a próxima vez
+        # que o lobby aparecesse herdaria a espera desta.
+        self._match_ended_at = None
+        self._queue_at = None
+        if announce or esperou:
             self._log("Entrando na fila.")
 
     def _note_role(self, lobby: dict) -> None:
@@ -335,6 +516,9 @@ class Engine:
 
     def _play_again(self) -> None:
         self._client.post(endpoints.PLAY_AGAIN)
+        # Conta a espera daqui, e não da tela de estatísticas: é agora
+        # que o cliente começa a soltar a partida.
+        self._note_match_end()
         self._log("Voltando ao lobby.")
 
     def _open_lobby(self) -> None:

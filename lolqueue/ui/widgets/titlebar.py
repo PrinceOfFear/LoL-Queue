@@ -15,12 +15,18 @@ class TitleBar(QWidget):
         self.setFixedHeight(TITLEBAR_HEIGHT)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(24, 0, 12, 0)
-        layout.addWidget(QLabel("LOL QUEUE"))
+        layout.setContentsMargins(26, 0, 12, 0)
+        title = QLabel("CENTRAL DE FILA")
+        title.setObjectName("windowTitle")
+        layout.addWidget(title)
         layout.addStretch(1)
+        mode = QLabel("AUTOMAÇÃO")
+        mode.setObjectName("topPill")
+        layout.addWidget(mode)
+        layout.addSpacing(10)
         for text, name, slot in (
-            ("—", "windowButton", minimize),
-            ("✕", "closeButton", close),
+            ("−", "windowButton", minimize),
+            ("×", "closeButton", close),
         ):
             button = QPushButton(text)
             button.setObjectName(name)

@@ -227,6 +227,14 @@ STYLESHEET = f"""
     border: 1px solid rgba(87, 133, 171, 92);
     border-radius: 5px;
 }}
+/* Retrato de campeão na análise: cabeçalho, confrontos e duplas. Sem
+   moldura, um retrato que ainda não baixou vira um buraco no meio da
+   linha; com ela, mesmo vazio a linha continua com formato de linha. */
+#miniPortrait {{
+    background: rgba(4, 16, 32, 140);
+    border: 1px solid rgba(127, 165, 198, 92);
+    border-radius: 7px;
+}}
 #cardLabel {{
     color: #B7C6D6;
     font-size: 10px;
@@ -238,6 +246,12 @@ STYLESHEET = f"""
     font-size: 16px;
     font-weight: 650;
 }}
+/* Taxa de vitória nos confrontos e duplas da análise: verde para o que
+   pesa a favor, vermelho para o que pesa contra — a mesma leitura de
+   cor do traço lateral de vitória/derrota do histórico, só que em
+   texto porque aqui a linha não tem borda própria. */
+#cardValue[trend="up"] {{ color: {Palette.ACTIVE}; }}
+#cardValue[trend="down"] {{ color: {Palette.DANGER}; }}
 #hint {{
     color: #AEBECD;
     font-size: 11px;
@@ -315,6 +329,37 @@ STYLESHEET = f"""
     font-size: 13px;
     font-weight: 700;
 }}
+/* A ordem de escolha, editável dentro da Central de Fila ---------------- */
+#orderCard {{
+    background: rgba(16, 34, 52, 150);
+    border: 1px solid rgba(127, 165, 198, 62);
+    border-radius: 10px;
+}}
+#orderScope {{
+    color: #9FB3C6;
+    font-size: 10px;
+}}
+#orderList {{
+    background: rgba(9, 22, 36, 120);
+    border: 1px solid rgba(127, 165, 198, 46);
+    border-radius: 8px;
+    font-size: 11px;
+}}
+#orderList::item {{ padding: 4px 6px; }}
+#orderButton {{
+    background: rgba(28, 58, 87, 140);
+    border: 1px solid rgba(127, 165, 198, 90);
+    border-radius: 7px;
+    color: {Palette.TEXT};
+    font-size: 10px;
+    font-weight: 700;
+    padding: 5px 8px;
+}}
+#orderButton:hover {{
+    background: rgba(10, 200, 185, 34);
+    border: 1px solid rgba(10, 200, 185, 130);
+}}
+#orderButton:disabled {{ color: #5B7186; }}
 #runeOption {{
     background: rgba(28, 58, 87, 140);
     border: 1px solid rgba(127, 165, 198, 90);

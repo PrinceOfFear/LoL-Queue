@@ -6,7 +6,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .config import Config
-from .resources import icon_path
+from .resources import icon_candidates
 from .ui.window import MainWindow
 
 #: Identidade do app para o Windows. Sem ela, rodando pelo Python, a
@@ -46,11 +46,31 @@ def _claim_taskbar_identity() -> None:
         pass
 
 
+def _app_icon() -> QIcon:
+    """O primeiro ícone que o Qt realmente conseguir abrir.
+
+    `QIcon` de um arquivo ilegível não levanta erro: devolve um ícone
+    nulo, o Qt não chama `WM_SETICON`, e a janela aparece sem ícone na
+    barra de tarefas sem nada explicando por quê. Perguntar `isNull()`
+    é o que transforma esse silêncio em escolha do próximo formato.
+    """
+    for caminho in icon_candidates():
+        icone = QIcon(str(caminho))
+        if not icone.isNull():
+            return icone
+    return QIcon()
+
+
 def main() -> int:
     _claim_taskbar_identity()
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon(str(icon_path())))
+    icone = _app_icon()
+    app.setWindowIcon(icone)
     window = MainWindow(Config.load())
+    # Também na janela: o ícone do QApplication é só o padrão de quem
+    # não tem o seu, e no Windows quem alimenta a barra de tarefas é a
+    # janela nativa.
+    window.setWindowIcon(icone)
     _install_hotkeys(window)
     window.show()
     return app.exec()
