@@ -15,3 +15,6 @@ _legado/
 # Atalho gerado por tools/criar-atalho.ps1 (aponta para o pythonw desta máquina)
 *.lnk
 dist-standalone/
+
+# Amostras de voz geradas por tools/comparar_vozes.py (regeraveis, nao versionar)
+docs/amostras-voz/

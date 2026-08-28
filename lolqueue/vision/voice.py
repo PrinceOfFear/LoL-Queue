@@ -36,22 +36,35 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Iterable
 
-#: As vozes neurais em português do Brasil que o serviço oferece.
-#: A interface escolhe entre estas; qualquer outra coisa vira o padrão.
+#: As vozes que a interface oferece, das melhores para as piores de
+#: entender. As multilíngues vêm primeiro de propósito: são a geração
+#: nova do serviço e, mais importante aqui, pronunciam nome de campeão
+#: sem mastigar. A palavra que o jogador não pode perder no aviso é
+#: justamente o nome, e ele quase sempre vem do inglês — as vozes
+#: antigas, presas ao português, transformam "Kha'Zix" e "Warwick" em
+#: ruído bem no meio da frase.
 VOICES = (
+    "pt-BR-ThalitaMultilingualNeural",
+    "en-US-AndrewMultilingualNeural",
+    "en-US-BrianMultilingualNeural",
+    "en-US-EmmaMultilingualNeural",
+    "en-US-AvaMultilingualNeural",
     "pt-BR-AntonioNeural",
     "pt-BR-FranciscaNeural",
-    "pt-BR-ThalitaMultilingualNeural",
 )
 
 DEFAULT_VOICE = VOICES[0]
 
 #: Nome de cada voz na interface. O identificador do serviço não diz
-#: nada a quem vai escolher.
+#: nada a quem vai escolher; o sotaque, sim.
 VOICE_LABELS = {
-    "pt-BR-AntonioNeural": "Antônio (masculina)",
-    "pt-BR-FranciscaNeural": "Francisca (feminina)",
-    "pt-BR-ThalitaMultilingualNeural": "Thalita (feminina)",
+    "pt-BR-ThalitaMultilingualNeural": "Thalita — brasileira, feminina",
+    "en-US-AndrewMultilingualNeural": "Andrew — sotaque leve, masculina",
+    "en-US-BrianMultilingualNeural": "Brian — sotaque leve, masculina",
+    "en-US-EmmaMultilingualNeural": "Emma — sotaque leve, feminina",
+    "en-US-AvaMultilingualNeural": "Ava — sotaque leve, feminina",
+    "pt-BR-AntonioNeural": "Antônio — brasileira, masculina (antiga)",
+    "pt-BR-FranciscaNeural": "Francisca — brasileira, feminina (antiga)",
 }
 
 #: Quantas frases sintetizar ao mesmo tempo na preparação. O gargalo é a
