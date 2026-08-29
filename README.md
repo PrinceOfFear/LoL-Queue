@@ -152,6 +152,20 @@ assinatura (o app abria e morria com "Imagem Incorreta", status
 - **Respeita a sala de quem convidou**: com "só mexer na fila quando eu
   for o dono da sala" ligado, na sala de um amigo ele não inicia a busca
   nem abre sala própria, mas continua aceitando, banindo e escolhendo.
+- **Guarda um perfil por conta**: lista de campeões, rotas pedidas,
+  tecla do Flash e tempos são de quem está logado, não do computador.
+  Uma conta é marcada como principal, e quem nunca entrou aqui começa
+  com o app dela — é o que se quer ao jogar na conta de outra pessoa.
+- **Leva as configurações de dentro do LoL entre as contas**: com a
+  conta principal logada, "Guardar config do jogo" tira uma cópia das
+  teclas das habilidades, dos feitiços de invocador e dos itens, da
+  movimentação, da interface, da câmera e do minimapa. Toda conta que
+  entrar depois recebe essas configurações sozinha, alguns segundos
+  após o login — o cliente ainda está baixando os ajustes da conta
+  nova quando anuncia quem entrou, então a cópia espera e é refeita
+  uma segunda vez. Qualidade gráfica e modo de vídeo ficam de fora de
+  propósito: são do computador, e o modo de vídeo é justamente o que a
+  captura do minimapa lê.
 - **Marca fila desligada**: a Riot liga e desliga fila por região e
   temporada, e a lista mostra quais o cliente não aceita agora.
 

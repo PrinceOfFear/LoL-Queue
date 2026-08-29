@@ -30,6 +30,12 @@ class AccountsCard(QFrame):
     main_requested = Signal(str)
     #: A conta que o usuário quer tirar do histórico.
     forget_requested = Signal(str)
+    #: A conta cujas configurações de dentro do jogo devem virar modelo.
+    capture_requested = Signal(str)
+    #: A conta que deve largar o modelo que guardou.
+    clear_requested = Signal(str)
+    #: A conta que quer receber o modelo agora, sem esperar.
+    apply_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -54,6 +60,19 @@ class AccountsCard(QFrame):
         note.setObjectName("hint")
         note.setWordWrap(True)
         layout.addWidget(note)
+
+        game = QLabel(
+            "Com a conta principal logada, “Guardar config do jogo” tira "
+            "uma cópia das configurações de dentro do LoL — teclas das "
+            "habilidades, dos feitiços de invocador e dos itens, "
+            "movimentação, interface, câmera e minimapa. Toda conta que "
+            "entrar depois recebe essas configurações sozinha, alguns "
+            "segundos após o login. Qualidade gráfica e modo de vídeo "
+            "ficam de fora: são do computador, não de quem joga."
+        )
+        game.setObjectName("hint")
+        game.setWordWrap(True)
+        layout.addWidget(game)
 
         self._rows = QVBoxLayout()
         self._rows.setContentsMargins(0, 4, 0, 0)
@@ -82,21 +101,30 @@ class AccountsCard(QFrame):
 
         entries = list(entries)
         self._empty.setVisible(not entries)
+        model = any(
+            key == main and getattr(account, "game_settings", None)
+            for key, account in entries
+        )
         for key, account in entries:
-            self._rows.addWidget(self._row(key, account, active, main))
+            self._rows.addWidget(self._row(key, account, active, main, model))
 
-    def _row(self, key: str, account, active: str, main: str) -> QWidget:
+    def _row(
+        self, key: str, account, active: str, main: str, model: bool = False
+    ) -> QWidget:
         row = QFrame()
         row.setObjectName("optionCard")
         line = QHBoxLayout(row)
         line.setContentsMargins(14, 8, 14, 8)
         line.setSpacing(9)
 
+        saved = bool(getattr(account, "game_settings", None))
         marks = []
         if key == main:
             marks.append("principal")
         if key == active:
             marks.append("logada agora")
+        if saved:
+            marks.append("config do jogo guardada")
         label = QLabel(account.label + (f"  ·  {', '.join(marks)}" if marks else ""))
         label.setObjectName("cardLabel")
         line.addWidget(label)
@@ -107,6 +135,37 @@ class AccountsCard(QFrame):
             promote.setObjectName("orderButton")
             promote.clicked.connect(lambda _=False, k=key: self.main_requested.emit(k))
             line.addWidget(promote)
+
+        # As configurações de dentro do jogo só podem ser lidas e
+        # escritas na conta que está logada — é a única que o cliente do
+        # LoL tem na mão. Por isso os botões só aparecem nessa linha.
+        if key == active:
+            if key == main:
+                capture = QPushButton(
+                    "Atualizar config do jogo" if saved else "Guardar config do jogo"
+                )
+                capture.setObjectName("orderButton")
+                capture.clicked.connect(
+                    lambda _=False, k=key: self.capture_requested.emit(k)
+                )
+                line.addWidget(capture)
+                if saved:
+                    stop = QPushButton("Parar de copiar")
+                    stop.setObjectName("orderButton")
+                    stop.clicked.connect(
+                        lambda _=False, k=key: self.clear_requested.emit(k)
+                    )
+                    line.addWidget(stop)
+            elif model:
+                # Rede de segurança para quando o cliente termina de
+                # carregar a conta depois da cópia automática e escreve
+                # por cima dela.
+                again = QPushButton("Aplicar config do jogo")
+                again.setObjectName("orderButton")
+                again.clicked.connect(
+                    lambda _=False, k=key: self.apply_requested.emit(k)
+                )
+                line.addWidget(again)
 
         forget = QPushButton("Esquecer")
         forget.setObjectName("orderButton")

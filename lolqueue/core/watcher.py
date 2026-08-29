@@ -82,6 +82,9 @@ class PhaseWatcher(QThread):
     #: Quem entrou na conta, quando muda. `object` porque viaja um
     #: `Identity`, e porque a primeira leitura pode nunca vir.
     identity_changed = Signal(object)
+    #: O arquivo de contas mudou fora da janela — hoje, quando as
+    #: configurações do jogo são guardadas. Só um toque para redesenhar.
+    accounts_changed = Signal()
 
     def __init__(self, engine_factory: Callable[[LcuClient], object]) -> None:
         super().__init__()
@@ -185,3 +188,9 @@ class PhaseWatcher(QThread):
             return
         self._identity_key = key
         self.identity_changed.emit(identity)
+        if self._engine is not None:
+            # Direto, sem passar pela janela: a cópia das configurações
+            # do jogo precisa do cliente da LCU, que só existe nesta
+            # thread. A janela recebe o mesmo anúncio pelo sinal acima e
+            # cuida da parte dela, que são os ajustes do app.
+            self._engine.handle_identity(identity)

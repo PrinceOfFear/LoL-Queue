@@ -982,6 +982,49 @@ def test_the_lobby_stops_the_watch_even_without_an_end_of_game():
     assert vigia.stops == 1
 
 
+
+# ---------- a cópia das configurações do jogo ----------
+
+
+class CopiaFalsa:
+    def __init__(self):
+        self.chegadas = []
+        self.voltas = 0
+
+    def account_arrived(self, identity):
+        self.chegadas.append(identity)
+
+    def tick(self):
+        self.voltas += 1
+
+
+def com_copia():
+    copia = CopiaFalsa()
+    engine = Engine(FakeLcuClient(), Config())
+    engine.set_game_sync(copia)
+    return engine, copia
+
+
+def test_the_game_settings_copy_does_not_need_the_queue_engine_on():
+    """Copiar teclas não é fila automática e não pode depender dela."""
+    engine, copia = com_copia()
+    engine.set_enabled(False)
+    engine.tick()
+    assert copia.voltas == 1
+
+
+def test_the_engine_passes_on_who_logged_in():
+    engine, copia = com_copia()
+    engine.handle_identity("alguem")
+    assert copia.chegadas == ["alguem"]
+
+
+def test_an_engine_without_the_copy_still_turns():
+    """A cópia é opcional: sem ela o motor não pode quebrar."""
+    engine = Engine(FakeLcuClient(), Config())
+    engine.handle_identity("alguem")
+    engine.tick()
+
 # ---------- rotas pedidas na fila ----------
 
 

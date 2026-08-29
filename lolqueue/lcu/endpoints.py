@@ -35,6 +35,18 @@ BANNABLE_CHAMPIONS = "/lol-champ-select/v1/bannable-champion-ids"
 CHAMPION_SUMMARY = "/lol-game-data/assets/v1/champion-summary.json"
 CHAMPION_ICON = "/lol-game-data/assets/v1/champion-icons/{champion_id}.png"
 CURRENT_SUMMONER = "/lol-summoner/v1/current-summoner"
+
+#: As configurações do jogo em si, não do cliente: interface, minimapa,
+#: câmera, volume, o que aparece na tela durante a partida. GET devolve
+#: o bloco inteiro; PATCH mescla só o que for mandado — o resto fica
+#: como estava (confirmado contra o cliente real, gravando de volta o
+#: mesmo valor e comparando o antes e o depois byte a byte).
+GAME_SETTINGS = "/lol-game-settings/v1/game-settings"
+#: As teclas: habilidades, feitiços de invocador, itens, movimentação,
+#: pings, câmera, loja. `GameEvents` tem as teclas propriamente ditas e
+#: `Quickbinds` diz quais habilidades saem no toque (smartcast). PATCH
+#: mescla, igual à rota de cima.
+INPUT_SETTINGS = "/lol-game-settings/v1/input-settings"
 #: Rota do Riot Client (não do LCU), servida pela mesma conexão. O
 #: campo `region` vem em maiúsculas ("BR", "KR", "EUNE") — exatamente
 #: o formato que o MCP do OP.GG pede para identificar o servidor.

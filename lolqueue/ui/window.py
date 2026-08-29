@@ -22,6 +22,7 @@ from ..core.antitoxic import MuteGuard
 from ..core.champ_select import ChampSelectController
 from ..core.champions import ChampionCatalog
 from ..core.engine import Engine
+from ..core.gamesettings import GameSettingsSync
 from ..core.icons import AssetStore, IconStore
 from ..core.journal import Journal
 from ..core.loadout import Loadout
@@ -88,6 +89,10 @@ class MainWindow(QWidget):
         # guarda acima: fechar o app no meio da partida escaparia do
         # motor e deixaria uma thread capturando tela.
         self._jungle: JungleSession | None = None
+        # Quem copia as configurações de dentro do jogo. Nasce com a
+        # conexão, na thread da vigia; até lá os botões avisam que o
+        # cliente do LoL precisa estar aberto.
+        self._game_sync: GameSettingsSync | None = None
         # Filas que a Riot desligou nesta região. Descobertas na thread
         # do watcher e lidas na da GUI, igual ao catálogo.
         self._blocked_queues: set[int] | None = None
@@ -199,6 +204,9 @@ class MainWindow(QWidget):
         self._settings = SettingsPage(self._binder)
         self._settings.accounts.main_requested.connect(self._on_main_account)
         self._settings.accounts.forget_requested.connect(self._on_forget_account)
+        self._settings.accounts.capture_requested.connect(self._on_capture_game)
+        self._settings.accounts.clear_requested.connect(self._on_clear_game)
+        self._settings.accounts.apply_requested.connect(self._on_apply_game)
 
         # A ordem tem de bater com `SECTIONS` da barra lateral: é o
         # índice do botão que escolhe a página.
@@ -261,6 +269,7 @@ class MainWindow(QWidget):
         self._watcher.rune_options_changed.connect(self._dashboard.set_rune_options)
         self._watcher.analysis_changed.connect(self._on_analysis_changed)
         self._watcher.identity_changed.connect(self._on_identity_changed)
+        self._watcher.accounts_changed.connect(self._refresh_accounts)
         self._watcher.start()
 
     def _make_engine(self, client) -> Engine:
@@ -298,6 +307,18 @@ class MainWindow(QWidget):
         jungle = JungleSession(self._config, log=self._watcher.message.emit)
         self._jungle = jungle
         engine.set_jungle_watch(jungle)
+        # A cópia das configurações de dentro do jogo. Nasce aqui porque
+        # é aqui que existe o cliente da LCU; a janela só deixa bilhetes
+        # nela, e quem os executa é a thread da vigia.
+        sync = GameSettingsSync(
+            client,
+            self._accounts,
+            save=self._accounts.save,
+            log=self._watcher.message.emit,
+            on_change=self._watcher.accounts_changed.emit,
+        )
+        self._game_sync = sync
+        engine.set_game_sync(sync)
         engine.set_champ_select(
             ChampSelectController(
                 client,
@@ -766,6 +787,42 @@ class MainWindow(QWidget):
         self._refresh_accounts()
         if account is not None:
             self._log_message(f"Conta {account.label} esquecida.")
+
+    def _on_capture_game(self, key: str) -> None:
+        """Guarda as configurações de dentro do jogo da conta logada.
+
+        Quem lê o cliente é a thread da vigia; aqui só fica o bilhete.
+        A tela é redesenhada na volta seguinte do relógio das contas,
+        que é quando o bilhete já virou fotografia.
+        """
+        if not self._ask_sync("guardar"):
+            return
+        self._game_sync.request_capture(key)
+
+    def _on_clear_game(self, key: str) -> None:
+        """Para de copiar: apaga a fotografia, sem tocar no cliente."""
+        if not self._accounts.set_game_settings(key, {}):
+            return
+        self._save_accounts()
+        self._refresh_accounts()
+        self._log_message(
+            "Configurações do jogo apagadas. Cada conta volta a usar as "
+            "que o cliente do LoL já tinha nela."
+        )
+
+    def _on_apply_game(self, key: str) -> None:
+        if not self._ask_sync("aplicar"):
+            return
+        self._game_sync.request_apply(key)
+
+    def _ask_sync(self, verb: str) -> bool:
+        """Sem cliente conectado não há o que ler nem onde escrever."""
+        if self._game_sync is None:
+            self._log_message(
+                f"Abra o cliente do LoL para {verb} as configurações do jogo."
+            )
+            return False
+        return True
 
     def _refresh_accounts(self) -> None:
         self._settings.accounts.show_accounts(

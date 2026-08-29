@@ -106,6 +106,7 @@ class Engine:
         self._champ_select: ChampSelectController | None = None
         self._antitoxic: MuteController | None = None
         self._jungle: JungleWatch | None = None
+        self._game_sync = None
         self._pending: Callable[[], None] | None = None
         self._acted = False
         self._action_failures = 0
@@ -165,6 +166,20 @@ class Engine:
     def set_jungle_watch(self, watch: JungleWatch | None) -> None:
         self._jungle = watch
 
+    def set_game_sync(self, sync) -> None:
+        """Quem copia as configurações do jogo entre contas.
+
+        Mora aqui porque o motor é o único objeto que roda na thread da
+        vigia com o cliente da LCU na mão — não porque a cópia tenha a
+        ver com fila automática. Ver `handle_identity` e `tick`.
+        """
+        self._game_sync = sync
+
+    def handle_identity(self, identity) -> None:
+        """Outra conta entrou no cliente."""
+        if self._game_sync is not None:
+            self._game_sync.account_arrived(identity)
+
     def handle_phase(self, phase: GameflowPhase) -> None:
         """Reage a uma transição de fase."""
         if phase is not self._phase:
@@ -210,6 +225,12 @@ class Engine:
 
     def tick(self) -> None:
         """Chamado a cada ciclo de polling, para trabalho contínuo."""
+        if self._game_sync is not None:
+            # Antes da trava do motor, como o aviso do jungler: copiar
+            # as configurações do jogo não é fila automática, e exigir
+            # o motor ligado para isso não faria sentido para quem só
+            # quer entrar na conta de outro e achar as teclas no lugar.
+            self._game_sync.tick()
         if not self._enabled:
             return
         self._watch_search()

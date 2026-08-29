@@ -20,6 +20,7 @@ ou não gravado. Perdê-lo custa os perfis, não a config em uso.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -78,6 +79,11 @@ class Account:
     region: str = ""
     last_seen: str = ""
     settings: dict = field(default_factory=dict)
+    #: As configurações de dentro do jogo — teclas, interface, câmera —
+    #: como o cliente do LoL as devolve. Ficam à parte de `settings`
+    #: porque não são do app: `settings` é a config daqui, e esta é uma
+    #: fotografia do jogo, guardada só na conta que serve de modelo.
+    game_settings: dict = field(default_factory=dict)
 
     @classmethod
     def from_raw(cls, raw) -> "Account | None":
@@ -87,11 +93,13 @@ class Account:
         if not isinstance(label, str) or not label:
             return None
         settings = raw.get("settings")
+        game = raw.get("game_settings")
         return cls(
             label=label,
             region=str(raw.get("region") or ""),
             last_seen=str(raw.get("last_seen") or ""),
             settings=settings if isinstance(settings, dict) else {},
+            game_settings=game if isinstance(game, dict) else {},
         )
 
 
@@ -127,6 +135,11 @@ class Accounts:
         self.main = main
         self.accounts: dict[str, Account] = dict(accounts or {})
         self._now = now or (lambda: datetime.now().isoformat(timespec="seconds"))
+        # Duas threads gravam este arquivo: a janela, quando o usuário
+        # mexe nos ajustes, e a vigia da conexão, quando copia as
+        # configurações do jogo. A gravação já é inteira-ou-nada; o
+        # cadeado impede que uma troque o `.part` da outra no meio.
+        self._lock = threading.Lock()
         if self.main not in self.accounts:
             self.main = ""
 
@@ -169,14 +182,15 @@ class Accounts:
             },
         }
         temp = target.with_name(target.name + ".part")
-        try:
-            temp.write_text(
-                json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-            temp.replace(target)
-        except OSError:
-            temp.unlink(missing_ok=True)
-            raise
+        with self._lock:
+            try:
+                temp.write_text(
+                    json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+                temp.replace(target)
+            except OSError:
+                temp.unlink(missing_ok=True)
+                raise
 
     # -- uso ------------------------------------------------------------
 
@@ -235,6 +249,27 @@ class Accounts:
             return False
         self.main = key
         return True
+
+    def set_game_settings(self, key: str, snapshot: dict) -> bool:
+        """Guarda na conta a fotografia das configurações do jogo.
+
+        Fotografia vazia apaga a que havia: é assim que o usuário
+        desliga a cópia sem esquecer a conta inteira.
+        """
+        account = self.accounts.get(key)
+        if account is None:
+            return False
+        account.game_settings = dict(snapshot or {})
+        return True
+
+    def game_settings_of(self, key: str) -> dict:
+        """O que a conta guardou do jogo. Vazio se não guardou nada."""
+        account = self.accounts.get(key)
+        return dict(account.game_settings) if account is not None else {}
+
+    def main_game_settings(self) -> dict:
+        """O modelo a copiar: o que a conta principal guardou."""
+        return self.game_settings_of(self.main) if self.main else {}
 
     def forget(self, key: str) -> bool:
         """Tira uma conta do histórico.

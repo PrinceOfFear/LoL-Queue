@@ -180,6 +180,21 @@ def test_another_account_is_announced(monkeypatch):
     assert [identidade.game_name for identidade in visto] == ["Thiago", "Amigo"]
 
 
+def test_the_engine_hears_the_switch_on_the_thread_that_has_the_client(monkeypatch):
+    """A cópia das configurações do jogo precisa da LCU, que só existe
+    nesta thread — por isso o aviso vai direto ao motor, sem passar
+    pela janela."""
+    watcher, _ = watcher_falando(monkeypatch, [quem()])
+    ouvidas = []
+    watcher._engine = type(
+        "MotorFalso", (), {"handle_identity": lambda self, i: ouvidas.append(i)}
+    )()
+
+    watcher._check_identity(object())
+
+    assert [identidade.game_name for identidade in ouvidas] == ["Thiago"]
+
+
 def test_an_incomplete_answer_is_not_a_switch(monkeypatch):
     """Cliente subindo responde pela metade; isso não reconfigura nada."""
     watcher, visto = watcher_falando(monkeypatch, [None, None])
@@ -187,3 +202,84 @@ def test_an_incomplete_answer_is_not_a_switch(monkeypatch):
     watcher._check_identity(object())
 
     assert visto == []
+
+
+# --- as configurações de dentro do jogo, vistas do cartão ---------------
+
+
+def botoes(window) -> list[str]:
+    """Os botões das linhas desenhadas agora.
+
+    Pelo layout e não por `findChildren`: as linhas antigas saem com
+    `deleteLater`, que sem laço de eventos ainda não rodou, e elas
+    apareceriam aqui como se estivessem na tela.
+    """
+    linhas = window._settings.accounts._rows
+    textos = []
+    for indice in range(linhas.count()):
+        linha = linhas.itemAt(indice).widget()
+        if linha is not None:
+            textos += [b.text() for b in linha.findChildren(QtWidgets.QPushButton)]
+    return textos
+
+
+def test_only_the_account_that_is_logged_in_offers_to_save_the_game_settings(window):
+    """Só dá para ler o jogo da conta que o cliente tem na mão."""
+    window._on_identity_changed(quem())
+    window._on_identity_changed(quem("Amigo", "BR2"))
+    window._on_identity_changed(quem())
+
+    assert "Guardar config do jogo" in botoes(window)
+    assert botoes(window).count("Guardar config do jogo") == 1
+
+
+def test_an_account_that_is_not_the_main_one_gets_the_button_to_receive(window):
+    """Rede de segurança para quando o cliente escreve por cima."""
+    window._on_identity_changed(quem())
+    window._accounts.set_game_settings(window._accounts.main, {"input": {"a": 1}})
+    window._on_identity_changed(quem("Amigo", "BR2"))
+
+    assert "Aplicar config do jogo" in botoes(window)
+    assert "Guardar config do jogo" not in botoes(window)
+
+
+def test_without_a_model_nobody_is_offered_a_copy(window):
+    window._on_identity_changed(quem())
+    window._on_identity_changed(quem("Amigo", "BR2"))
+
+    assert "Aplicar config do jogo" not in botoes(window)
+
+
+def test_stopping_the_copy_erases_the_model(window):
+    window._on_identity_changed(quem())
+    window._accounts.set_game_settings(window._accounts.main, {"input": {"a": 1}})
+    window._on_clear_game(window._accounts.main)
+
+    assert window._accounts.main_game_settings() == {}
+    assert "Parar de copiar" not in botoes(window)
+
+
+def test_asking_without_the_client_open_explains_instead_of_failing(window):
+    """Sem cliente aberto não há o que ler; isso não pode virar crash."""
+    ditas = []
+    window._log_message = ditas.append
+    window._on_identity_changed(quem())
+
+    window._on_capture_game(window._accounts.main)
+    window._on_apply_game(window._accounts.main)
+
+    assert [linha for linha in ditas if "Abra o cliente do LoL" in linha] == [
+        "Abra o cliente do LoL para guardar as configurações do jogo.",
+        "Abra o cliente do LoL para aplicar as configurações do jogo.",
+    ]
+
+
+def test_the_note_is_left_for_the_thread_that_holds_the_client(window):
+    """A janela não fala com a LCU: ela deixa o bilhete e segue."""
+    from lolqueue.core.gamesettings import GameSettingsSync
+
+    window._on_identity_changed(quem())
+    window._game_sync = GameSettingsSync(object(), window._accounts)
+    window._on_capture_game(window._accounts.main)
+
+    assert window._game_sync._capture == window._accounts.main
