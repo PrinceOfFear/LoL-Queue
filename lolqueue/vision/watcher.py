@@ -76,6 +76,22 @@ MIN_GAP_SECONDS = 2.5
 #: sempre esperou.
 URGENCY_RANK = {LONGE: 0, MEDIO: 1, PERTO: 2}
 
+# Quantos quadros entram na mediana da posição antes de perguntar em que
+# zona o ícone está. A cinco quadros por segundo, cinco é um segundo de
+# janela: o bastante para o tremor do casamento sumir e pouco para um
+# Flash aparecer, já que a mediana ignora um salto isolado e acompanha
+# um deslocamento que se mantém.
+SMOOTH_FRAMES = 5
+
+# Quadros seguidos que uma zona nova precisa somar antes de valer.
+STEADY_FRAMES = 2
+
+# A válvula da teimosia. Um campeão pode parar exatamente em cima de uma
+# divisa, e aí a folga espacial nunca se cumpre: sem esta saída o nome
+# antigo ficaria valendo até ele sair dali. Dois segundos insistindo na
+# mesma zona valem mais que a folga.
+STUBBORN_FRAMES = 10
+
 #: Quanto tempo um aviso do jungler ainda vale depois de calculado.
 #: Passado o prazo sem ter começado a tocar, ele é descartado em vez de
 #: dito: a fila da voz não é instantânea, e um aviso atrasado não é um
@@ -317,9 +333,13 @@ class JungleWatcher:
         self._said: dict[str, tuple[float, int]] = {}
         self._last_said = 0.0
         self._last_level = 0
-        # A zona vista no quadro anterior, que não é a zona dita: ver
+        # Posição, zona sustentada e zona candidata: ver `_smooth` e
         # `_steady`.
-        self._zone_seen = ""
+        self._recent: list[tuple[float, float]] = []
+        self._zone_seen: tuple[str, int] | None = None
+        self._zone_streak = 0
+        self._zone_hold: tuple[str, int] | None = None
+        self._zone_level = 0
         self._blind_since: float | None = None
         self._blind_warned = False
         # Qual captura respondeu por último: "dxgi", "gdi" ou vazio
@@ -409,7 +429,7 @@ class JungleWatcher:
         self._said.clear()
         self._last_said = 0.0
         self._last_level = 0
-        self._zone_seen = ""
+        self._forget_zone()
         self._blind_since = None
         self._blind_warned = False
         self._strategy = ""
@@ -488,14 +508,15 @@ class JungleWatcher:
         if achado is None:
             # Perdeu o rastro: a próxima zona a aparecer é a primeira de
             # um reaparecimento, e essa não espera confirmação nenhuma.
-            self._zone_seen = ""
+            # A janela da mediana vai junto — misturar o antes e o
+            # depois de um sumiço inventa uma posição intermediária que
+            # o campeão nunca ocupou.
+            self._forget_zone()
             return None
 
-        mx, my = mapa.to_map(achado.x, achado.y)
+        mx, my = self._smooth(*mapa.to_map(achado.x, achado.y))
         aviso = announce(jungler.champion, mx, my, jogo)
-        firme = self._steady(aviso)
-        self._zone_seen = aviso.zone_key
-        if not firme or not self._due(aviso, agora):
+        if not self._steady(aviso) or not self._due(aviso, agora):
             return None
         nivel = URGENCY_RANK.get(aviso.urgency, 1)
         self._said[aviso.zone_key] = (agora, nivel)
@@ -705,25 +726,89 @@ class JungleWatcher:
         self._detector = Detector(moldes)
         return self._detector
 
+    def _forget_zone(self) -> None:
+        """Esquece onde ele estava. Usado quando o rastro se perde."""
+        self._recent.clear()
+        self._zone_seen = None
+        self._zone_streak = 0
+        self._zone_hold = None
+        self._zone_level = 0
+
+    def _smooth(self, mx: float, my: float) -> tuple[float, float]:
+        """A mediana das últimas posições, em vez da última posição.
+
+        O pico da correlação não para quieto: entre um quadro e outro ele
+        anda um ou dois pixels sem o campeão ter saído do lugar. Sobre a
+        divisa de duas zonas esse tremor vira nome trocado, e é o que a
+        voz entrega como "ele foi para outro lugar".
+
+        Mediana, e não média, por causa do Flash e do quadro solitário em
+        que o casamento cai num pedaço parecido do mapa: a média seria
+        puxada para um ponto onde ninguém esteve, enquanto a mediana
+        descarta o intruso e só se move quando a nova posição vira
+        maioria.
+        """
+        self._recent.append((mx, my))
+        del self._recent[:-SMOOTH_FRAMES]
+        xs = sorted(p[0] for p in self._recent)
+        ys = sorted(p[1] for p in self._recent)
+        meio = len(xs) // 2
+        if len(xs) % 2:
+            return xs[meio], ys[meio]
+        return (xs[meio - 1] + xs[meio]) / 2.0, (ys[meio - 1] + ys[meio]) / 2.0
+
     def _steady(self, aviso: Callout) -> bool:
         """Se a zona deste quadro já se firmou o bastante para ser dita.
 
-        `zones` não tem histerese: em cima da fronteira de duas zonas, os
-        poucos pixels que o casamento treme entre um quadro e outro trocam
-        o nome do lugar, e a voz passa a descrever um jungler indo e
-        voltando sem sair do lugar. Quem ouve isso não sabe mais onde ele
-        está — é o aviso errado que não vem de erro nenhum de visão.
+        `zones` não tem histerese, e um terço do mapa fica colado numa
+        divisa. Sobre uma delas o tremor do casamento troca o nome do
+        lugar sem o campeão andar nada — medindo dez minutos de trajeto,
+        o app dizia de quatro a doze vezes mais nomes diferentes do que
+        o campeão visitou, e uma frase falada em cada cinco a cada três
+        nomeava o lugar errado. Era isso, e não a visão, que fazia o
+        aviso parecer chute: a leitura estava certa e o nome não.
 
-        Exigir que a zona nova apareça em dois quadros seguidos custa um
-        quinto de segundo e apaga a fronteira inteira. Duas exceções, e as
-        duas são sobre não atrasar o que importa: o primeiro aparecimento
-        depois de um sumiço não tem quadro anterior com que concordar, e
-        "cuidado" nunca espera — se a leitura for a trêmula, o piso entre
-        avisos já impede a repetição.
+        A trava tem três portas, e a ordem entre elas é o desenho todo:
+
+        - o mesmo lugar do quadro anterior passa sempre, senão nada seria
+          dito duas vezes;
+        - a urgência que **sobe** passa na frente de tudo. Um "cuidado"
+          atrasado é um "cuidado" inútil, e esta é a única pressa que
+          vale um nome menos certo;
+        - qualquer outra troca de lugar espera dois quadros seguidos de
+          acordo **e** o ponto longe das divisas.
+
+        A porta do meio substitui a regra antiga de deixar todo aviso
+        "cuidado" passar direto. Aquela deixava sem freio nenhum
+        justamente as frases mais ouvidas, e eram elas as que mais
+        erravam. Só a subida de urgência é notícia; ficar perto e
+        oscilar entre dois cantos vizinhos não é, e agora espera.
         """
-        if aviso.urgency == PERTO or not self._zone_seen:
+        lugar = (aviso.zone_key, aviso.zone_side)
+        nivel = URGENCY_RANK.get(aviso.urgency, 1)
+
+        if lugar == self._zone_seen:
+            self._zone_streak += 1
+        else:
+            self._zone_seen = lugar
+            self._zone_streak = 1
+
+        if self._zone_hold is None or lugar == self._zone_hold:
+            self._hold(lugar, nivel)
             return True
-        return aviso.zone_key == self._zone_seen
+        if nivel > self._zone_level:
+            self._hold(lugar, nivel)
+            return True
+        if self._zone_streak < STEADY_FRAMES:
+            return False
+        if aviso.firm or self._zone_streak >= STUBBORN_FRAMES:
+            self._hold(lugar, nivel)
+            return True
+        return False
+
+    def _hold(self, lugar: tuple[str, int], nivel: int) -> None:
+        self._zone_hold = lugar
+        self._zone_level = nivel
 
     def _due(self, aviso: Callout, agora: float) -> bool:
         """Se este aviso pode ser dito agora, ou se atropela o anterior.

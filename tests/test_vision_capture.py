@@ -1501,8 +1501,10 @@ def announce_original():
     watcher_module.announce = guardado
 
 
-def _aviso(texto, urgencia, zona):
-    return Callout(text=texto, urgency=urgencia, zone_key=zona)
+def _aviso(texto, urgencia, zona, lado=0, firme=True):
+    return Callout(
+        text=texto, urgency=urgencia, zone_key=zona, zone_side=lado, firm=firme
+    )
 
 
 def test_a_zone_that_flickers_on_the_border_is_only_said_once(announce_original):
@@ -1511,13 +1513,18 @@ def test_a_zone_that_flickers_on_the_border_is_only_said_once(announce_original)
     Sem histerese, um casamento que oscila poucos pixels em cima da
     fronteira faz a voz descrever uma ida e volta que nunca aconteceu —
     e quem ouve isso perde a noção de onde ele está.
+
+    Os cinco quadros cabem dentro da janela de repetição de propósito:
+    o que se mede aqui é o tremor, e deixar a janela abrir misturaria
+    no resultado a regra de repetir quem fica parado, que é outra e
+    tem o teste dela logo abaixo.
     """
     a = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
     b = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo")
     vigia, relogio, _diario, voz = _vigia_com_avisos([a, b, a, b, a])
 
     for indice in range(5):
-        relogio.agora = 10.0 + indice * 3.0
+        relogio.agora = 10.0 + indice * 1.0
         vigia.tick()
 
     assert voz.ditas == [a.text]
@@ -1650,3 +1657,108 @@ def test_losing_the_jungler_clears_the_zone_that_was_being_watched(announce_orig
     vigia.tick()
 
     assert voz.ditas == [a.text, b.text]
+
+
+def test_a_close_jungler_bouncing_between_two_corners_is_said_once(
+    announce_original,
+):
+    """"Cuidado" também erra de lugar, e era o único aviso sem freio.
+
+    A regra antiga deixava passar direto toda urgência "perto", e é
+    justamente perto do jogador que as zonas ficam mais estreitas: um
+    tremor de dois pixels trocava "na sua selva de cima" por "na sua
+    rota do meio", e a voz mandava recuar para o lado errado. Medindo
+    dez minutos de trajeto, entre um sétimo e um terço das frases
+    faladas nomeavam o lugar errado — e quase todas eram destas.
+
+    O que continua sem esperar é a urgência que *sobe*, que é notícia.
+    Bater de canto em canto já estando perto não é.
+    """
+    a = _aviso("Cuidado, Lee Sin na sua selva de cima", PERTO, "selva_cima")
+    b = _aviso("Cuidado, Lee Sin na sua rota do meio", PERTO, "meio")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([a, b, a, b, a])
+
+    for indice in range(5):
+        relogio.agora = 10.0 + indice * 1.0
+        vigia.tick()
+
+    assert voz.ditas == [a.text]
+
+
+def test_the_same_zone_on_the_other_half_of_the_map_is_a_new_zone(
+    announce_original,
+):
+    """A chave da zona sozinha não diz de quem é a selva.
+
+    "Na sua selva de cima" e "na selva de cima dele" partilham a chave e
+    mandam o jogador para lados opostos. Comparando só a chave, o tremor
+    sobre a diagonal trocava o dono do território sem nada segurar a
+    frase.
+    """
+    sua = _aviso("Lee Sin na sua selva de cima", MEDIO, "selva_cima", lado=1)
+    dele = _aviso("Lee Sin na selva de cima dele", MEDIO, "selva_cima", lado=-1)
+    vigia, relogio, _diario, voz = _vigia_com_avisos([sua, dele])
+
+    relogio.agora = 10.0
+    vigia.tick()
+    relogio.agora = 20.0
+    vigia.tick()
+
+    assert voz.ditas == [sua.text]
+
+
+def test_a_reading_on_a_border_waits_for_more_than_two_frames(
+    announce_original,
+):
+    """Dois quadros de acordo não bastam quando a leitura é da divisa.
+
+    O tremor não é sorteado a cada quadro: em cima de uma fronteira ele
+    empurra a leitura para o mesmo lado por vários quadros seguidos, e a
+    espera de dois se cumpre sem o campeão ter atravessado nada.
+    """
+    a = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    b = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo", firme=False)
+    vigia, relogio, _diario, voz = _vigia_com_avisos([a, b, b])
+
+    for indice in range(3):
+        relogio.agora = 10.0 + indice * 4.0
+        vigia.tick()
+
+    assert voz.ditas == [a.text]
+
+
+def test_insisting_long_enough_beats_the_border(announce_original):
+    """Parar em cima da divisa não pode calar o app para sempre.
+
+    A folga espacial nunca se cumpre para quem farma um acampamento
+    encostado numa fronteira. Passados dois segundos insistindo na mesma
+    zona, a insistência vale mais que a folga — senão o nome antigo
+    ficaria valendo até ele sair dali.
+    """
+    a = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    b = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo", firme=False)
+    vigia, relogio, _diario, voz = _vigia_com_avisos([a, b])
+
+    for indice in range(11):
+        relogio.agora = 10.0 + indice * 1.0
+        vigia.tick()
+
+    assert voz.ditas == [a.text, b.text]
+
+
+def test_a_jungler_who_stays_put_is_repeated(announce_original):
+    """Quem não sai do lugar volta a ser notícia depois de um tempo.
+
+    A trava nova sustenta a zona entre os tremores, e sustentar não pode
+    virar calar: passada a janela de repetição, o mesmo lugar é dito de
+    novo.
+    """
+    a = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([a])
+
+    relogio.agora = 10.0
+    vigia.tick()
+    relogio.agora = 22.0
+    vigia.tick()
+
+    assert voz.ditas == [a.text, a.text]

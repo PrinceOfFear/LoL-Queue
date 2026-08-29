@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from .livegame import BOT, JUNGLE, MID, SUPPORT, TOP, LiveGame
-from .zones import Zone, classify, describe
+from .zones import Zone, classify, describe, well_inside
 
 #: Perto o bastante para o jogador ter que reagir agora.
 NEAR = 0.20
@@ -70,6 +70,14 @@ class Callout:
     text: str
     urgency: str
     zone_key: str
+    # A metade do mapa em que a zona caiu. Vai junto da chave porque a
+    # frase muda com ela — "na sua selva" e "na selva dele" partilham a
+    # chave e dizem o contrário uma da outra.
+    zone_side: int = 0
+    # Se o ponto está longe o bastante das divisas para o nome valer.
+    # Nasce verdadeiro para que um aviso montado à mão continue sendo
+    # um aviso firme; só `announce` sabe medir isso.
+    firm: bool = True
 
     def __str__(self) -> str:
         return self.text
@@ -156,7 +164,9 @@ def announce(
     """
     if game is None:
         zona = classify(mx, my)
-        return Callout(phrase(champion, zona), MEDIO, zona.key)
+        return Callout(
+            phrase(champion, zona), MEDIO, zona.key, zona.side, well_inside(mx, my)
+        )
 
     # O minimapa pode estar girado 180° pela opção do jogo; o mundo não.
     wx, wy = game.to_world(mx, my)
@@ -190,4 +200,10 @@ def announce(
         # com quem está vendo a tela.
         urgencia = MEDIO
 
-    return Callout(phrase(champion, zona, game.side, urgencia), urgencia, zona.key)
+    return Callout(
+        phrase(champion, zona, game.side, urgencia),
+        urgencia,
+        zona.key,
+        zona.side,
+        well_inside(wx, wy),
+    )

@@ -12,7 +12,7 @@ import pytest
 
 from lolqueue.vision.callout import LONGE, MEDIO, PERTO, announce, map_end
 from lolqueue.vision.livegame import parse
-from lolqueue.vision.zones import CAMPS
+from lolqueue.vision.zones import CAMPS, classify
 
 # Posições de referência, todas conferidas contra a textura oficial.
 SAPO_AZUL = (0.146, 0.435)
@@ -211,3 +211,31 @@ def test_a_nameless_jungler_still_gets_phrases():
     frases = all_phrases("", 0)
     assert frases
     assert all("jungler inimigo" in t for t in frases)
+
+
+def test_a_warning_carries_the_side_of_the_zone_it_names():
+    """Quem compara dois avisos precisa do lado junto com a chave."""
+    aviso = announce("Lee Sin", 0.19, 0.63)
+    assert aviso.zone_key == "jungle_top"
+    assert aviso.zone_side == classify(0.19, 0.63).side
+
+
+def test_a_warning_read_on_a_border_is_not_firm():
+    """O aviso leva consigo se o ponto que o gerou estava numa divisa.
+
+    Quem decide falar não tem as coordenadas na mão — só a frase. Sem
+    esse campo, a única defesa contra o tremor em cima da fronteira
+    seria esperar quadros, e esperar atrasa também o aviso que estava
+    certo desde o primeiro.
+    """
+    assert announce("Lee Sin", 0.44, 0.30).firm is False
+    assert announce("Lee Sin", 0.34, 0.30).firm is True
+
+
+def test_a_hand_made_warning_is_firm_by_default():
+    """Só `announce` sabe medir a divisa; ninguém mais precisa saber."""
+    from lolqueue.vision.callout import Callout
+
+    aviso = Callout("Lee Sin no rio", MEDIO, "rio_cima")
+    assert aviso.firm is True
+    assert aviso.zone_side == 0

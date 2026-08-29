@@ -123,3 +123,46 @@ def test_neutral_zones_never_gain_an_owner():
         zona = classify(*ponto)
         assert describe(zona, AZUL) == zona.label
         assert describe(zona, VERMELHO) == zona.label
+
+
+def test_the_place_carries_the_side_and_not_only_the_name():
+    """Duas selvas de cima existem, e a frase distingue uma da outra.
+
+    Comparar dois quadros pela chave sozinha faz o app achar que o
+    jungler não saiu do lugar quando ele atravessou o mapa inteiro: as
+    duas metades da mesma rota partilham a chave e recebem frases
+    opostas — "na sua selva de cima" e "na selva de cima dele".
+    """
+    from lolqueue.vision.zones import place
+
+    sua, dele = place(0.19, 0.63), place(0.63, 0.19)
+    assert sua[0] == dele[0] == "jungle_top"
+    assert sua != dele
+
+
+def test_a_point_on_a_border_is_not_well_inside():
+    """Em cima da divisa, o nome do lugar não vale como leitura firme."""
+    from lolqueue.vision.zones import well_inside
+
+    assert not well_inside(0.44, 0.30)
+
+
+def test_a_point_in_the_middle_of_a_zone_is_well_inside():
+    """Longe de qualquer divisa, o nome é o nome; nada a confirmar."""
+    from lolqueue.vision.zones import well_inside
+
+    assert well_inside(*BARON_PIT)
+    assert well_inside(0.19, 0.63)
+
+
+def test_being_well_inside_does_not_depend_on_staying_on_the_map():
+    """As sondas saem do quadrado nas beiradas, e isso não pode explodir.
+
+    `classify` responde para qualquer ponto; grampear a sonda na borda
+    faria as quatro caírem no mesmo lugar e todo canto do mapa passaria
+    por firme justamente onde a leitura é pior.
+    """
+    from lolqueue.vision.zones import well_inside
+
+    for ponto in [(0.0, 0.0), (1.0, 1.0), (0.0, 1.0), (1.0, 0.0), (0.5, 0.0)]:
+        assert well_inside(*ponto) in (True, False)

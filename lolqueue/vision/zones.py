@@ -214,6 +214,46 @@ def classify(mx: float, my: float) -> Zone:
     )
 
 
+# Quanto o ponto precisa estar para DENTRO de uma zona para o nome dela
+# valer como firme. Ver `well_inside`.
+STABLE_MARGIN = 0.010
+
+
+def place(mx: float, my: float) -> tuple[str, int]:
+    """A identidade falada do lugar: o nome e de quem é a metade.
+
+    `key` sozinha não basta para saber se a frase mudou: "na sua selva
+    de cima" e "na selva de cima dele" têm a mesma chave e são avisos
+    opostos. Quem compara dois quadros tem que comparar os dois campos.
+    """
+    zona = classify(mx, my)
+    return zona.key, zona.side
+
+
+def well_inside(mx: float, my: float, margin: float = STABLE_MARGIN) -> bool:
+    """Se o ponto está a mais de `margin` de qualquer divisa.
+
+    O mapa tem 29 zonas e um terço da área dele fica a menos de 0.02 de
+    uma divisa. Em cima de uma, o tremor normal do casamento de imagem —
+    um ou dois pixels — troca o nome do lugar sem o campeão ter andado
+    nada, e a voz descreve uma corrida que não aconteceu. Medindo o
+    trajeto de um jungler por dez minutos, o app dizia de quatro a doze
+    vezes mais nomes diferentes do que o campeão de fato visitou.
+
+    A divisa não pode ser detectada olhando um ponto só: é preciso
+    perguntar o que tem em volta. Quatro sondas a `margin` de distância
+    bastam, porque as fronteiras daqui são retas e círculos grandes
+    perto dessa escala. 0.010 do mapa são uns 150 unidades do Rift, uma
+    largura e meia de campeão — a folga certa para não confundir "está
+    na divisa" com "atravessou".
+    """
+    aqui = place(mx, my)
+    for dx, dy in ((margin, 0.0), (-margin, 0.0), (0.0, margin), (0.0, -margin)):
+        if place(mx + dx, my + dy) != aqui:
+            return False
+    return True
+
+
 def describe(zone: Zone, ally_side: int = 0) -> str:
     """A zona dita do ponto de vista do jogador.
 
