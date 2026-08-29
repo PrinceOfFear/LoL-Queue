@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QComboBox,
     QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
@@ -12,11 +11,13 @@ from PySide6.QtWidgets import (
 
 from ...config import (
     ACCEPT_DELAY_CEILING,
+    FLASH_KEYS,
     JUNGLE_VOICE_LABELS,
     OPGG_TIERS,
     PICK_INTENT_CEILING,
 )
 from ..binding import ConfigBinder
+from ..widgets.accounts_card import AccountsCard
 
 
 class SettingsPage(QWidget):
@@ -121,14 +122,11 @@ class SettingsPage(QWidget):
 
         tier_row = QHBoxLayout()
         tier_row.addWidget(QLabel("Elo das builds do OP.GG"))
-        self._tier = QComboBox()
-        self._tier.setObjectName("tierSelector")
-        for tier, label in OPGG_TIERS.items():
-            self._tier.addItem(label, tier)
-        index = self._tier.findData(binder.config.opgg_tier)
-        if index >= 0:
-            self._tier.setCurrentIndex(index)
-        self._tier.currentIndexChanged.connect(self._on_tier_changed)
+        self._tier = binder.combo(
+            "opgg_tier",
+            [(label, tier) for tier, label in OPGG_TIERS.items()],
+            "tierSelector",
+        )
         tier_row.addWidget(self._tier)
         tier_row.addStretch(1)
         automation_layout.addLayout(tier_row)
@@ -150,6 +148,28 @@ class SettingsPage(QWidget):
         note.setWordWrap(True)
         automation_layout.addWidget(note)
 
+        flash_row = QHBoxLayout()
+        flash_row.addWidget(QLabel("Tecla do Flash"))
+        self._flash = binder.combo(
+            "flash_key",
+            [(label, key) for key, label in FLASH_KEYS.items()],
+            "flashSelector",
+        )
+        flash_row.addWidget(self._flash)
+        flash_row.addStretch(1)
+        automation_layout.addLayout(flash_row)
+
+        flash_note = QLabel(
+            "Vale quando os feitiços recomendados entram. Em “como já "
+            "estiver”, o app mantém o Flash do lado em que a conta já o "
+            "tinha. Fixar o D ou o F serve para jogar em conta emprestada: "
+            "a recomendação entra igual, mas o Flash vai para a tecla que "
+            "você usa, e não para a do dono da conta."
+        )
+        flash_note.setObjectName("hint")
+        flash_note.setWordWrap(True)
+        automation_layout.addWidget(flash_note)
+
         jungle_row = QHBoxLayout()
         jungle_row.addWidget(
             binder.checkbox(
@@ -157,14 +177,11 @@ class SettingsPage(QWidget):
                 "jungle_callouts",
             )
         )
-        self._voice = QComboBox()
-        self._voice.setObjectName("voiceSelector")
-        for voice, label in JUNGLE_VOICE_LABELS.items():
-            self._voice.addItem(label, voice)
-        voice_index = self._voice.findData(binder.config.jungle_voice)
-        if voice_index >= 0:
-            self._voice.setCurrentIndex(voice_index)
-        self._voice.currentIndexChanged.connect(self._on_voice_changed)
+        self._voice = binder.combo(
+            "jungle_voice",
+            [(label, voice) for voice, label in JUNGLE_VOICE_LABELS.items()],
+            "voiceSelector",
+        )
         jungle_row.addWidget(self._voice)
         jungle_row.addStretch(1)
         automation_layout.addLayout(jungle_row)
@@ -219,13 +236,36 @@ class SettingsPage(QWidget):
         timing_layout.addWidget(timing_note)
         layout.addWidget(timing_card)
 
+        self.accounts = AccountsCard()
+        layout.addWidget(self.accounts)
+
         layout.addStretch(1)
 
-    def _on_tier_changed(self, index: int) -> None:
-        self._binder.set("opgg_tier", self._tier.itemData(index))
+        binder.on_reload(self._restore_numbers)
 
-    def _on_voice_changed(self, index: int) -> None:
-        self._binder.set("jungle_voice", self._voice.itemData(index))
+    def _restore_numbers(self) -> None:
+        """Traz os números de volta do que a config diz agora.
+
+        As caixas de segundos não passam pelo `ConfigBinder` — elas
+        gravam direto —, então a troca de conta não as alcançaria. Os
+        sinais ficam bloqueados: `setValue` aqui gravaria de volta o
+        que acabou de ser carregado.
+        """
+        config = self._binder.config
+        pairs = [(self._intent_delay, "pick_intent_delay")]
+        for boxes, low, high in (
+            (self._lock_delay, "lock_delay_min", "lock_delay_max"),
+            (self._accept_delay, "accept_delay_min", "accept_delay_max"),
+            (self._postgame_delay, "postgame_delay_min", "postgame_delay_max"),
+        ):
+            pairs += [(boxes[0], low), (boxes[1], high)]
+        for box, attribute in pairs:
+            value = getattr(config, attribute)
+            if box.value() == value:
+                continue
+            box.blockSignals(True)
+            box.setValue(value)
+            box.blockSignals(False)
 
     def _seconds_row(
         self,

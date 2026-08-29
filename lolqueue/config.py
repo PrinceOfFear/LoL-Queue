@@ -37,6 +37,42 @@ POSITION_NAMES: dict[str, str] = {
 }
 
 
+#: Rotas que o jogador pode pedir na fila. É a mesma lista de rotas do
+#: mapa mais "fill", que o cliente entende como "me põe onde faltar" —
+#: e que é a única forma de dizer "aceito qualquer uma" sem deixar a
+#: preferência em branco.
+PREFERENCE_POSITIONS: tuple[str, ...] = POSITIONS + ("fill",)
+
+PREFERENCE_NAMES: dict[str, str] = {**POSITION_NAMES, "fill": "Qualquer uma"}
+
+#: Como a preferência viaja para o cliente. Vazio vira "UNSELECTED", que
+#: é como o cliente representa "não escolhi" — e é o que ele responde
+#: quando o jogador nunca tocou nos botões de rota.
+UNSELECTED = "UNSELECTED"
+
+#: Filas que perguntam a rota. Nas outras — modo cego, ARAM, Arena — a
+#: preferência não existe, e mandá-la seria pedir ao cliente uma coisa
+#: que ele não tem onde guardar.
+POSITION_QUEUES: frozenset[int] = frozenset({400, 420, 440})
+
+
+def preference_name(position: str) -> str:
+    return PREFERENCE_NAMES.get(position.casefold(), position)
+
+
+#: Onde o Flash pode ficar. "auto" mantém o que este comportamento
+#: sempre fez: seguir o lado em que o jogador já estava. Os outros dois
+#: fixam o lado, para quem joga em conta emprestada e não quer que a
+#: recomendação empurre o Flash para a tecla errada.
+FLASH_KEYS: dict[str, str] = {
+    "auto": "Como já estiver na conta",
+    "d": "Sempre no D",
+    "f": "Sempre no F",
+}
+
+DEFAULT_FLASH_KEY = "auto"
+
+
 #: Teto do atraso antes de aceitar. A janela que o cliente dá para
 #: responder ao "Partida encontrada" dura cerca de 12 segundos, e
 #: estourá-la custa a partida — mais a punição de fila por recusa. Oito
@@ -90,6 +126,15 @@ def config_path() -> Path:
 def log_dir() -> Path:
     """Onde fica o registro em arquivo, ao lado da config."""
     return config_path().parent / "registro"
+
+
+def accounts_path() -> Path:
+    """Onde ficam os perfis por conta, ao lado da config.
+
+    Mora aqui, e não no módulo das contas, porque é o mesmo endereço da
+    config: quem redireciona um redireciona o outro.
+    """
+    return config_path().parent / "contas.json"
 
 
 def champion_ids(value) -> list[int]:
@@ -150,7 +195,20 @@ class Config:
     # não está olhando o canto da tela.
     jungle_callouts: bool = True
     jungle_voice: str = DEFAULT_JUNGLE_VOICE
+    # Guarda, ao lado de cada aviso falado, onde o retrato foi achado e
+    # com quanta folga. Serve para julgar um aviso suspeito depois da
+    # partida: coordenada certa com nome de lugar errado é o mapa de
+    # zonas; coordenada saltando pelo mapa é detecção falsa.
+    jungle_debug: bool = False
     queue_id: int = 420
+    # Rotas pedidas na fila. Vazio quer dizer "não mexe": o app deixa o
+    # que o jogador já escolheu no cliente, que é o certo para quem
+    # nunca abriu esta tela.
+    primary_position: str = ""
+    secondary_position: str = ""
+    # Em que tecla o Flash deve acabar quando os feitiços recomendados
+    # forem aplicados. Ver FLASH_KEYS.
+    flash_key: str = DEFAULT_FLASH_KEY
     queue_only_as_host: bool = True
     opgg_tier: str = DEFAULT_OPGG_TIER
     pick_priority: list[int] = field(default_factory=list)
@@ -187,6 +245,9 @@ class Config:
             # padrão, do mesmo jeito que um id de campeão torto é
             # descartado em vez de propagado.
             self.opgg_tier = DEFAULT_OPGG_TIER
+        self.primary_position, self.secondary_position = self._clean_preferences()
+        if self.flash_key not in FLASH_KEYS:
+            self.flash_key = DEFAULT_FLASH_KEY
         if self.jungle_voice not in JUNGLE_VOICES:
             # Mesma regra do elo: voz que o sintetizador não conhece
             # deixaria o aviso mudo justamente na hora do gank.
@@ -237,6 +298,32 @@ class Config:
             low = min(low, ceiling)
             high = min(high, ceiling)
         return (low, max(low, high))
+
+    def _clean_preferences(self) -> tuple[str, str]:
+        """Endireita o par de rotas pedidas.
+
+        Duas regras que o próprio cliente impõe, aplicadas aqui para o
+        app não mandar um pedido que ele recusaria: a segunda rota não
+        pode repetir a primeira, e depois de "qualquer uma" não existe
+        segunda opção. Sem primeira, também não há segunda — pedir só a
+        secundária não quer dizer nada.
+        """
+        first = self._clean_preference(self.primary_position)
+        second = self._clean_preference(self.secondary_position)
+        if not first or first == "fill" or second == first:
+            second = ""
+        return first, second
+
+    @staticmethod
+    def _clean_preference(value) -> str:
+        if not isinstance(value, str):
+            return ""
+        key = value.casefold()
+        return key if key in PREFERENCE_POSITIONS else ""
+
+    def wants_positions(self) -> bool:
+        """Se há rota pedida e a fila escolhida tem onde guardá-la."""
+        return bool(self.primary_position) and self.queue_id in POSITION_QUEUES
 
     def _clean_positions(self) -> dict[str, list[int]]:
         """Só rotas que o cliente conhece, e só com lista de verdade.

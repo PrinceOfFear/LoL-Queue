@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable
 
 from PySide6.QtCore import QThread, Signal
@@ -8,10 +9,20 @@ from PySide6.QtCore import QThread, Signal
 from ..lcu import endpoints
 from ..lcu.client import ClientClosed, LcuClient, LcuError
 from ..lcu.credentials import discover
+from .accounts import account_key
+from .identity import current_identity
 from .phases import GameflowPhase, PhaseTracker
 
 POLL_INTERVAL = 0.25
 RECONNECT_INTERVAL = 2.0
+
+#: De quanto em quanto tempo conferir quem está logado. Sair e
+#: entrar em outra conta não derruba a conexão do LCU — o lockfile
+#: continua o mesmo —, então conferir só ao conectar deixaria o app
+#: com os ajustes do dono anterior pela sessão inteira. Dez segundos
+#: é muito mais rápido do que qualquer um consegue trocar de conta e
+#: entrar na fila, e são duas chamadas locais baratas.
+IDENTITY_INTERVAL = 10.0
 
 
 class ConnectionState:
@@ -68,6 +79,9 @@ class PhaseWatcher(QThread):
     #: `object` porque a build pode vir `None`, quando a consulta
     #: externa falhou ou o modo não tem dados.
     analysis_changed = Signal(object, object, object)
+    #: Quem entrou na conta, quando muda. `object` porque viaja um
+    #: `Identity`, e porque a primeira leitura pode nunca vir.
+    identity_changed = Signal(object)
 
     def __init__(self, engine_factory: Callable[[LcuClient], object]) -> None:
         super().__init__()
@@ -75,6 +89,10 @@ class PhaseWatcher(QThread):
         self._running = True
         self._engine = None
         self._wake = threading.Event()
+        # Guardada entre reconexões de propósito: fechar e reabrir o
+        # cliente na mesma conta não é troca de conta, e reanunciar
+        # despejaria o perfil gravado por cima do que estiver na tela.
+        self._identity_key = ""
 
     @property
     def engine(self):
@@ -88,6 +106,7 @@ class PhaseWatcher(QThread):
         state = ConnectionState()
         tracker = PhaseTracker()
         client: LcuClient | None = None
+        next_identity = 0.0
 
         while self._running:
             if client is None:
@@ -122,6 +141,7 @@ class PhaseWatcher(QThread):
                     self._wake.wait(state.interval)
                     continue
                 tracker.reset()
+                next_identity = 0.0
                 if state.set_connected(True):
                     self.connection_changed.emit(True)
                     self.message.emit("Cliente do LoL conectado.")
@@ -143,4 +163,25 @@ class PhaseWatcher(QThread):
             except LcuError as exc:
                 self.message.emit(str(exc))
 
+            if client is not None and time.monotonic() >= next_identity:
+                next_identity = time.monotonic() + IDENTITY_INTERVAL
+                self._check_identity(client)
+
             self._wake.wait(state.interval)
+
+    def _check_identity(self, client: LcuClient) -> None:
+        """Anuncia a conta logada, e só quando ela muda.
+
+        Sem identidade não há anúncio: o cliente ainda subindo, ou já
+        fechando, responde incompleto, e tratar isso como “trocou de
+        conta” faria o app reconfigurar tudo por causa de uma resposta
+        pela metade. A próxima volta pergunta de novo.
+        """
+        identity = current_identity(client)
+        if identity is None:
+            return
+        key = account_key(identity)
+        if key == self._identity_key:
+            return
+        self._identity_key = key
+        self.identity_changed.emit(identity)

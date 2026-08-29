@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Callable, Iterable, Sequence
 
-from ..config import OPGG_TIERS, Config
+from ..config import DEFAULT_FLASH_KEY, OPGG_TIERS, Config
 from ..lcu import endpoints
 from ..lcu.client import ClientClosed, LcuError
 from .itemsets import ItemSets
@@ -87,18 +87,39 @@ MATCHUP_PREFIX = "vs "
 ORIGIN_RIOT = "Riot"
 ORIGIN_OPGG = "OP.GG"
 
+#: O Flash. É o único feitiço cuja tecla o jogador decora, e o
+#: único que o app tem motivo para fixar de um lado.
+FLASH_SPELL_ID = 4
+
+#: Qual campo do cliente é qual tecla. `spell1Id` é o D e `spell2Id`
+#: é o F na ligação padrão do jogo — é o que o cliente mostra e o
+#: que a esmagadora maioria usa.
+FLASH_SLOTS = ("d", "f")
+
 
 def align_spells(
-    recommended: Sequence[int], current: Iterable[int | None]
+    recommended: Sequence[int],
+    current: Iterable[int | None],
+    flash_key: str = DEFAULT_FLASH_KEY,
 ) -> tuple[int, int]:
     """Põe a dupla recomendada na ordem que o jogador já usa.
 
-    Se algum feitiço aparece nos dois pares em lados trocados, a dupla
-    inteira é invertida. Na prática isso é o Flash: quem o tem no D
-    continua com ele no D. Como só existem dois lados, um feitiço em
+    Com uma tecla escolhida nos Ajustes, o Flash vai para ela e ponto.
+    Isso existe porque o app é usado em conta emprestada: o dono tem o
+    Flash no lado dele, o app copia esse lado, e quem está jogando
+    aperta a tecla errada na hora que menos podia.
+
+    Sem escolha — o padrão —, vale o que o jogador já tem na tela: se
+    algum feitiço aparece nos dois pares em lados trocados, a dupla
+    inteira é invertida. Como só existem dois lados, um feitiço em
     comum já decide a ordem dos dois.
     """
     first, second = recommended[0], recommended[1]
+    if flash_key in FLASH_SLOTS and FLASH_SPELL_ID in (first, second):
+        other = second if first == FLASH_SPELL_ID else first
+        if flash_key == "d":
+            return FLASH_SPELL_ID, other
+        return other, FLASH_SPELL_ID
     mine = list(current)
     if first in mine[1:] or second in mine[:1]:
         return second, first
@@ -535,7 +556,7 @@ class Loadout:
         if not isinstance(spells, list) or len(spells) < 2:
             return
         current = local_spells(session)
-        first, second = align_spells(spells, current)
+        first, second = align_spells(spells, current, self._config.flash_key)
         if (first, second) == current:
             return
         self._client.patch(

@@ -5,7 +5,7 @@ import time
 from functools import partial
 from typing import Callable, Protocol
 
-from ..config import Config, queue_name
+from ..config import UNSELECTED, Config, preference_name, queue_name
 from ..lcu import endpoints
 from ..lcu.client import ClientClosed, LcuError
 from .delay import Rng, sample
@@ -110,6 +110,12 @@ class Engine:
         self._acted = False
         self._action_failures = 0
         self._champ_failures = 0
+        # Última dupla de rotas mandada ao cliente. Guardada pela
+        # vida do motor, e não por fase: um pedido recusado pelo
+        # cliente continua recusado no lobby seguinte, e insistir
+        # só encheria o registro. Mexer na escolha muda o alvo e
+        # libera uma tentativa nova.
+        self._positions_asked: tuple[str, str] | None = None
         self._checked_search = 0.0
         self._search_stalled = False
         # Se a parada chegou a ser anunciada. "Fila retomada" sem a
@@ -472,6 +478,8 @@ class Engine:
             self._note_role(lobby)
         if self._holding_back():
             return
+        if isinstance(lobby, dict):
+            self._push_positions(lobby)
         if isinstance(lobby, dict) and lobby.get("canStartActivity") is False:
             if announce:
                 self._log("Sem permissão para iniciar a fila neste lobby.")
@@ -488,6 +496,57 @@ class Engine:
         self._queue_at = None
         if announce or esperou:
             self._log("Entrando na fila.")
+
+    def _push_positions(self, lobby: dict) -> None:
+        """Pede as rotas escolhidas nos Ajustes, antes de entrar na fila.
+
+        Só quando há rota pedida e a fila tem onde guardá-la: em ARAM ou
+        no modo cego o cliente não tem esse campo. Vazio quer dizer "não
+        mexe", e é o padrão — quem nunca abriu a tela continua com o que
+        escolheu no cliente.
+
+        Uma falha aqui não pode custar a fila. Esta chamada é a única do
+        app que escreve numa rota que a sonda não confirma (ela só lê), e
+        `_start_queue` roda dentro do contador de falhas: deixar o erro
+        subir trancaria a entrada na fila por causa de uma preferência.
+        Então o erro é anotado e a vida segue.
+
+        A tentativa fica guardada para não repetir: sem isso um pedido
+        recusado voltaria a cada retomada da busca, enchendo o registro.
+        Mudar a escolha na tela muda o alvo e libera uma nova tentativa.
+        """
+        if not self._config.wants_positions():
+            return
+        wanted = (
+            self._config.primary_position.upper(),
+            (self._config.secondary_position or UNSELECTED).upper(),
+        )
+        member = lobby.get("localMember") or {}
+        current = (
+            str(member.get("firstPositionPreference") or UNSELECTED).upper(),
+            str(member.get("secondPositionPreference") or UNSELECTED).upper(),
+        )
+        if wanted == current or wanted == self._positions_asked:
+            return
+        self._positions_asked = wanted
+        try:
+            self._client.put(
+                endpoints.LOBBY_POSITION_PREFERENCES,
+                json={"firstPreference": wanted[0], "secondPreference": wanted[1]},
+            )
+        except ClientClosed:
+            raise
+        except LcuError as exc:
+            self._log(f"Não consegui pedir as rotas: {exc}")
+            return
+        self._log(f"Rotas pedidas: {self._positions_label()}.")
+
+    def _positions_label(self) -> str:
+        primary = preference_name(self._config.primary_position)
+        secondary = self._config.secondary_position
+        if not secondary:
+            return primary
+        return f"{primary} e {preference_name(secondary)}"
 
     def _note_role(self, lobby: dict) -> None:
         """Anota se a sala é nossa ou de outra pessoa.

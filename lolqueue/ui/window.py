@@ -13,6 +13,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import OPGG_TIERS, Config, log_dir, position_name, queue_name
+from ..core.accounts import (
+    ARRIVED_FIRST,
+    ARRIVED_INHERITED,
+    Accounts,
+)
 from ..core.antitoxic import MuteGuard
 from ..core.champ_select import ChampSelectController
 from ..core.champions import ChampionCatalog
@@ -122,6 +127,13 @@ class MainWindow(QWidget):
         # app. O arquivo é o que sobra para conferir, depois da partida,
         # qual lista foi usada e se o banimento entrou.
         self._journal = Journal(log_dir())
+        # Os perfis por conta. Lidos antes da janela existir porque a
+        # página de Ajustes já nasce mostrando a lista.
+        self._accounts = Accounts.load()
+        # A conta logada agora, segundo o cliente. Vazia até a
+        # primeira leitura: sem o cliente aberto não dá para saber, e
+        # inventar uma conta aqui criaria perfil sem dono.
+        self._active_account = ""
 
         self.setWindowTitle("LoL Queue")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -184,6 +196,9 @@ class MainWindow(QWidget):
         self._history.match_selected.connect(self._open_game_detail)
         self._champions = ChampionsPage(self._binder)
         self._queue = QueuePage(self._binder)
+        self._settings = SettingsPage(self._binder)
+        self._settings.accounts.main_requested.connect(self._on_main_account)
+        self._settings.accounts.forget_requested.connect(self._on_forget_account)
 
         # A ordem tem de bater com `SECTIONS` da barra lateral: é o
         # índice do botão que escolhe a página.
@@ -194,7 +209,7 @@ class MainWindow(QWidget):
             self._history,
             self._champions,
             self._queue,
-            SettingsPage(self._binder),
+            self._settings,
         ):
             self._pages.addWidget(self._scroll_page(page))
         right.addWidget(self._pages, 1)
@@ -204,7 +219,12 @@ class MainWindow(QWidget):
         # config é o que mantém as duas contando a mesma história, venha a
         # mudança de qual das duas vier.
         self._binder.changed.connect(self._on_pick_config_changed)
+        # Cada mexida nos ajustes entra também no perfil da conta
+        # logada; sem isso, sair e voltar devolveria o perfil antigo
+        # por cima do que o usuário acabou de escolher.
+        self._binder.changed.connect(self._remember_account)
         self._render_pick_order()
+        self._refresh_accounts()
 
     @staticmethod
     def _scroll_page(page: QWidget) -> QScrollArea:
@@ -240,6 +260,7 @@ class MainWindow(QWidget):
         self._watcher.pick_scope_changed.connect(self._on_pick_scope_changed)
         self._watcher.rune_options_changed.connect(self._dashboard.set_rune_options)
         self._watcher.analysis_changed.connect(self._on_analysis_changed)
+        self._watcher.identity_changed.connect(self._on_identity_changed)
         self._watcher.start()
 
     def _make_engine(self, client) -> Engine:
@@ -689,6 +710,79 @@ class MainWindow(QWidget):
         self._dashboard.ring.set_phase(
             self._phase, time.monotonic() - self._phase_started
         )
+
+    # ---------- contas ----------
+
+    def _on_identity_changed(self, identity) -> None:
+        """Outra conta entrou: troca os ajustes para os dela.
+
+        Chega da thread do watcher por sinal, que a travessia Qt entrega
+        aqui na thread da janela — o único lugar onde mexer em widget é
+        legítimo. A ordem importa: primeiro a config (que é o que o
+        motor lê), depois o disco, depois a tela.
+        """
+        arrival = self._accounts.arrive(identity, self._config)
+        self._active_account = arrival.key
+        self._config.save()
+        self._save_accounts()
+        self._binder.reload()
+        self._refresh_accounts()
+        if arrival.kind == ARRIVED_INHERITED:
+            self._log_message(
+                f"Conta {arrival.label}: ajustes copiados de {arrival.source}."
+            )
+        elif arrival.kind == ARRIVED_FIRST:
+            self._log_message(
+                f"Conta {arrival.label} marcada como principal. "
+                "Os ajustes de agora ficaram guardados nela."
+            )
+        else:
+            self._log_message(f"Conta {arrival.label}: ajustes dela recuperados.")
+
+    def _remember_account(self, _attribute: str) -> None:
+        """Guarda no perfil da conta logada o que a config tem agora."""
+        if not self._active_account:
+            return
+        if self._accounts.remember(self._active_account, self._config):
+            self._save_accounts()
+
+    def _on_main_account(self, key: str) -> None:
+        if not self._accounts.set_main(key):
+            return
+        self._save_accounts()
+        self._refresh_accounts()
+        account = self._accounts.accounts.get(key)
+        if account is not None:
+            self._log_message(
+                f"Conta principal: {account.label}. Toda conta nova neste "
+                "PC vai começar com os ajustes dela."
+            )
+
+    def _on_forget_account(self, key: str) -> None:
+        account = self._accounts.accounts.get(key)
+        if not self._accounts.forget(key):
+            return
+        self._save_accounts()
+        self._refresh_accounts()
+        if account is not None:
+            self._log_message(f"Conta {account.label} esquecida.")
+
+    def _refresh_accounts(self) -> None:
+        self._settings.accounts.show_accounts(
+            self._accounts.ordered(), self._active_account, self._accounts.main
+        )
+
+    def _save_accounts(self) -> None:
+        """Grava os perfis. Falhar aqui não pode derrubar a janela.
+
+        O disco pode estar cheio ou a pasta sem permissão; perder os
+        perfis é ruim, mas fechar o app no meio de uma seleção por causa
+        disso seria pior — e a config em uso continua valendo.
+        """
+        try:
+            self._accounts.save()
+        except OSError as exc:
+            self._log_message(f"Não consegui gravar as contas: {exc}")
 
     def _log_message(self, message: str) -> None:
         self._dashboard.append(message)

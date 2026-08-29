@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from ...config import POSITIONS
 from ..advice import ban_notice
 from ..binding import ConfigBinder
 from ..widgets.champion_picker import ChampionPicker
@@ -68,6 +69,7 @@ class ChampionsPage(QWidget):
         outer.addLayout(layout, 1)
 
         binder.changed.connect(self._on_config_changed)
+        binder.on_reload(self._restore_lists)
         self.refresh_advice()
 
     # ---------- repasse ----------
@@ -94,6 +96,29 @@ class ChampionsPage(QWidget):
     def _on_config_changed(self, attribute: str) -> None:
         if attribute in ("auto_pick", "auto_ban", "ban_priority"):
             self.refresh_advice()
+
+    def _restore_lists(self) -> None:
+        """Redesenha as listas quando a config trocou por fora.
+
+        É o caso da troca de conta: o perfil da conta que entrou já
+        está na config, e sem isto as duas grades continuariam
+        mostrando os campeões do dono anterior — e um arrasto aqui
+        gravaria a lista errada por cima da certa.
+
+        A grade de banimento tem o sinal calado no caminho: `set_ids`
+        avisa que mudou, e esse aviso voltaria para gravar o que
+        acabou de ser carregado. A de escolha já tem caminho mudo
+        próprio.
+        """
+        config = self._binder.config
+        by_position = config.pick_priority_by_position
+        self.pick_picker.set_list("", config.pick_priority)
+        for position in POSITIONS:
+            self.pick_picker.set_list(position, by_position.get(position, []))
+        self.ban_picker.blockSignals(True)
+        self.ban_picker.set_ids(config.ban_priority)
+        self.ban_picker.blockSignals(False)
+        self.refresh_advice()
 
     def refresh_advice(self) -> None:
         config = self._binder.config

@@ -13,6 +13,16 @@ MATCHMAKING_SEARCH = "/lol-lobby/v2/lobby/matchmaking/search"
 #: cliente deixa `searchState` em "Error" sem trocar de fase, e assim
 #: continua até alguém cancelar a busca estragada.
 MATCHMAKING_SEARCH_STATE = "/lol-lobby/v2/lobby/matchmaking/search-state"
+#: Rotas pedidas na fila. PUT, com `{"firstPreference": ..., "secondPreference": ...}`
+#: em maiúsculas: TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY, FILL ou
+#: UNSELECTED. O que ficou guardado sai no próprio lobby, em
+#: `localMember.firstPositionPreference` — confirmado na fixture. É
+#: por ali que o motor confere antes de mandar, e é por ali que dá
+#: para ver se esta rota parou de valer num patch novo: o pedido
+#: falha ou não gruda, e o registro diz.
+LOBBY_POSITION_PREFERENCES = (
+    "/lol-lobby/v2/lobby/members/localMember/position-preferences"
+)
 PLAY_AGAIN = "/lol-lobby/v2/play-again"
 CHAMP_SELECT_SESSION = "/lol-champ-select/v1/session"
 CHAMP_SELECT_ACTION = "/lol-champ-select/v1/session/actions/{action_id}"

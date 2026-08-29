@@ -980,3 +980,103 @@ def test_the_lobby_stops_the_watch_even_without_an_end_of_game():
     engine.handle_phase(GameflowPhase.IN_PROGRESS)
     engine.handle_phase(GameflowPhase.LOBBY)
     assert vigia.stops == 1
+
+
+# ---------- rotas pedidas na fila ----------
+
+
+def lobby_com(primeira=None, segunda=None):
+    return {
+        endpoints.LOBBY: {
+            "canStartActivity": True,
+            "localMember": {
+                "isLeader": True,
+                "firstPositionPreference": primeira,
+                "secondPositionPreference": segunda,
+            },
+        }
+    }
+
+
+def test_it_asks_for_the_chosen_positions_before_queueing():
+    engine, client = make_engine(
+        Config(auto_queue=True, primary_position="jungle", secondary_position="top"),
+        responses=lobby_com(),
+    )
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert (
+        endpoints.LOBBY_POSITION_PREFERENCES,
+        {"firstPreference": "JUNGLE", "secondPreference": "TOP"},
+    ) in client.payloads
+
+
+def test_a_single_choice_leaves_the_second_slot_empty():
+    engine, client = make_engine(
+        Config(auto_queue=True, primary_position="middle"), responses=lobby_com()
+    )
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert (
+        endpoints.LOBBY_POSITION_PREFERENCES,
+        {"firstPreference": "MIDDLE", "secondPreference": "UNSELECTED"},
+    ) in client.payloads
+
+
+def test_it_says_nothing_when_the_client_already_has_them():
+    """Sem isto o app mandaria um PUT a cada entrada na fila."""
+    engine, client = make_engine(
+        Config(auto_queue=True, primary_position="jungle", secondary_position="top"),
+        responses=lobby_com("JUNGLE", "TOP"),
+    )
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert endpoints.LOBBY_POSITION_PREFERENCES not in client.paths("PUT")
+
+
+def test_no_choice_means_the_client_keeps_what_it_had():
+    engine, client = make_engine(Config(auto_queue=True), responses=lobby_com())
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert endpoints.LOBBY_POSITION_PREFERENCES not in client.paths("PUT")
+
+
+def test_a_queue_without_positions_is_left_alone():
+    """ARAM não tem onde guardar rota — pedir seria erro garantido."""
+    engine, client = make_engine(
+        Config(auto_queue=True, queue_id=450, primary_position="jungle"),
+        responses=lobby_com(),
+    )
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert endpoints.LOBBY_POSITION_PREFERENCES not in client.paths("PUT")
+
+
+def test_a_refused_request_does_not_cost_the_queue():
+    """A rota não é confirmada pela sonda: falhar nela não pode trancar a fila."""
+    engine, client = make_engine(
+        Config(auto_queue=True, primary_position="jungle"),
+        responses=lobby_com(),
+        failures=[endpoints.LOBBY_POSITION_PREFERENCES],
+    )
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert endpoints.MATCHMAKING_SEARCH in client.paths("POST")
+
+
+def test_a_refused_request_is_not_repeated_forever():
+    engine, client = make_engine(
+        Config(auto_queue=True, primary_position="jungle"),
+        responses=lobby_com(),
+        failures=[endpoints.LOBBY_POSITION_PREFERENCES],
+    )
+    engine.handle_phase(GameflowPhase.LOBBY)
+    engine.handle_phase(GameflowPhase.NONE)
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert client.paths("PUT").count(endpoints.LOBBY_POSITION_PREFERENCES) == 1
+
+
+def test_a_guest_does_not_touch_the_positions():
+    """Na sala de outro o app não mexe em nada da fila."""
+    responses = lobby_com()
+    responses[endpoints.LOBBY]["localMember"]["isLeader"] = False
+    engine, client = make_engine(
+        Config(auto_queue=True, primary_position="jungle", queue_only_as_host=True),
+        responses=responses,
+    )
+    engine.handle_phase(GameflowPhase.LOBBY)
+    assert endpoints.LOBBY_POSITION_PREFERENCES not in client.paths("PUT")

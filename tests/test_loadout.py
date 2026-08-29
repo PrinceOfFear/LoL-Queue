@@ -127,6 +127,25 @@ def test_it_survives_a_player_with_no_spells_yet():
     assert align_spells([21, 4], (None, None)) == (21, 4)
 
 
+def test_the_chosen_key_wins_over_what_is_on_screen():
+    """Conta emprestada: o Flash vai onde o jogador pediu, não onde estava."""
+    assert align_spells([21, 4], (4, 14), "f") == (21, 4)
+    assert align_spells([4, 14], (14, 4), "d") == (4, 14)
+
+
+def test_the_chosen_key_moves_flash_even_with_no_spells_yet():
+    assert align_spells([21, 4], (None, None), "d") == (4, 21)
+
+
+def test_a_recommendation_without_flash_still_follows_the_screen():
+    """Sem Flash na dupla não há tecla a respeitar — vale o alinhamento."""
+    assert align_spells([21, 14], (14, 12), "d") == (14, 21)
+
+
+def test_the_default_key_leaves_the_old_behaviour_alone():
+    assert align_spells([21, 4], (4, 14), "auto") == (4, 21)
+
+
 # ---------- feitiços ----------
 
 
@@ -138,6 +157,18 @@ def test_it_sends_the_recommended_spells_to_the_client():
     assert (
         endpoints.CHAMP_SELECT_MY_SELECTION,
         {"spell1Id": 4, "spell2Id": 21},
+    ) in client.payloads
+
+
+def test_the_key_from_the_settings_reaches_the_client():
+    """A escolha da tela precisa chegar ao PATCH, não parar na config."""
+    loadout, client, _ = build(Config(auto_spells=True, flash_key="f"))
+
+    loadout.apply(session(spell1=4, spell2=14))
+
+    assert (
+        endpoints.CHAMP_SELECT_MY_SELECTION,
+        {"spell1Id": 21, "spell2Id": 4},
     ) in client.payloads
 
 
