@@ -113,9 +113,25 @@ class LiveGame:
 
     @property
     def enemy_jungler(self) -> Player | None:
-        """O inimigo que interessa. None quando não dá para ter certeza."""
-        candidatos = [p for p in self.enemies if p.is_jungler]
-        return candidatos[0] if len(candidatos) == 1 else None
+        """O inimigo que interessa. None quando não dá para ter certeza.
+
+        A posição declarada pela API vale mais que o feitiço. Empatar as
+        duas coisas emudecia a partida inteira sempre que alguém do outro
+        lado levava Punir fora da selva — um top de Punir e Fantasma, um
+        suporte que pegou o feitiço errado — porque aí eram dois
+        candidatos e o aviso preferia calar. Quando a API diz quem é o
+        jungler, ela decide sozinha.
+
+        Só onde ninguém tem posição declarada — fila cega, olho por olho
+        — o Punir volta a ser o único sinal. Aí, sim, dois Punir são
+        dúvida legítima: chutar mandaria o jogador para o lado errado do
+        mapa, que é pior que não avisar nada.
+        """
+        declarados = [p for p in self.enemies if p.position == JUNGLE]
+        if declarados:
+            return declarados[0] if len(declarados) == 1 else None
+        punidores = [p for p in self.enemies if p.smite]
+        return punidores[0] if len(punidores) == 1 else None
 
     @property
     def my_anchor(self) -> tuple[float, float]:

@@ -34,8 +34,25 @@ FRAMES_PER_SECOND = 5.0
 #: a janela do jogo pode mudar de tamanho ou de monitor no meio da partida.
 RELOCATE_SECONDS = 20.0
 
+#: De quanto em quanto tempo o minimapa é procurado enquanto ele ainda
+#: não foi achado. Antes a busca acontecia a cada quadro, cinco vezes por
+#: segundo, e a partida começa justamente com dezenas de segundos de tela
+#: de carregamento em que não há minimapa nenhum para achar: era meia
+#: tela recortada e medida em vão, sem pressa nenhuma que justificasse.
+#: Um segundo continua imperceptível para quem espera.
+SEARCH_SECONDS = 1.0
+
 #: De quanto em quanto tempo a partida é reconsultada enquanto não há uma.
 GAME_RETRY_SECONDS = 10.0
+
+#: Quantas releituras da lista de jogadores antes de aceitar que o
+#: jungler inimigo é mesmo indecifrável. A porta 2999 já responde na tela
+#: de carregamento, mas nem sempre com os feitiços e as rotas
+#: preenchidos, e a primeira resposta ficava valendo para sempre: uma
+#: leitura incompleta condenava a partida inteira ao silêncio. Vezes
+#: `GAME_RETRY_SECONDS` dá um minuto de paciência, que cobre a tela de
+#: carregamento mais lenta.
+JUNGLER_REREADS = 6
 
 #: Quanto o laço dorme quando não há partida nenhuma na tela.
 IDLE_SECONDS = 2.0
@@ -151,7 +168,7 @@ class JungleWatcher:
         self._viewport = viewport_fn or window_module.viewport
         self._locate = locate_fn or minimap_module.locate
         self._grab = grab_fn or self._screen_grab
-        self._fetch = game_fn or fetch_game
+        self._fetch = game_fn or self._fetch_live
         self._clock = clock
         self._fullscreen = fullscreen_fn or gamecfg.exclusive_fullscreen
 
@@ -161,6 +178,7 @@ class JungleWatcher:
 
         self._game: LiveGame | None = None
         self._game_at = 0.0
+        self._rereads = 0
         self._champion = ""
         self._primed = ""
         self._detector: Detector | None = None
@@ -221,6 +239,7 @@ class JungleWatcher:
         """Esquece a partida anterior, sem desligar o laço."""
         self._game = None
         self._game_at = 0.0
+        self._rereads = 0
         self._champion = ""
         self._primed = ""
         self._detector = None
@@ -261,7 +280,12 @@ class JungleWatcher:
             return None
         jungler = jogo.enemy_jungler
         if jungler is None:
-            self._note("sem_jungler", NOTE_NO_JUNGLER)
+            # Só reclama depois de esgotada a paciência: anotar que a
+            # partida não tem jungler enquanto a lista de jogadores
+            # ainda está chegando é registrar um diagnóstico que a
+            # leitura seguinte desmente.
+            if self._rereads >= JUNGLER_REREADS:
+                self._note("sem_jungler", NOTE_NO_JUNGLER)
             return None
         self._prime(jogo, jungler.champion)
 
@@ -294,24 +318,66 @@ class JungleWatcher:
     # ---------- as peças ----------
 
     def _ensure_game(self, agora: float) -> LiveGame | None:
-        if self._game is not None:
+        if not self._stale_game():
             return self._game
         if self._game_at and agora - self._game_at < GAME_RETRY_SECONDS:
-            return None
+            return self._game
         self._game_at = agora
-        self._game_tries += 1
-        try:
-            self._game = self._fetch()
-        except (LiveGameUnavailable, Exception):
-            self._game = None
         if self._game is None:
-            if self._game_tries >= GAME_TRIES_BEFORE_WARNING:
+            self._game_tries += 1
+        else:
+            self._rereads += 1
+        try:
+            lida = self._fetch()
+        except (LiveGameUnavailable, Exception):
+            lida = None
+        if lida is None:
+            # Perder uma releitura não apaga a partida que já foi lida:
+            # o jogo fecha a porta 2999 por um instante em qualquer
+            # reconexão, e esquecer tudo ali dentro custaria o resto da
+            # partida em silêncio.
+            if self._game is None and self._game_tries >= GAME_TRIES_BEFORE_WARNING:
                 self._note("sem_partida", NOTE_NO_GAME)
-            return None
-        rota = getattr(self._game, "lane_name", "") or "rota desconhecida"
-        lado = "azul" if getattr(self._game, "side", 1) > 0 else "vermelho"
-        self._note("partida", f"Partida lida: você é {rota} do lado {lado}.")
+            return self._game
+        primeira = self._game is None
+        self._game = lida
+        if primeira:
+            rota = getattr(lida, "lane_name", "") or "rota desconhecida"
+            lado = "azul" if getattr(lida, "side", 1) > 0 else "vermelho"
+            self._note("partida", f"Partida lida: você é {rota} do lado {lado}.")
         return self._game
+
+    def _stale_game(self) -> bool:
+        """Se ainda vale a pena perguntar de novo quem está nesta partida.
+
+        A lista de jogadores da porta 2999 já responde na tela de
+        carregamento, mas às vezes sem os feitiços e sem as rotas — e a
+        primeira resposta era guardada para sempre. Bastava calhar de a
+        primeira leitura chegar incompleta para o jungler inimigo ficar
+        desconhecido a partida inteira, que é exatamente o silêncio que
+        o jogador levou para casa achando que o app estava quebrado.
+
+        Achado o jungler, ou esgotada a paciência, a leitura vira
+        definitiva: a composição não muda no meio do jogo, e insistir
+        seria bater na porta do jogo por nada até o Nexus cair.
+        """
+        if self._game is None:
+            return True
+        if self._rereads >= JUNGLER_REREADS:
+            return False
+        return getattr(self._game, "enemy_jungler", None) is None
+
+    def _fetch_live(self) -> LiveGame:
+        """A partida lida do jogo, com a opção de girar o minimapa junto.
+
+        `fetch` aceita `flip_minimap` desde sempre e ninguém preenchia:
+        o laço chamava `fetch()` seco, e toda partida saía como se o
+        minimapa nunca girasse. Para quem joga de vermelho com
+        `FlipMiniMap` ligado, isso espelha o aviso e manda o jogador
+        para o canto oposto do mapa — o erro mais caro que este app
+        consegue cometer, porque soa exatamente como um acerto.
+        """
+        return fetch_game(flip_minimap=gamecfg.flip_minimap())
 
     def _prime(self, jogo: LiveGame, champion: str) -> None:
         """Sintetiza tudo o que pode ser dito, antes de precisar dizer.
@@ -328,7 +394,8 @@ class JungleWatcher:
             pass
 
     def _ensure_minimap(self, agora: float):
-        if self._minimap is not None and agora - self._minimap_at < RELOCATE_SECONDS:
+        espera = RELOCATE_SECONDS if self._minimap is not None else SEARCH_SECONDS
+        if self._minimap_at and agora - self._minimap_at < espera:
             return self._minimap
         vista = self._viewport()
         if vista is not None:

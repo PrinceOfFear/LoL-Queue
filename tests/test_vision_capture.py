@@ -23,6 +23,7 @@ from lolqueue.vision.watcher import (
     FULLSCREEN_SPOKEN,
     GAME_RETRY_SECONDS,
     GAME_TRIES_BEFORE_WARNING,
+    JUNGLER_REREADS,
     NOTE_NO_GAME,
     NOTE_NO_JUNGLER,
     NOTE_NO_MINIMAP,
@@ -626,9 +627,64 @@ def test_a_match_without_a_readable_enemy_jungler_is_reported():
     jogo = SimpleNamespace(side=1, enemy_jungler=None, lane_name="rota do meio")
     vigia, relogio, diario, _voz = _vigia(game_fn=lambda: jogo)
 
-    _rodar(vigia, relogio, 5, passo=1.0)
+    _rodar(vigia, relogio, JUNGLER_REREADS + 3, passo=GAME_RETRY_SECONDS + 1.0)
 
     assert diario.count(NOTE_NO_JUNGLER) == 1
+
+
+def test_the_jungler_is_not_given_up_on_at_the_first_reading():
+    """A lista chega incompleta na tela de carregamento; não é sentença."""
+    jogo = SimpleNamespace(side=1, enemy_jungler=None, lane_name="rota do meio")
+    vigia, relogio, diario, _voz = _vigia(game_fn=lambda: jogo)
+
+    _rodar(vigia, relogio, JUNGLER_REREADS, passo=GAME_RETRY_SECONDS + 1.0)
+
+    assert NOTE_NO_JUNGLER not in diario
+
+
+def test_a_jungler_that_only_appears_on_the_second_reading_is_used():
+    """O bug que emudecia a partida inteira: primeira leitura sem feitiços.
+
+    A porta 2999 responde antes de a partida existir de verdade, e a
+    resposta de então vinha sem `summonerSpells` e sem `position`. Como
+    a leitura era guardada para sempre, o jungler inimigo ficava
+    desconhecido do primeiro ao último minuto.
+    """
+    graves = SimpleNamespace(champion="Graves", summoner="x")
+    leituras = [
+        SimpleNamespace(side=1, enemy_jungler=None, lane_name="rota do meio"),
+        SimpleNamespace(side=1, enemy_jungler=graves, lane_name="rota do meio"),
+    ]
+    vigia, relogio, diario, _voz = _vigia(game_fn=lambda: leituras.pop(0))
+
+    _rodar(vigia, relogio, 2, passo=GAME_RETRY_SECONDS + 1.0)
+
+    assert vigia._game.enemy_jungler is graves
+    assert NOTE_NO_JUNGLER not in diario
+    # Achado o jungler, a lista para de ser relida: a composição não
+    # muda no meio do jogo e a porta 2999 não precisa apanhar à toa.
+    _rodar(vigia, relogio, 4, passo=GAME_RETRY_SECONDS + 1.0)
+    assert leituras == []
+
+
+def test_a_lost_reading_does_not_erase_the_match_already_read():
+    """A porta 2999 pisca em qualquer reconexão; a partida continua a mesma."""
+    jogo = SimpleNamespace(side=1, enemy_jungler=None, lane_name="rota do meio")
+    respostas = [jogo, None, jogo]
+
+    def ler():
+        if not respostas:
+            return jogo
+        resposta = respostas.pop(0)
+        if resposta is None:
+            raise RuntimeError("porta fechada")
+        return resposta
+
+    vigia, relogio, _diario, _voz = _vigia(game_fn=ler)
+
+    _rodar(vigia, relogio, 2, passo=GAME_RETRY_SECONDS + 1.0)
+
+    assert vigia._game is jogo
 
 
 def test_a_minimap_that_is_not_found_is_reported():

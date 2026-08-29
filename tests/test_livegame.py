@@ -86,6 +86,30 @@ def test_two_smites_means_no_certainty():
     assert parse("Eu#BR1", confusa).enemy_jungler is None
 
 
+def test_the_declared_role_beats_a_stray_smite():
+    """Punir fora da selva não pode emudecer o aviso a partida inteira.
+
+    Um top de Punir e Fantasma, ou um suporte que pegou o feitiço
+    errado, fazia dois candidatos e o aviso preferia calar. Onde a API
+    diz quem é o jungler, ela decide sozinha.
+    """
+    torta = [
+        jogador("Eu#BR1", "Garen", "ORDER", "MIDDLE"),
+        jogador("Topo#BR1", "Sett", "CHAOS", "TOP", punir=True),
+        jogador("Caçador#BR1", "Kha'Zix", "CHAOS", "JUNGLE", punir=True),
+    ]
+    assert parse("Eu#BR1", torta).enemy_jungler.champion == "Kha'Zix"
+
+
+def test_a_jungler_without_smite_is_still_the_jungler():
+    """A rota declarada vale mesmo quando o inimigo abriu mão do Punir."""
+    sem_punir = [
+        jogador("Eu#BR1", "Garen", "ORDER", "MIDDLE"),
+        jogador("Caçador#BR1", "Kha'Zix", "CHAOS", "JUNGLE"),
+    ]
+    assert parse("Eu#BR1", sem_punir).enemy_jungler.champion == "Kha'Zix"
+
+
 def test_matches_the_player_even_without_the_riot_tag():
     """A API às vezes devolve o nome ativo sem a etiqueta #BR1."""
     assert parse("Eu", PARTIDA).me.champion == "Garen"
