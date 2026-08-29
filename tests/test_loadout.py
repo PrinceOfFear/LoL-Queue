@@ -203,16 +203,79 @@ def test_it_never_deletes_a_page_the_user_made():
 
 
 def test_it_gives_up_instead_of_making_room_by_force():
-    """Sem espaço, o app avisa — apagar runa alheia não é opção."""
+    """Sem vaga de verdade, o app avisa — apagar runa alheia é proibido.
+
+    "De verdade" é o cliente recusando a criação, não a bandeira do
+    inventário dizendo que não dá: quem manda aqui é a resposta ao POST.
+    """
     loadout, client, messages = build(
         Config(auto_runes=True),
         responses={endpoints.PERK_INVENTORY: {"canAddCustomPage": False}},
+        failures={("POST", endpoints.PERK_PAGES)},
     )
 
     loadout.apply(session())
 
-    assert client.paths("POST") == []
+    assert client.paths("DELETE") == []
     assert any("espaço" in message for message in messages)
+
+
+def test_a_client_that_lies_about_being_full_does_not_cost_the_runes():
+    """A bandeira diz que não cabe; o POST prova que cabia.
+
+    Aconteceu numa seleção inteira: `canAddCustomPage` falso com uma
+    página nossa parada ali, e o app entrando em partida sem runa
+    enquanto repetia no diário que a culpa era do jogador. A bandeira
+    agora só decide se vale abrir espaço antes — criar, ele tenta
+    sempre.
+    """
+    loadout, client, messages = build(
+        Config(auto_runes=True),
+        responses={
+            endpoints.PERK_INVENTORY: {"canAddCustomPage": False},
+            endpoints.PERK_PAGES: [MY_PAGE, USER_PAGE],
+        },
+    )
+
+    loadout.apply(session())
+
+    assert endpoints.PERK_PAGES in client.paths("POST")
+    assert any("Runas" in message for message in messages)
+    assert not any("espaço" in message for message in messages)
+
+
+def test_the_same_complaint_is_not_repeated_every_tick():
+    """Uma seleção dura minutos; a mesma queixa não pode encher o diário.
+
+    O log real trouxe onze linhas idênticas em noventa segundos, e o
+    que ficou de fora foram justamente as linhas que explicavam o
+    resto da seleção.
+    """
+    loadout, client, messages = build(
+        Config(auto_runes=True),
+        responses={endpoints.PERK_INVENTORY: {"canAddCustomPage": False}},
+        failures={("POST", endpoints.PERK_PAGES)},
+    )
+
+    for _ in range(5):
+        loadout.apply(session())
+
+    assert len([m for m in messages if "espaço" in m]) == 1
+
+
+def test_a_new_selection_hears_the_complaint_again():
+    """Calar para sempre seria a falha calada de novo, só que mais tarde."""
+    loadout, client, messages = build(
+        Config(auto_runes=True),
+        responses={endpoints.PERK_INVENTORY: {"canAddCustomPage": False}},
+        failures={("POST", endpoints.PERK_PAGES)},
+    )
+
+    loadout.apply(session())
+    loadout.reset()
+    loadout.apply(session())
+
+    assert len([m for m in messages if "espaço" in m]) == 2
 
 
 # ---------- quando agir ----------
@@ -1064,7 +1127,7 @@ def test_a_failed_swap_leaves_the_screen_telling_the_truth():
     loadout.apply(session())
 
     assert published[-1][1] == "diamond_plus"
-    assert any("trocar" in message for message in messages)
+    assert any("recusou" in message for message in messages)
 
 
 # ---------- o arsenal na loja ----------

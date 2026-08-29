@@ -206,6 +206,10 @@ class Loadout:
         self._source = source
         self._now = now or time.monotonic
         self._items = ItemSets(client, log=self._log)
+        # A última reclamação sobre a página de runas. `apply` roda a
+        # cada tick da seleção, e sem isto a mesma frase saía onze
+        # vezes em noventa segundos, enterrando o resto do diário.
+        self._complaint = ""
         self._done_for: int | None = None
         self._pending: _Search | None = None
         # Avisa a tela quais builds de runa existem e qual está no
@@ -240,6 +244,7 @@ class Loadout:
 
     def reset(self) -> None:
         self._done_for = None
+        self._complaint = ""
         self._pages = ()
         self._requested_matchup = None
         # A thread em voo, se houver, é daemon e some sozinha; o que
@@ -569,32 +574,47 @@ class Loadout:
         jogador sem página nenhuma sempre que o cliente recusasse o
         POST seguinte, o que na seleção significa entrar em partida sem
         runa. Criando antes, uma recusa não custa nada: a página de
-        antes continua onde estava, ativa. A única hora em que ainda se
-        apaga primeiro é quando não há vaga — aí não existe outra saída,
-        e a página aberta é a nossa.
+        antes continua onde estava, ativa. A única hora em que se apaga
+        primeiro é quando o cliente diz não haver vaga — aí abrir espaço
+        é o que falta, e a página aberta é a nossa.
+
+        E o "diz" é literal: `canAddCustomPage` é palpite do cliente,
+        não fato. Numa conta com três vagas e as três ocupadas ele
+        respondeu que dava para criar; e numa seleção inteira ele
+        respondeu que não dava com uma página nossa parada ali, à
+        espera de ser reaproveitada. Por isso a bandeira só decide se
+        vale a pena abrir espaço antes — quem tem a palavra final é o
+        POST. Tentar e ouvir a recusa custa uma chamada; acreditar na
+        bandeira custou ao jogador entrar em partida sem runa, onze
+        vezes seguidas, com o diário repetindo que a culpa era dele.
         """
         name = f"{PAGE_PREFIX}: {self._catalog.name(champion_id)}"
         if not self._has_room():
             self._discard_old_pages()
-            if not self._has_room():
-                self._log(
-                    "Sem espaço para uma página de runas — apague uma das "
-                    "suas ou desligue as runas automáticas."
-                )
-                return None
 
-        page = self._client.post(
-            endpoints.PERK_PAGES,
-            json={
-                "name": name,
-                "primaryStyleId": style,
-                "subStyleId": sub_style,
-                "selectedPerkIds": list(perks),
-            },
-        )
+        try:
+            page = self._client.post(
+                endpoints.PERK_PAGES,
+                json={
+                    "name": name,
+                    "primaryStyleId": style,
+                    "subStyleId": sub_style,
+                    "selectedPerkIds": list(perks),
+                },
+            )
+        except ClientClosed:
+            raise
+        except LcuError as exc:
+            self._complain(
+                "Sem espaço para uma página de runas — apague uma das "
+                "suas ou desligue as runas automáticas."
+                if self._out_of_room()
+                else f"O cliente recusou a página de runas: {exc}"
+            )
+            return None
         page_id = page.get("id") if isinstance(page, dict) else None
         if page_id is None:
-            self._log("O cliente não devolveu a página de runas criada.")
+            self._complain("O cliente não devolveu a página de runas criada.")
             return None
         # Criar não ativa: sem este passo o jogador entraria na partida
         # com a página que estava selecionada antes.
@@ -751,7 +771,33 @@ class Loadout:
             self._client.delete(endpoints.PERK_PAGE.format(page_id=page_id))
 
     def _has_room(self) -> bool:
+        """O palpite do cliente sobre haver vaga. Palpite, não veredito."""
         inventory = self._client.get(endpoints.PERK_INVENTORY)
         if not isinstance(inventory, dict):
             return True
         return bool(inventory.get("canAddCustomPage", True))
+
+    def _out_of_room(self) -> bool:
+        """Se a falta de vaga explica a recusa que o cliente acabou de dar.
+
+        Serve só para escolher a frase certa depois do erro, então uma
+        segunda falha aqui não pode virar exceção: sem resposta, a
+        recusa é descrita como veio, sem inventar o motivo.
+        """
+        try:
+            return not self._has_room()
+        except LcuError:
+            return False
+
+    def _complain(self, message: str) -> None:
+        """Diz o que deu errado com a página — uma vez por seleção.
+
+        `apply` roda a cada tick enquanto o campeão está travado, e a
+        mesma frase repetida dezenas de vezes não informa mais que a
+        primeira: só empurra para fora do diário as linhas que ainda
+        não foram lidas. Muda o motivo, muda a frase, e ela sai de novo.
+        """
+        if message == self._complaint:
+            return
+        self._complaint = message
+        self._log(message)
