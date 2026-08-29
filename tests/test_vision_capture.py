@@ -19,8 +19,12 @@ from lolqueue.vision.duplication import DuplicationGrabber, DuplicationUnavailab
 from lolqueue.vision.gamecfg import exclusive_fullscreen
 from lolqueue.vision.watcher import (
     BLIND_MESSAGE,
+    FLIP_RISK_NOTE,
+    FLIP_RISK_SPOKEN,
+    BLIND_MODE_IS_FINE,
     BLIND_SECONDS,
     BLIND_SPOKEN,
+    FAILURES_BEFORE_WARNING,
     FULLSCREEN_HINT,
     FULLSCREEN_SPOKEN,
     GAME_RETRY_SECONDS,
@@ -28,8 +32,11 @@ from lolqueue.vision.watcher import (
     JUNGLER_REREADS,
     NOTE_NO_GAME,
     NOTE_NO_JUNGLER,
+    NOTE_GDI,
     NOTE_NO_CONFIG,
     NOTE_NO_MINIMAP,
+    NOTE_NO_WINDOW,
+    NOTE_TWIN_JUNGLER,
     RELOCATE_SECONDS,
     JungleWatcher,
 )
@@ -388,8 +395,14 @@ class _Relogio:
         return self.agora
 
 
-def _vigia_cego(quadro):
-    """Um `JungleWatcher` com partida em curso e captura inútil."""
+def _vigia_cego(quadro, config=None, fullscreen=False):
+    """Um `JungleWatcher` com partida em curso e captura inútil.
+
+    `config` e `fullscreen` entram preenchidos porque a queixa de tela
+    preta mudou de texto conforme o que se sabe do modo de vídeo. Deixar
+    os dois à descoberta real amarraria estes testes à máquina que os
+    roda: passariam aqui e falhariam em quem tem o League instalado.
+    """
     relogio = _Relogio()
     diario = []
     jogo = SimpleNamespace(
@@ -403,6 +416,8 @@ def _vigia_cego(quadro):
         grab_fn=lambda rect: quadro,
         game_fn=lambda: jogo,
         clock=relogio,
+        config_fn=lambda: config,
+        fullscreen_fn=lambda: fullscreen,
     )
     return vigia, relogio, diario
 
@@ -622,6 +637,10 @@ def _vigia(**extra):
         game_fn=lambda: None,
         clock=relogio,
         fullscreen_fn=lambda: False,
+        # O game.cfg entra como "encontrado" de propósito: à descoberta
+        # real, cada teste daqui passaria ou falharia conforme a máquina
+        # que o roda ter o League instalado.
+        config_fn=lambda: Path("game.cfg"),
     )
     padrao.update(extra)
     return JungleWatcher(**padrao), relogio, diario, voz
@@ -808,3 +827,322 @@ def test_a_voice_that_fails_does_not_take_the_watch_down():
     vigia.stop()
 
     assert FULLSCREEN_HINT in diario
+
+
+
+def test_a_match_with_no_window_on_screen_is_reported():
+    """Sem janela não há nem tela preta para reclamar.
+
+    Era o buraco mais fundo do diário: com a partida lida e a janela do
+    jogo minimizada (ou num monitor que sumiu, ou menor que o mínimo que
+    a busca aceita), `viewport()` volta nulo, nada é capturado, e por
+    isso nem o aviso de captura preta nem o de minimapa não localizado
+    chegam a existir. O registro mostrava "Partida lida" e depois nada,
+    para sempre.
+    """
+    jogo = SimpleNamespace(
+        side=1,
+        enemy_jungler=SimpleNamespace(champion="Lee Sin"),
+        lane_name="rota do meio",
+    )
+    vigia, relogio, diario, _voz = _vigia(
+        game_fn=lambda: jogo, viewport_fn=lambda: None
+    )
+
+    _rodar(vigia, relogio, 6, passo=1.0)
+
+    assert diario.count(NOTE_NO_WINDOW) == 1
+    assert NOTE_NO_MINIMAP not in diario
+
+
+def test_a_window_that_comes_back_stops_the_complaint():
+    """A nota sai uma vez por partida; ela não pode virar alarme em laço."""
+    jogo = SimpleNamespace(
+        side=1,
+        enemy_jungler=SimpleNamespace(champion="Lee Sin"),
+        lane_name="rota do meio",
+    )
+    janelas = [None, None, Rect(0, 0, 1920, 1080)]
+    vigia, relogio, diario, _voz = _vigia(
+        game_fn=lambda: jogo,
+        viewport_fn=lambda: janelas.pop(0) if janelas else Rect(0, 0, 1920, 1080),
+    )
+
+    _rodar(vigia, relogio, 5, passo=1.0)
+
+    assert diario.count(NOTE_NO_WINDOW) == 1
+
+
+def test_a_loop_that_breaks_every_frame_says_so():
+    """Engolir exceção calado é o mesmo defeito que a thread morta.
+
+    A diferença é só quem percebe: ninguém. Uma exceção solta é um
+    quadro perdido e não interessa; a mesma exceção a cada quadro é a
+    partida inteira sem aviso, e antes disto não sobrava rastro nenhum.
+
+    O laço roda aqui de verdade, na thread do teste: o relógio falso
+    salta o intervalo inteiro a cada consulta, então a espera entre
+    quadros sai negativa e `_stop.wait` volta na hora.
+    """
+    vigia, _relogio, diario, voz = _vigia()
+    voltas = []
+
+    def relogio_apressado():
+        return len(voltas) * 3600.0
+
+    def tick_quebrado():
+        voltas.append(1)
+        if len(voltas) > FAILURES_BEFORE_WARNING + 3:
+            vigia._stop.set()
+        raise ValueError("a lista de jogadores veio torta")
+
+    vigia._clock = relogio_apressado
+    vigia.tick = tick_quebrado
+    vigia._run()
+
+    falhando = [linha for linha in diario if "falhando a cada quadro" in linha]
+    assert len(falhando) == 1
+    assert "ValueError" in falhando[0]
+    assert "a lista de jogadores veio torta" in falhando[0]
+    assert any("indisponível" in frase for frase in voz.ditas)
+
+
+def test_a_loop_that_recovers_does_not_complain():
+    """Um tropeço isolado a cada tanto não é motivo para nota nenhuma."""
+    vigia, _relogio, diario, _voz = _vigia()
+    voltas = []
+
+    def tick_intermitente():
+        voltas.append(1)
+        if len(voltas) > FAILURES_BEFORE_WARNING * 3:
+            vigia._stop.set()
+        if len(voltas) % 2:
+            raise ValueError("um quadro ruim")
+
+    vigia._clock = lambda: len(voltas) * 3600.0
+    vigia.tick = tick_intermitente
+    vigia._run()
+
+    assert diario == []
+
+
+class GrabberFalso:
+    """O que o `ScreenGrabber` tem de perigoso: um `close` que importa."""
+
+    def __init__(self):
+        self.fechados = 0
+
+    def grab(self, rect):
+        return np.zeros((10, 10, 3), dtype=np.uint8)
+
+    def close(self):
+        self.fechados += 1
+
+
+class ThreadTeimosa:
+    """Uma thread que não sai no prazo do `join`."""
+
+    def __init__(self):
+        self.joins = 0
+
+    def join(self, timeout=None):
+        self.joins += 1
+
+    def is_alive(self):
+        return True
+
+
+def test_closing_does_not_pull_the_grabber_from_under_the_loop():
+    """Fechar não pode arrancar a captura da mão de quem está capturando.
+
+    O `ScreenGrabber` do DXGI guarda objetos COM presos à thread que os
+    criou. Fechá-los pela thread da janela, com `lolqueue-selva` ainda
+    dentro de um `grab`, derruba o processo inteiro. E zerar o grabber no
+    meio de um quadro tinha um segundo estrago mais quieto: o `tick` em
+    curso criava outro logo depois e a tela seguia sendo capturada depois
+    de "Vigilância desligada" no diário.
+    """
+    vigia, _relogio, _diario, _voz = _vigia()
+    grabber = GrabberFalso()
+    vigia._grabber = grabber
+    teimosa = ThreadTeimosa()
+    vigia._thread = teimosa
+
+    vigia.stop()
+
+    assert teimosa.joins == 1
+    assert grabber.fechados == 0
+    assert vigia._grabber is grabber
+    assert vigia._stop.is_set()
+
+
+def test_a_watch_that_never_had_a_thread_still_releases():
+    """Quem chamou `tick()` na mão não tem laço para soltar por ele."""
+    vigia, _relogio, _diario, _voz = _vigia()
+    grabber = GrabberFalso()
+    vigia._grabber = grabber
+
+    vigia.stop()
+
+    assert grabber.fechados == 1
+    assert vigia._grabber is None
+
+
+def test_the_loop_releases_what_it_opened_on_its_way_out():
+    """A outra metade do acordo: o laço solta o que abriu, ao sair."""
+    vigia, _relogio, _diario, _voz = _vigia()
+    grabber = GrabberFalso()
+    vigia._grabber = grabber
+    vigia._clock = lambda: 0.0
+    vigia.tick = lambda: vigia._stop.set()
+
+    vigia._run()
+
+    assert grabber.fechados == 1
+    assert vigia._grabber is None
+
+
+def test_a_black_screen_with_the_video_mode_already_right_says_so():
+    """Não mandar consertar o que já está certo.
+
+    Com o game.cfg encontrado e o modo de vídeo fora da tela cheia
+    exclusiva, o conselho de sempre vira uma caça a fantasma: o jogador
+    troca a opção, a tela continua preta, e a conclusão dele é que o
+    aviso não presta. A pista verdadeira está em HDR, overlay ou placa
+    de vídeo — e é isso que a mensagem precisa dizer.
+    """
+    vigia, relogio, diario = _vigia_cego(
+        PRETO, config=Path("game.cfg"), fullscreen=False
+    )
+    vigia.tick()
+    relogio.agora = BLIND_SECONDS
+    vigia.tick()
+
+    assert BLIND_MODE_IS_FINE in diario
+    assert BLIND_MESSAGE not in diario
+    assert "Sem bordas" not in BLIND_MODE_IS_FINE
+
+
+def test_a_black_screen_with_no_config_keeps_the_usual_advice():
+    """Sem saber o modo, o palpite mais provável continua sendo o melhor."""
+    vigia, relogio, diario = _vigia_cego(PRETO, config=None)
+    vigia.tick()
+    relogio.agora = BLIND_SECONDS
+    vigia.tick()
+
+    assert BLIND_MESSAGE in diario
+    assert BLIND_MODE_IS_FINE not in diario
+
+
+def test_a_black_screen_in_exclusive_fullscreen_keeps_the_usual_advice():
+    """Modo confirmado como culpado: o conselho de sempre está certo."""
+    vigia, relogio, diario = _vigia_cego(
+        PRETO, config=Path("game.cfg"), fullscreen=True
+    )
+    vigia.tick()
+    relogio.agora = BLIND_SECONDS
+    vigia.tick()
+
+    assert BLIND_MESSAGE in diario
+
+
+def test_falling_back_to_the_old_capture_is_written_down(monkeypatch):
+    """A degradação era definitiva e invisível — a pior combinação.
+
+    O `ScreenGrabber` troca o DXGI pelo GDI para sempre quando o primeiro
+    não entrega quadro, e o GDI por cima de um jogo em tela cheia
+    costuma devolver preto. Ou seja: a causa mais provável do silêncio
+    que vem a seguir não deixava rastro nenhum no diário.
+    """
+    from lolqueue.vision import capture as capture_module
+
+    class GrabberGdi(GrabberFalso):
+        strategy = "gdi"
+
+    monkeypatch.setattr(capture_module, "ScreenGrabber", GrabberGdi)
+
+    vigia, _relogio, diario, _voz = _vigia()
+    vigia._screen_grab(Rect(0, 0, 100, 100))
+    vigia._screen_grab(Rect(0, 0, 100, 100))
+
+    assert diario.count(NOTE_GDI) == 1
+
+
+def test_the_fast_capture_working_says_nothing():
+    """Rastro só quando há o que explicar; o caminho feliz é calado."""
+
+    class GrabberDxgi(GrabberFalso):
+        strategy = "dxgi"
+
+    vigia, _relogio, diario, _voz = _vigia()
+    vigia._grabber = GrabberDxgi()
+    vigia._screen_grab(Rect(0, 0, 100, 100))
+
+    assert NOTE_GDI not in diario
+
+
+def _jogo_lado(side):
+    return SimpleNamespace(
+        side=side,
+        enemy_jungler=SimpleNamespace(champion="Lee Sin"),
+        lane_name="rota do meio",
+    )
+
+
+def test_red_side_without_the_config_is_warned_out_loud():
+    """O único silêncio que vira aviso errado em vez de aviso nenhum.
+
+    Sem o game.cfg, `flip_minimap` devolve o padrão do jogo. Quem joga
+    do lado vermelho com Girar Minimapa ligado recebe cada lugar
+    trocado pelo oposto — e um aviso invertido no meio de um gank é pior
+    que aviso nenhum, porque soa como acerto. A nota de "não achei o
+    game.cfg" já existia, mas só no diário, que ninguém lê jogando.
+    """
+    vigia, relogio, diario, voz = _vigia(
+        game_fn=lambda: _jogo_lado(-1), config_fn=lambda: None
+    )
+
+    _rodar(vigia, relogio, 3)
+
+    assert diario.count(FLIP_RISK_NOTE) == 1
+    assert voz.ditas.count(FLIP_RISK_SPOKEN) == 1
+
+
+def test_blue_side_without_the_config_is_left_alone():
+    """Do lado azul a opção não muda nada: o aviso seria susto à toa."""
+    vigia, relogio, diario, voz = _vigia(
+        game_fn=lambda: _jogo_lado(1), config_fn=lambda: None
+    )
+
+    _rodar(vigia, relogio, 3)
+
+    assert FLIP_RISK_NOTE not in diario
+    assert FLIP_RISK_SPOKEN not in voz.ditas
+
+
+def test_red_side_with_the_config_found_is_left_alone():
+    """Com o arquivo em mãos não há dúvida a declarar."""
+    vigia, relogio, diario, voz = _vigia(game_fn=lambda: _jogo_lado(-1))
+
+    _rodar(vigia, relogio, 3)
+
+    assert FLIP_RISK_NOTE not in diario
+    assert FLIP_RISK_SPOKEN not in voz.ditas
+
+
+def test_a_mirror_matchup_is_declared_once():
+    """Aviso menos confiável tem de ser dito, não descoberto no susto."""
+    jogo = SimpleNamespace(
+        side=1,
+        enemy_jungler=SimpleNamespace(champion="Kha'Zix"),
+        lane_name="rota do meio",
+        jungler_has_a_twin=True,
+    )
+    vigia, relogio, diario, _voz = _vigia(
+        game_fn=lambda: jogo, viewport_fn=lambda: None
+    )
+
+    _rodar(vigia, relogio, 4, passo=1.0)
+
+    esperado = NOTE_TWIN_JUNGLER.format(champion="Kha'Zix")
+    assert diario.count(esperado) == 1

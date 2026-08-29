@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import requests
 import urllib3
 
 from .credentials import Credentials
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class LcuError(RuntimeError):
@@ -23,6 +22,13 @@ class LcuClient:
 
     A verificação TLS fica desligada porque o certificado da Riot é
     autoassinado. É aceitável apenas porque o destino é sempre loopback.
+
+    O aviso que o urllib3 emite por causa disso é calado só em volta da
+    chamada, e não com um `disable_warnings` no topo do módulo como era
+    antes: aquilo desligava o aviso no processo inteiro, para sempre, no
+    instante em que alguém importasse este arquivo. O app também fala
+    com a internet de verdade — Data Dragon, op.gg — e um dia em que uma
+    dessas conexões saísse sem verificação ninguém ficaria sabendo.
     """
 
     def __init__(
@@ -68,9 +74,13 @@ class LcuClient:
     def _send(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self._credentials.base_url}{path}"
         try:
-            response = self._session.request(
-                method, url, timeout=self._timeout, **kwargs
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter(
+                    "ignore", urllib3.exceptions.InsecureRequestWarning
+                )
+                response = self._session.request(
+                    method, url, timeout=self._timeout, **kwargs
+                )
         except requests.exceptions.ConnectionError as exc:
             raise ClientClosed("cliente do LoL fechado") from exc
         except requests.exceptions.RequestException as exc:

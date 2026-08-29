@@ -84,6 +84,59 @@ BLIND_MESSAGE = (
     "aviso do jungler volta a funcionar."
 )
 
+#: A mesma tela preta, quando o game.cfg já disse que o modo de vídeo
+#: não é o culpado. Mandar trocar uma opção que já está certa é pior do
+#: que não dizer nada: o jogador mexe no vídeo, nada muda, e ele conclui
+#: que o aviso é quebrado — quando a pista verdadeira estava em outro
+#: lugar o tempo todo.
+BLIND_MODE_IS_FINE = (
+    "Não consegui ler a tela do jogo: a captura está vindo toda preta. "
+    "O modo de vídeo não é o problema — conferi no game.cfg e ele não "
+    "está em tela cheia exclusiva. Nesses casos a causa costuma ser o "
+    "HDR do Windows ligado, um overlay por cima do jogo (Discord, "
+    "GeForce Experience) ou o jogo rodando numa placa de vídeo "
+    "diferente da que o app captura."
+)
+
+#: A captura antiga entrou em cena. Ela é lenta e, por cima de um jogo
+#: em tela cheia, costuma devolver preto — ou seja, é a explicação mais
+#: provável de um silêncio que ainda vai acontecer. Sem esta linha, a
+#: degradação era definitiva e invisível: o app trocava de estratégia
+#: para sempre e ninguém ficava sabendo.
+#: O único caso em que não achar o game.cfg deixa de ser um detalhe e
+#: passa a ser risco de aviso errado. Do lado azul, a opção "Girar
+#: Minimapa" não muda nada; do vermelho com ela ligada, o mapa inteiro
+#: vira de cabeça para baixo — e um aviso que ignore isso manda o
+#: jogador para o canto oposto do mapa, soando como acerto. Por isso
+#: este é falado, e não só escrito: quem está em partida não lê diário.
+FLIP_RISK_NOTE = (
+    "Você está do lado vermelho e não achei o game.cfg desta máquina. "
+    "Se a opção Girar Minimapa estiver ligada nas suas configurações, "
+    "os avisos de lugar podem sair invertidos — desligue a opção ou "
+    "confira o lado antes de reagir."
+)
+
+FLIP_RISK_SPOKEN = (
+    "Atenção: não sei se seu minimapa está girado. Os avisos de lugar "
+    "podem sair invertidos."
+)
+
+#: Os dois times com o mesmo campeão na selva. O retrato é idêntico e o
+#: anel do time fica de fora da comparação, então o aliado dispara o
+#: aviso do inimigo. Só acontece fora de ranqueada e draft.
+NOTE_TWIN_JUNGLER = (
+    "Os dois times têm {champion} na selva. Como leio o minimapa pelo "
+    "retrato do campeão, não consigo separar um do outro: alguns avisos "
+    "podem ser o seu jungler, não o inimigo."
+)
+
+NOTE_GDI = (
+    "A captura rápida (DXGI) não funcionou nesta máquina e caí para o "
+    "método antigo (GDI), que é mais lento e costuma vir preto por cima "
+    "do jogo. Se o aviso do jungler ficar mudo nesta partida, começe a "
+    "investigação por aqui."
+)
+
 #: O mesmo recado, dito antes de custar uma partida. O game.cfg diz o
 #: modo de vídeo sem precisar de um único quadro, então quando ele já
 #: acusa tela cheia exclusiva não há motivo para esperar quinze segundos
@@ -123,9 +176,27 @@ NOTE_NO_JUNGLER = (
     "sem aviso nesta partida."
 )
 NOTE_NO_MINIMAP = (
-    "Não localizei o minimapa na tela; sigo procurando a cada "
-    f"{int(RELOCATE_SECONDS)} segundos."
+    "Ainda não localizei o minimapa na tela; sigo procurando a cada "
+    f"{SEARCH_SECONDS:.0f} segundo. É o esperado na tela de carregamento, "
+    "onde não há minimapa nenhum para achar."
 )
+
+#: A janela da partida não é a mesma coisa que a tela preta. Sem janela
+#: não há nem o que capturar, então nem o aviso de captura preta sai: o
+#: diário mostrava a partida lida e depois nada, para sempre. Acontece
+#: com a janela minimizada, com o jogo num monitor que sumiu e com
+#: resolução abaixo do mínimo que a busca do minimapa aceita.
+NOTE_NO_WINDOW = (
+    "Não encontrei a janela da partida na tela — sem ela não tenho o que "
+    "capturar. Se o jogo está minimizado, restaure-o; o aviso volta "
+    "sozinho quando a janela reaparecer."
+)
+
+#: Quantas voltas seguidas do laço podem falhar antes de o problema
+#: virar notícia. Uma exceção solta é um quadro perdido e não interessa
+#: a ninguém; a mesma exceção repetida é a partida inteira muda, que é
+#: exatamente o que esta vigilância existe para não deixar acontecer.
+FAILURES_BEFORE_WARNING = 5
 #: O game.cfg responde duas perguntas que mudam o aviso: se a captura
 #: vem preta e se o minimapa está girado. Não achar o arquivo não
 #: impede a vigilância de rodar, mas apaga os dois diagnósticos — e um
@@ -191,6 +262,7 @@ class JungleWatcher:
 
         self._game: LiveGame | None = None
         self._game_at = 0.0
+        self._falhas = 0
         self._rereads = 0
         self._champion = ""
         self._primed = ""
@@ -243,20 +315,40 @@ class JungleWatcher:
             pass
 
     def stop(self) -> None:
-        """Desliga e espera a thread sair, para não capturar tela depois."""
+        """Desliga e espera a thread sair, para não capturar tela depois.
+
+        Quem solta os recursos de captura é o próprio laço, no fim do
+        `_run`. Aqui só se solta o que sobrou de uma vigilância que nunca
+        chegou a ter thread — o caso de quem chamou `tick()` na mão.
+
+        A diferença não é preciosismo: o `ScreenGrabber` guarda objetos
+        COM do DXGI presos à thread que os criou, e fechá-los daqui, com
+        `lolqueue-selva` ainda dentro de um `grab`, derruba o processo
+        inteiro — o app fecharia com um estouro em vez de fechar. Havia
+        ainda um segundo estrago mais silencioso: zerar `_grabber` no
+        meio de um quadro fazia o `tick` em curso criar outro logo em
+        seguida, e a tela continuava sendo capturada depois da linha
+        "Vigilância desligada" no diário.
+
+        O `join` com prazo é o que mantém a promessa do nome: se o laço
+        não sair em três segundos, a thread é daemon e o processo morre
+        com ela mesmo assim.
+        """
         thread = self._thread
         self._stop.set()
         self._thread = None
         if thread is not None:
             thread.join(timeout=3.0)
             self._log("Vigilância do jungler inimigo desligada.")
-        self._release()
+        if thread is None or not thread.is_alive():
+            self._release()
         self.reset()
 
     def reset(self) -> None:
         """Esquece a partida anterior, sem desligar o laço."""
         self._game = None
         self._game_at = 0.0
+        self._falhas = 0
         self._rereads = 0
         self._champion = ""
         self._primed = ""
@@ -277,10 +369,24 @@ class JungleWatcher:
             inicio = self._clock()
             try:
                 self.tick()
-            except Exception:
+            except Exception as erro:
                 # Um quadro perdido é barato; a thread morta faria o app
                 # ficar mudo pelo resto da partida sem ninguém perceber.
-                pass
+                # Mas engolir sempre e calado é o mesmo defeito por outro
+                # caminho: uma exceção que se repete a cada quadro é a
+                # partida inteira sem aviso, e antes disto não sobrava
+                # rastro nenhum de que algo tinha quebrado.
+                self._falhas += 1
+                if self._falhas >= FAILURES_BEFORE_WARNING:
+                    self._note(
+                        "laco_falhando",
+                        "O aviso do jungler está falhando a cada quadro "
+                        f"({type(erro).__name__}: {erro}). Ele não vai sair "
+                        "nesta partida.",
+                    )
+                    self._speak("Aviso do jungler indisponível nesta partida.")
+            else:
+                self._falhas = 0
             espera = self._pause() - (self._clock() - inicio)
             self._stop.wait(max(espera, 0.0))
         self._release()
@@ -305,6 +411,11 @@ class JungleWatcher:
             if self._rereads >= JUNGLER_REREADS:
                 self._note("sem_jungler", NOTE_NO_JUNGLER)
             return None
+        if getattr(jogo, "jungler_has_a_twin", False):
+            self._note(
+                "jungler_sosia",
+                NOTE_TWIN_JUNGLER.format(champion=jungler.champion),
+            )
         self._prime(jogo, jungler.champion)
 
         mapa = self._ensure_minimap(agora)
@@ -329,7 +440,7 @@ class JungleWatcher:
             return None
         self._said[aviso.zone_key] = agora
         self._last_said = agora
-        self._voice.say(aviso.text)
+        self._speak(aviso.text)
         self._log(aviso.text)
         return aviso
 
@@ -347,8 +458,19 @@ class JungleWatcher:
             self._rereads += 1
         try:
             lida = self._fetch()
-        except (LiveGameUnavailable, Exception):
+        except LiveGameUnavailable:
             lida = None
+        except Exception as erro:
+            # Porta 2999 fechada é rotina e já tem recado próprio. Outra
+            # coisa qualquer aqui é defeito, e some junto com a rotina se
+            # as duas caírem no mesmo `except`: o diário culpava a porta
+            # em todo caso, mandando quem investigasse para o lado errado.
+            lida = None
+            self._note(
+                "erro_partida",
+                "Erro inesperado ao ler a partida ao vivo "
+                f"({type(erro).__name__}); tratando como partida ausente.",
+            )
         if lida is None:
             # Perder uma releitura não apaga a partida que já foi lida:
             # o jogo fecha a porta 2999 por um instante em qualquer
@@ -361,9 +483,31 @@ class JungleWatcher:
         self._game = lida
         if primeira:
             rota = getattr(lida, "lane_name", "") or "rota desconhecida"
-            lado = "azul" if getattr(lida, "side", 1) > 0 else "vermelho"
+            vermelho = getattr(lida, "side", 1) < 0
+            lado = "vermelho" if vermelho else "azul"
             self._note("partida", f"Partida lida: você é {rota} do lado {lado}.")
+            self._warn_flip_risk(vermelho)
         return self._game
+
+    def _warn_flip_risk(self, vermelho: bool) -> None:
+        """Avisa quando o aviso em si pode estar espelhado.
+
+        Só o lado vermelho corre esse risco, e só quando o game.cfg não
+        foi encontrado: sem o arquivo, `flip_minimap` devolve o padrão do
+        jogo, e quem ligou a opção recebe cada lugar trocado pelo oposto.
+        Errar o canto do mapa é pior que não avisar nada, então este é
+        dito em voz alta — a nota de "não achei o game.cfg" que já
+        existia ficava só no diário, que ninguém lê no meio da partida.
+        """
+        if not vermelho:
+            return
+        try:
+            if self._config_path() is not None:
+                return
+        except Exception:  # pragma: no cover - rede de segurança
+            pass
+        self._note("risco_espelho", FLIP_RISK_NOTE)
+        self._speak(FLIP_RISK_SPOKEN)
 
     def _stale_game(self) -> bool:
         """Se ainda vale a pena perguntar de novo quem está nesta partida.
@@ -416,7 +560,9 @@ class JungleWatcher:
         if self._minimap_at and agora - self._minimap_at < espera:
             return self._minimap
         vista = self._viewport()
-        if vista is not None:
+        if vista is None:
+            self._note("sem_janela", NOTE_NO_WINDOW)
+        else:
             area = minimap_module.search_area(vista)
             quadro = self._capture(area, agora)
             if _is_blank(quadro):
@@ -492,9 +638,25 @@ class JungleWatcher:
             # Uma vez só: repetir a cada quadro encheria o diário e
             # esconderia tudo o mais que aconteceu na partida.
             self._blind_warned = True
-            self._log(BLIND_MESSAGE)
+            self._log(self._blind_message())
             self._speak(BLIND_SPOKEN)
         return quadro
+
+    def _blind_message(self) -> str:
+        """A queixa de tela preta ajustada ao que se sabe do vídeo.
+
+        A frase padrão manda trocar o modo de vídeo, e ela está certa na
+        maioria das vezes. Mas quando o game.cfg foi encontrado e diz que
+        o modo já não é tela cheia exclusiva, repetir esse conselho manda
+        o jogador consertar o que não está quebrado — ele mexe no vídeo,
+        a tela continua preta, e a conclusão é que o aviso não presta.
+        """
+        try:
+            if self._config_path() is not None and not self._fullscreen():
+                return BLIND_MODE_IS_FINE
+        except Exception:  # pragma: no cover - rede de segurança
+            pass
+        return BLIND_MESSAGE
 
     def _screen_grab(self, rect):
         from .capture import ScreenGrabber
@@ -503,7 +665,10 @@ class JungleWatcher:
             # Um grabber por thread: criar na thread que usa é o que o
             # próprio módulo de captura pede, tanto no DXGI quanto no GDI.
             self._grabber = ScreenGrabber()
-        return self._grabber.grab(rect)
+        quadro = self._grabber.grab(rect)
+        if getattr(self._grabber, "strategy", "") == "gdi":
+            self._note("captura_gdi", NOTE_GDI)
+        return quadro
 
     def _release(self) -> None:
         grabber = self._grabber

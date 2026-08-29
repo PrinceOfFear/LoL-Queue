@@ -132,3 +132,49 @@ def test_a_working_synthesizer_says_nothing(monkeypatch):
     sessao, _, registro = make_session()
     sessao.start()
     assert registro == []
+
+
+def test_closing_during_a_start_does_not_leave_an_orphan():
+    """Fechar o app na virada para "em jogo" não pode deixar rastro vivo.
+
+    Ligar vem da vigilância de fase, desligar vem da thread da janela. Com
+    as duas caindo juntas, o `stop` olhava o interruptor antes de o
+    `start` ter terminado de construir, via nada para desligar e ia
+    embora — e o `JungleWatcher` nascia depois, órfão, capturando tela
+    com o app já fechado. Um processo que não morre.
+    """
+    import threading
+    import time
+
+    entrou = threading.Event()
+    liberado = threading.Event()
+    criados: list[tuple[VigiaFalso, VozFalsa]] = []
+
+    def build(voice_name):
+        entrou.set()
+        liberado.wait(2.0)
+        par = (VigiaFalso(voice_name), VozFalsa())
+        criados.append(par)
+        return par
+
+    sessao = JungleSession(Config(), build=build)
+
+    ligando = threading.Thread(target=sessao.start)
+    ligando.start()
+    assert entrou.wait(2.0)
+
+    fechando = threading.Thread(target=sessao.stop)
+    fechando.start()
+    # Sem o ferrolho, é aqui que o `stop` passaria direto pelo interruptor
+    # ainda vazio.
+    time.sleep(0.05)
+    liberado.set()
+
+    ligando.join(2.0)
+    fechando.join(2.0)
+
+    vigia, voz = criados[0]
+    assert vigia.starts == 1
+    assert vigia.stops == 1
+    assert voz.closed == 1
+    assert sessao.running is False

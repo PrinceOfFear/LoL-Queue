@@ -67,6 +67,30 @@ def test_the_other_side_of_the_map_is_good_news():
     assert "longe de você" in aviso.text
 
 
+def test_blind_pick_does_not_get_a_made_up_distance():
+    """Fila cega chega sem rota, e sem rota não existe "longe de você".
+
+    A API só preenche `position` em ranqueada e draft. Antes disso, a
+    âncora caía no centro do mapa e o app tratava todo mundo como se
+    fosse o meio: o top de fila cega ouvia que o jungler estava longe
+    dele — soando como permissão para empurrar a rota — enquanto o
+    jungler estava na torre dele. Sem saber onde o jogador está, o aviso
+    diz onde o inimigo apareceu e para por aí.
+    """
+    cega = partida("")
+    aviso = announce("Lee Sin", *KRUGS_AZUL, game=cega)
+    assert cega.anchor_is_a_guess is True
+    assert aviso.urgency == MEDIO
+    assert "longe de você" not in aviso.text
+    assert "Lee Sin" in aviso.text
+
+
+def test_a_declared_lane_still_measures_the_distance():
+    """A correção acima não pode calar quem tem rota declarada."""
+    assert partida("TOP").anchor_is_a_guess is False
+    assert announce("Lee Sin", *KRUGS_AZUL, game=partida("TOP")).urgency == LONGE
+
+
 def test_urgent_callouts_start_with_the_warning():
     """Quem está prestes a morrer precisa da primeira palavra, não da última."""
     aviso = announce("Lee Sin", *SAPO_AZUL, game=partida("TOP"))

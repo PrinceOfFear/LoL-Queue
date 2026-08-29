@@ -181,4 +181,13 @@ def announce(
         # dele é oportunidade, não perigo, mesmo estando ao lado.
         urgencia = PERTO if zona.side == game.side else MEDIO
 
+    if game.anchor_is_a_guess:
+        # Sem saber a rota do jogador, a distância foi medida a partir do
+        # centro do mapa — um lugar onde ele provavelmente não está. Dizer
+        # "longe de você" nessa conta é a pior saída possível: soa como
+        # permissão para empurrar a rota no exato momento do gank. Sem
+        # âncora, o aviso diz só onde o inimigo apareceu e deixa a leitura
+        # com quem está vendo a tela.
+        urgencia = MEDIO
+
     return Callout(phrase(champion, zona, game.side, urgencia), urgencia, zona.key)

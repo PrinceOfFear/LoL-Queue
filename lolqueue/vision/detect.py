@@ -49,6 +49,16 @@ CONFIRM_FRAMES = 3
 #: falso positivo virar aviso.
 JUMP_FRACTION = 1.0
 
+#: Quantos quadros vazios seguidos um casamento já confirmado sobrevive.
+#: O ícone do inimigo pisca o tempo todo — o nevoeiro cobre por um
+#: instante, um clarão estoura por cima, outro ícone passa na frente — e
+#: esquecer tudo no primeiro quadro vazio cobrava três quadros novos,
+#: mais de meio segundo, para voltar a falar de alguém que nunca saiu do
+#: lugar. Num aviso de gank, meio segundo é a diferença entre recuar e
+#: morrer. Antes da confirmação nada é perdoado: é lá que mora a defesa
+#: contra o falso positivo, e ela fica exatamente como era.
+FORGIVE_FRAMES = 2
+
 _EPS = 1e-9
 
 
@@ -216,14 +226,17 @@ class Detector:
         templates: Iterable[Template],
         threshold: float = THRESHOLD,
         confirm: int = CONFIRM_FRAMES,
+        forgive: int = FORGIVE_FRAMES,
     ) -> None:
         self._templates = [t for t in templates if t.size >= 1]
         self._threshold = float(threshold)
         self._confirm = max(1, int(confirm))
+        self._forgive = max(0, int(forgive))
         self._kernels: dict[tuple[int, tuple[int, int]], _Kernels] = {}
         self._last: Match | None = None
         self._streak = 0
         self._confirmed = False
+        self._misses = 0
 
     @property
     def templates(self) -> list[Template]:
@@ -238,6 +251,7 @@ class Detector:
         self._last = None
         self._streak = 0
         self._confirmed = False
+        self._misses = 0
 
     def scan(self, frame: np.ndarray | None) -> Match | None:
         """O melhor casamento deste quadro, sem olhar para o passado."""
@@ -273,8 +287,15 @@ class Detector:
         """Mais um quadro. Devolve o casamento só quando ele é confiável."""
         achado = self.scan(frame)
         if achado is None:
-            self.reset()
+            # Quadro vazio antes da confirmação recomeça tudo; depois
+            # dela, é o piscar normal do minimapa e vale a pena esperar
+            # alguns quadros antes de dar o inimigo por perdido. Em
+            # nenhum dos dois casos se devolve posição: não se viu nada.
+            self._misses += 1
+            if not self._confirmed or self._misses > self._forgive:
+                self.reset()
             return None
+        self._misses = 0
 
         if self._last is not None and self._near(achado, self._last):
             self._streak += 1

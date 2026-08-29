@@ -13,6 +13,8 @@ from lolqueue.vision.gamecfg import read_flag
 from lolqueue.vision.livegame import (
     BLUE,
     JUNGLE,
+    JUNGLE_ANCHOR,
+    LANE_ANCHORS,
     RED,
     LiveGameUnavailable,
     parse,
@@ -110,6 +112,35 @@ def test_a_jungler_without_smite_is_still_the_jungler():
     assert parse("Eu#BR1", sem_punir).enemy_jungler.champion == "Kha'Zix"
 
 
+def test_a_declared_lane_beats_the_smite_on_my_own_side_too():
+    """A mesma ordem dos dois lados do mapa.
+
+    Um meio de Punir declarado pela API era jungler para o aviso e
+    meio para a âncora: o app media a distância a partir do meio,
+    correto, e ainda assim gritava "cuidado" para metade do mapa
+    inteira, como se ele morasse na selva.
+    """
+    meio_de_punir = [
+        jogador("Eu#BR1", "Garen", "ORDER", "MIDDLE", punir=True),
+        jogador("Caçador#BR1", "Kha'Zix", "CHAOS", "JUNGLE", punir=True),
+    ]
+    jogo = parse("Eu#BR1", meio_de_punir)
+    assert jogo.me.is_jungler is False
+    assert jogo.my_anchor == LANE_ANCHORS["MIDDLE"]
+
+
+def test_without_any_declared_lane_the_smite_still_speaks():
+    """Fila cega não tem rota nenhuma; aí o feitiço é o único sinal."""
+    cega = [
+        jogador("Eu#BR1", "Garen", "ORDER", punir=True),
+        jogador("Caçador#BR1", "Kha'Zix", "CHAOS", punir=True),
+    ]
+    jogo = parse("Eu#BR1", cega)
+    assert jogo.me.is_jungler is True
+    assert jogo.my_anchor == JUNGLE_ANCHOR[BLUE]
+    assert jogo.anchor_is_a_guess is False
+
+
 def test_matches_the_player_even_without_the_riot_tag():
     """A API às vezes devolve o nome ativo sem a etiqueta #BR1."""
     assert parse("Eu", PARTIDA).me.champion == "Garen"
@@ -160,3 +191,37 @@ def test_reads_a_flag_from_a_config_file(tmp_path):
     )
     assert read_flag("FlipMiniMap", cfg) is True
     assert read_flag("WindowMode", cfg) is False
+
+
+def test_the_same_champion_on_both_teams_is_flagged():
+    """Fila cega com espelho: o retrato do aliado é o retrato do inimigo.
+
+    A leitura do minimapa compara o retrato do campeão e deixa o anel do
+    time de fora, porque incluí-lo derruba o acerto. O preço é este caso,
+    e a única saída honesta é dizer que o aviso ficou menos confiável.
+    """
+    espelho = [
+        jogador("Eu#BR1", "Garen", "ORDER", punir=False),
+        jogador("Aliado#BR1", "Kha'Zix", "ORDER", punir=True),
+        jogador("Inimigo#BR1", "Darius", "CHAOS"),
+        jogador("Caçador#BR1", "Kha'Zix", "CHAOS", punir=True),
+    ]
+    jogo = parse("Eu#BR1", espelho)
+    assert jogo.enemy_jungler.champion == "Kha'Zix"
+    assert jogo.jungler_has_a_twin is True
+
+
+def test_different_champions_are_not_flagged():
+    """O caso normal — e ranqueada inteira — não recebe ressalva nenhuma."""
+    assert parse("Eu#BR1", PARTIDA).jungler_has_a_twin is False
+
+
+def test_no_jungler_means_nothing_to_confuse():
+    """Sem jungler inimigo identificado não há aviso para ficar duvidoso."""
+    sem_selva = [
+        jogador("Eu#BR1", "Garen", "ORDER", "TOP"),
+        jogador("Inimigo#BR1", "Darius", "CHAOS", "TOP"),
+    ]
+    jogo = parse("Eu#BR1", sem_selva)
+    assert jogo.enemy_jungler is None
+    assert jogo.jungler_has_a_twin is False

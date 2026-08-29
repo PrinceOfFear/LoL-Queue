@@ -15,6 +15,7 @@ Para o motor, isto aqui é só um `start`/`stop`.
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Callable
 
 from .voice import MISSING_PACKAGE_NOTICE, normalize_voice, synthesizer_available
@@ -34,6 +35,14 @@ class JungleSession:
         self._build = build or self._default_build
         self._watcher: Any | None = None
         self._voice: Any | None = None
+        # Ligar e desligar chegam de threads diferentes: a vigilância de
+        # fase acende a partida assim que o cliente entra em jogo, e o
+        # fechamento do app apaga tudo pela thread da janela. As duas
+        # caindo juntas — fechar o app exatamente na transição para "em
+        # jogo" — deixavam um `JungleWatcher` órfão capturando tela e uma
+        # `Voice` de pé depois do app fechado, ou seja, um processo que
+        # não morre. O ferrolho faz uma esperar a outra terminar.
+        self._lock = threading.Lock()
 
     @property
     def running(self) -> bool:
@@ -41,6 +50,10 @@ class JungleSession:
 
     def start(self) -> bool:
         """Abre a vigilância. Chamar de novo enquanto roda não faz nada."""
+        with self._lock:
+            return self._start()
+
+    def _start(self) -> bool:
         if self._watcher is not None:
             return False
         nome = normalize_voice(getattr(self._config, "jungle_voice", None))
@@ -71,6 +84,10 @@ class JungleSession:
 
     def stop(self) -> None:
         """Fecha tudo o que a partida abriu, na ordem certa."""
+        with self._lock:
+            self._stop()
+
+    def _stop(self) -> None:
         watcher, voice = self._watcher, self._voice
         self._watcher = self._voice = None
         if watcher is not None:

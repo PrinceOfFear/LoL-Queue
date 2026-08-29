@@ -12,6 +12,7 @@ import pytest
 
 from lolqueue.vision.detect import (
     CONFIRM_FRAMES,
+    FORGIVE_FRAMES,
     THRESHOLD,
     Detector,
     match_template,
@@ -187,13 +188,65 @@ def test_after_confirmed_every_frame_reports_right_away(molde):
     assert (achado.x, achado.y) == (64 + LADO // 2, 62 + LADO // 2)
 
 
-def test_losing_sight_demands_confirmation_again(molde):
+def test_losing_sight_for_good_demands_confirmation_again(molde):
+    """Sumiço longo é sumiço: o inimigo pode ter ido para outro lugar."""
     detector = Detector([molde])
     quadro = plantar(terreno(), molde, 60, 60)
     for _ in range(CONFIRM_FRAMES):
         detector.feed(quadro)
-    detector.feed(terreno())
+    for _ in range(FORGIVE_FRAMES + 1):
+        assert detector.feed(terreno()) is None
+    assert detector.confirmed is False
     assert detector.feed(quadro) is None
+
+
+def test_a_blink_does_not_cost_the_confirmation(molde):
+    """O ícone pisca o tempo todo, e reconfirmar custa meio segundo.
+
+    Nevoeiro passando, clarão de habilidade, outro ícone por cima: o
+    inimigo some de um quadro e volta no seguinte sem ter saído do
+    lugar. Cobrar três quadros novos a cada piscada atrasava o aviso
+    justamente enquanto o gank acontecia.
+    """
+    detector = Detector([molde])
+    quadro = plantar(terreno(), molde, 60, 60)
+    for _ in range(CONFIRM_FRAMES):
+        detector.feed(quadro)
+    for _ in range(FORGIVE_FRAMES):
+        # Enquanto não se vê, não se afirma posição nenhuma.
+        assert detector.feed(terreno()) is None
+    achado = detector.feed(quadro)
+    assert achado is not None
+    assert (achado.x, achado.y) == (60 + LADO // 2, 60 + LADO // 2)
+
+
+def test_a_blink_does_not_forgive_a_jump_across_the_map(molde):
+    """Perdoar a ausência não é perdoar reaparecer do outro lado.
+
+    Voltar longe é outro evento — provável falso positivo — e continua
+    exigindo confirmação do zero.
+    """
+    detector = Detector([molde])
+    for _ in range(CONFIRM_FRAMES):
+        detector.feed(plantar(terreno(), molde, 20, 20))
+    assert detector.feed(terreno()) is None
+    assert detector.feed(plantar(terreno(), molde, 170, 170)) is None
+
+
+def test_a_blink_before_the_confirmation_is_never_forgiven(molde):
+    """A defesa contra o falso positivo fica exatamente como era.
+
+    Três quadros seguidos, sem buraco nenhum: é isso que separa o ícone
+    de verdade de um brilho que casou por acaso.
+    """
+    detector = Detector([molde])
+    quadro = plantar(terreno(), molde, 60, 60)
+    for _ in range(CONFIRM_FRAMES - 1):
+        detector.feed(quadro)
+    assert detector.feed(terreno()) is None
+    for _ in range(CONFIRM_FRAMES - 1):
+        assert detector.feed(quadro) is None
+    assert detector.feed(quadro) is not None
 
 
 def test_among_several_sizes_the_best_one_wins(retrato):

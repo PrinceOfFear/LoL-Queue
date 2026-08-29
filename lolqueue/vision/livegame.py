@@ -12,13 +12,12 @@ credencial nenhuma; some junto com a partida.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
 import requests
 import urllib3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 BASE_URL = "https://127.0.0.1:2999/liveclientdata"
 
@@ -82,11 +81,24 @@ class Player:
 
     @property
     def is_jungler(self) -> bool:
-        """A API só preenche `position` em fila ranqueada e draft.
+        """Se este jogador joga a selva. A única definição disto no app.
 
-        Fora dela o feitiço entrega: quem leva Punir vai para a selva.
+        A API só preenche `position` em fila ranqueada e draft. Fora
+        dela o feitiço entrega: quem leva Punir vai para a selva.
+
+        A ordem importa, e havia duas regras diferentes espalhadas pelo
+        código — uma aqui, contando Punir sempre, e outra dentro de
+        `my_anchor`, contando Punir só na falta de rota declarada. Um
+        meio de Punir declarado pela API caía nas duas ao mesmo tempo: a
+        âncora dele ficava no meio do mapa, correta, enquanto o aviso o
+        tratava como jungler e gritava "cuidado" para metade do mapa
+        inteira. Rota declarada manda; o feitiço só fala quando ninguém
+        declarou nada. É a mesma ordem que `enemy_jungler` usa do outro
+        lado do mapa.
         """
-        return self.position == JUNGLE or self.smite
+        if self.position:
+            return self.position == JUNGLE
+        return self.smite
 
 
 @dataclass(frozen=True)
@@ -112,6 +124,29 @@ class LiveGame:
         return LANE_NAMES.get(self.me.position, "")
 
     @property
+    def jungler_has_a_twin(self) -> bool:
+        """Se o campeão do jungler inimigo também está deste lado do mapa.
+
+        O minimapa é lido pelo retrato do campeão, e o retrato é o mesmo
+        nos dois times: o anel colorido em volta fica de fora da
+        comparação de propósito, porque incluí-lo derrubava o acerto. O
+        preço é este caso — os dois times com o mesmo campeão — em que o
+        aliado passeando pela própria selva dispara o aviso de gank do
+        inimigo. Em ranqueada e no draft não acontece, porque lá o
+        campeão é único na partida; na fila cega e no olho por olho,
+        acontece.
+
+        Não dá para consertar sem trocar a leitura do minimapa inteira,
+        então o que resta é dizer que o aviso ficou menos confiável em
+        vez de deixar o jogador descobrir sozinho no primeiro susto.
+        """
+        jungler = self.enemy_jungler
+        if jungler is None:
+            return False
+        nome = jungler.champion.casefold()
+        return any(p.champion.casefold() == nome for p in (self.me, *self.allies))
+
+    @property
     def enemy_jungler(self) -> Player | None:
         """O inimigo que interessa. None quando não dá para ter certeza.
 
@@ -134,13 +169,28 @@ class LiveGame:
         return punidores[0] if len(punidores) == 1 else None
 
     @property
+    def anchor_is_a_guess(self) -> bool:
+        """Se `my_anchor` é chute cego, e não palpite com base em algo.
+
+        A API só preenche `position` em ranqueada e em seleção com
+        draft. Fila cega, normal e personalizada chegam com todo mundo
+        sem rota, e aí a âncora cai no centro do mapa — ou seja, o app
+        trata o jogador como se ele fosse o meio. Esse é justamente o
+        erro que deu origem a este módulo, e ele tinha voltado pela
+        porta dos fundos: um top de fila cega ouvia "longe de você" com
+        o jungler inimigo dentro da torre dele.
+        """
+        return not self.me.position and not self.me.smite
+
+    @property
     def my_anchor(self) -> tuple[float, float]:
         """Onde o jogador provavelmente está, em coordenadas de mundo.
 
         É palpite, não medição: vale enquanto o ícone dele não for
-        localizado no minimapa.
+        localizado no minimapa. Quando nem o palpite existe — veja
+        `anchor_is_a_guess` — quem usa isto não deve afirmar distância.
         """
-        if self.me.position == JUNGLE or (not self.me.position and self.me.smite):
+        if self.me.is_jungler:
             return JUNGLE_ANCHOR[self.side]
         return LANE_ANCHORS.get(self.me.position, (0.5, 0.5))
 
@@ -216,12 +266,24 @@ def fetch(timeout: float = 1.0, flip_minimap: bool = False) -> LiveGame:
 
     O certificado é autoassinado da Riot; ignorar a verificação só é
     aceitável porque o destino é sempre a própria máquina.
+
+    O aviso de conexão insegura é calado só aqui dentro, e não com um
+    `disable_warnings` no topo do módulo como era antes. A diferença
+    importa: aquilo desligava o aviso no processo inteiro, para sempre,
+    no instante em que alguém importasse este arquivo — inclusive para
+    qualquer outra parte do app que fosse falar com a internet de
+    verdade. Silenciar um aviso de TLS por engano, em código que fala
+    com a máquina do jogador, é um preço alto por uma linha de log.
     """
     session = requests.Session()
     session.verify = False
     try:
-        ativo = session.get(f"{BASE_URL}/activeplayername", timeout=timeout)
-        lista = session.get(f"{BASE_URL}/playerlist", timeout=timeout)
+        with warnings.catch_warnings():
+            warnings.simplefilter(
+                "ignore", urllib3.exceptions.InsecureRequestWarning
+            )
+            ativo = session.get(f"{BASE_URL}/activeplayername", timeout=timeout)
+            lista = session.get(f"{BASE_URL}/playerlist", timeout=timeout)
     except requests.exceptions.RequestException as exc:
         raise LiveGameUnavailable("partida não está rodando") from exc
     finally:

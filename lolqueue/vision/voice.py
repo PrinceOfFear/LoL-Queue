@@ -315,6 +315,14 @@ class Voice:
 
     def _prime_one(self, text: str) -> None:
         try:
+            if self._closed:
+                # Fechar no meio da preparação é comum: são dezenas de
+                # frases numa fila de poucos trabalhadores, e o jogador
+                # que fecha o app nos primeiros segundos da partida
+                # deixaria para trás uma fila inteira de sínteses de
+                # rede — cada uma sem timeout — com o processo preso
+                # esperando por elas.
+                return
             if self._ensure(text) is None:
                 # A preparação é o primeiro contato com o serviço; se ela
                 # falha, o jogador merece saber antes do gank, e não
@@ -385,5 +393,9 @@ class Voice:
             return
         self._closed = True
         self._fila.put(None)
-        self._pool.shutdown(wait=False)
+        # `cancel_futures` é o que faz a diferença: sem ele, o
+        # `_python_exit` do próprio módulo de threads faz join nos
+        # trabalhadores na saída do interpretador, e o app fica parado
+        # sintetizando frases que ninguém mais vai ouvir.
+        self._pool.shutdown(wait=False, cancel_futures=True)
         self._thread.join(timeout=2.0)

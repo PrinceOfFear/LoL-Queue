@@ -30,6 +30,7 @@ import json
 import os
 import re
 import struct
+import time
 import zlib
 from dataclasses import dataclass
 from functools import cached_property
@@ -303,6 +304,13 @@ def _http_get(url: str, timeout: float = 6.0) -> bytes | None:
 
 Fetcher = Callable[[str], "bytes | None"]
 
+#: Quanto esperar antes de tentar baixar de novo um retrato que falhou.
+#: Existe por causa de uma troca ruim: guardar o fracasso para sempre
+#: apagava o campeão da partida inteira depois de um único soluço de
+#: rede, e não guardar nada faria o laço de captura pedir o mesmo
+#: arquivo cinco vezes por segundo — com seis segundos de espera cada.
+RETRY_SECONDS = 30.0
+
 
 class ChampionIcons:
     """Retratos do Data Dragon, em cache no disco e prontos para casar.
@@ -316,12 +324,17 @@ class ChampionIcons:
         self,
         directory: Path | None = None,
         fetch: Fetcher | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._dir = Path(directory) if directory is not None else cache_dir()
         self._fetch = fetch or _http_get
+        self._clock = clock
         self._version: str | None = None
+        self._version_falhou: float | None = None
         self._keys: dict[str, str] | None = None
-        self._portraits: dict[str, np.ndarray | None] = {}
+        self._keys_falhou: float | None = None
+        self._portraits: dict[str, np.ndarray] = {}
+        self._falhas: dict[str, float] = {}
         self._templates: dict[tuple[str, int], Template] = {}
 
     @property
@@ -364,6 +377,8 @@ class ChampionIcons:
         """
         if self._version is not None:
             return self._version
+        if self._espera(self._version_falhou):
+            return None
         bruto = self._get(VERSIONS_URL)
         if bruto:
             try:
@@ -377,12 +392,30 @@ class ChampionIcons:
         guardada = self._read_cache("versao.txt")
         if guardada:
             self._version = guardada.decode("utf-8", "ignore").strip() or None
+        if self._version is None:
+            # Sem isto, um PC sem internet pediria esta lista a cada
+            # quadro — e cada pedido gasta o tempo inteiro do timeout
+            # parado dentro do laço de captura.
+            self._version_falhou = self._clock()
         return self._version
 
+    def _espera(self, desde: float | None) -> bool:
+        """Se ainda é cedo demais para tentar de novo o que falhou."""
+        return desde is not None and self._clock() - desde < RETRY_SECONDS
+
     def _catalog(self) -> dict[str, str]:
-        """Nome de tela normalizado para nome de arquivo do Data Dragon."""
-        if self._keys is not None:
+        """Nome de tela normalizado para nome de arquivo do Data Dragon.
+
+        Um catálogo vazio é falta de resposta, não resposta: guardá-lo
+        deixava o app o resto da sessão adivinhando nome de arquivo, e o
+        palpite erra justamente nos campeões cujo nome de tela não é o
+        nome do arquivo — Wukong, Nunu, Renata. Fica valendo por
+        `RETRY_SECONDS`, como os retratos.
+        """
+        if self._keys:
             return self._keys
+        if self._espera(self._keys_falhou):
+            return self._keys or {}
 
         versao = self.version()
         guardado = self._read_cache("campeoes.json")
@@ -418,6 +451,8 @@ class ChampionIcons:
                                 ensure_ascii=False,
                             ).encode("utf-8"),
                         )
+        if not self._keys:
+            self._keys_falhou = self._clock()
         return self._keys
 
     # -- o que interessa ------------------------------------------------
@@ -430,12 +465,25 @@ class ChampionIcons:
         return chave or (guess_key(champion) or None)
 
     def portrait(self, champion: str) -> np.ndarray | None:
-        """O retrato de 120 px, do disco ou da rede."""
+        """O retrato de 120 px, do disco ou da rede.
+
+        Falha não vira resposta definitiva. A primeira partida numa
+        máquina nova roda com o cache vazio, e um soluço de rede na hora
+        errada — o app abre bem antes do jogo começar — apagava aquele
+        campeão do resto da sessão: o molde nunca era montado, o inimigo
+        nunca casava e o aviso dele simplesmente não saía, sem uma linha
+        dizendo o motivo. Agora o fracasso vale `RETRY_SECONDS` e a
+        internet voltando conserta sozinha.
+        """
         chave = self.key_for(champion)
         if chave is None:
             return None
-        if chave in self._portraits:
-            return self._portraits[chave]
+        pronto = self._portraits.get(chave)
+        if pronto is not None:
+            return pronto
+        desde = self._falhas.get(chave)
+        if desde is not None and self._clock() - desde < RETRY_SECONDS:
+            return None
 
         arquivo = f"{chave}.png"
         imagem = decode_png(self._read_cache(arquivo))
@@ -449,7 +497,11 @@ class ChampionIcons:
                     # decodificador recusa voltaria a ser recusado toda
                     # abertura, e o cache serviria para nada.
                     self._write_cache(arquivo, bruto)
+        if imagem is None:
+            self._falhas[chave] = self._clock()
+            return None
         self._portraits[chave] = imagem
+        self._falhas.pop(chave, None)
         return imagem
 
     def template(self, champion: str, size: int) -> Template | None:

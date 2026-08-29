@@ -15,6 +15,16 @@ pelo título acha o cliente e aponta a câmera para a lista de amigos.
 O que separa os dois é a classe da janela: a partida é
 `RiotWindowClass`, o cliente é `RCLIENT`.
 
+A terceira armadilha, esta já desarmada, é o DPI. Num monitor a 150% um
+processo que não declara a política recebe do Windows um tamanho de
+janela mentiroso, e todo recorte sai deslocado. Havia aqui uma função
+que declarava `PER_MONITOR_AWARE_V2` — nunca chamada por ninguém. Ela
+foi removida depois de medir: o Qt declara exatamente essa mesma
+política ao construir o `QApplication`, antes de qualquer coisa deste
+módulo rodar. Chamar de novo não mudaria nada, e uma função morta com
+uma docstring dizendo que ela importa é pior que a ausência dela — o
+próximo leitor gasta o tempo que este comentário economiza.
+
 Tudo aqui é dividido em duas metades: funções puras que decidem (e que
 os testes exercitam sem Windows nenhum) e funções que conversam com a
 API do Windows via ctypes.
@@ -98,32 +108,6 @@ def _user32():
     import ctypes
 
     return ctypes.windll.user32
-
-
-def declare_dpi_awareness() -> None:
-    """Pede coordenadas em pixels físicos, sem escalar.
-
-    Sem isto, num monitor a 150% o Windows mente sobre o tamanho da
-    janela e todo recorte sai deslocado. A chamada falha de propósito
-    quando alguém já declarou a política do processo — o Qt declara na
-    inicialização — e falhar aí é o resultado certo, não um erro: quem
-    já declarou declarou algo pelo menos tão bom quanto isto.
-    """
-    import ctypes
-
-    try:
-        # -4 = PER_MONITOR_AWARE_V2, o único que acerta em multi-monitor
-        # com escalas diferentes, que é o caso de quem joga em ultrawide
-        # com um segundo monitor.
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
-    except Exception:
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        except Exception:
-            try:
-                ctypes.windll.user32.SetProcessDPIAware()
-            except Exception:
-                pass
 
 
 def enumerate_windows() -> list[WindowInfo]:

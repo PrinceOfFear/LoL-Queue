@@ -1,4 +1,4 @@
-# Gera o executável final em dist-standalone\main.dist\LoL Queue.exe.
+﻿# Gera o executável final em dist-standalone\main.dist\LoL Queue.exe.
 #
 # Usa Nuitka em vez de PyInstaller: o Nuitka compila o Python para C e
 # gera um binário nativo de verdade, então não dá pra extrair o
@@ -22,6 +22,14 @@
 # Microsoft, todas assinadas — então passa. O preço é distribuir a pasta
 # main.dist inteira em vez de um arquivo só.
 #
+# O `--include-package=edge_tts` é explícito de propósito. O import dele
+# mora dentro de uma função, e a voz é a única coisa que o app faz de
+# fato barulhenta: se ficar de fora do pacote, o executável abre, acha o
+# jungler, mira certo e não fala — o modo de falha mais caro daqui,
+# porque parece funcionar. Já aconteceu por outro caminho (o pacote
+# faltando nas dependências), e a lição é a mesma: a voz não pode
+# depender de alguém adivinhar que ela é necessária.
+#
 # Uso:
 #     powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
@@ -36,6 +44,7 @@ py -m nuitka main.py `
     --windows-console-mode=disable `
     --windows-icon-from-ico=lolqueue/assets/icon.ico `
     --include-data-dir=lolqueue/assets=lolqueue/assets `
+    --include-package=edge_tts `
     --output-dir=dist-standalone `
     --output-filename="LoL Queue.exe" `
     --assume-yes-for-downloads `
