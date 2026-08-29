@@ -53,7 +53,22 @@ THRESHOLD = 0.85
 #:
 #: Medido contra o desenho do mapa 11 com nevoeiro, ruído e nove ícones
 #: espalhados: com o ícone presente a folga ficou entre 0,12 e 0,18;
-#: sem ele, nunca passou de 0,04. O corte fica no meio, longe dos dois.
+#: sem ele, nunca passou de 0,04.
+#:
+#: Aquele "nunca passou de 0,04" não sobreviveu a uma medição melhor. O
+#: desenho do mapa 11 é chapado; refeita a conta sobre um fundo com a
+#: textura da arte de verdade do jogo — retratos reais em cache como
+#: distratores, oito alvos ausentes, três sementes, 1440 quadros — a
+#: folga do terreno chegou a 0,138, e passou de 0,10 em quatro dos
+#: vinte e quatro casos. Ou seja: a folga NÃO fica acima de todo
+#: terreno, e não é ela que segura o caso ausente.
+#:
+#: Quem segura é o limiar absoluto. Nos mesmos 1440 quadros sem o alvo,
+#: nenhum pico cru passou de 0,635 contra `THRESHOLD` de 0,85, e a
+#: contagem de confirmados foi zero em todas as configurações. A folga
+#: continua valendo o que sempre valeu — desempatar entre pontos
+#: parecidos do MESMO quadro — mas o número dela é uma escolha de
+#: rigor, não uma linha traçada entre duas populações separadas.
 #:
 #: A folga também se ajusta sozinha ao quadro, o que o limiar absoluto
 #: não faz: nevoeiro e borrão derrubam o pico do ícone, mas derrubam
@@ -113,8 +128,10 @@ FORGIVE_FRAMES = 2
 #:
 #: Contra o desenho do mapa 11 com nevoeiro, ruído e nove ícones
 #: espalhados, o retrato de verdade mediu folga de 0,12 a 0,18 e o
-#: terreno nunca passou de 0,04. 0,10 fica acima de todo terreno medido
-#: e abaixo de todo ícone medido.
+#: terreno nunca passou de 0,04 — mas ver a ressalva em `MARGIN`: sobre
+#: um fundo com textura de arte real o terreno chegou a 0,138, e 0,10
+#: não fica acima de todo terreno medido. O que mantém o caso ausente
+#: mudo é `THRESHOLD`; este número aperta a aquisição, não a garante.
 #:
 #: Enquanto o rastro existe a exigência volta a ser `MARGIN`: um ícone
 #: já acompanhado pode perder folga por causa do nevoeiro sem deixar de
