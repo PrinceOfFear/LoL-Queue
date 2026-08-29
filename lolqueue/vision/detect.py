@@ -38,6 +38,34 @@ from .icons import Template
 #: não falar nada.
 THRESHOLD = 0.85
 
+#: O quanto o melhor ponto do quadro precisa ganhar do segundo melhor
+#: ponto distinto — a "folga" do casamento.
+#:
+#: Esta é a defesa que faltava, e a falta dela é o que enchia a partida
+#: de aviso falso. Um minimapa de 470 px dá quase duzentas mil posições
+#: por molde, e três moldes por quadro: meio milhão de sorteios. Entre
+#: meio milhão de pedaços de terreno sempre há um que se parece com o
+#: retrato mais do que 0,85, e o limiar absoluto não tem como saber que
+#: aquele foi só o melhor de muitos. Pior: o terreno não anda, então o
+#: mesmo pedaço vence quadro após quadro e a confirmação de três
+#: quadros — que existe para pegar brilho passageiro — carimba o erro
+#: em vez de barrá-lo.
+#:
+#: Medido contra o desenho do mapa 11 com nevoeiro, ruído e nove ícones
+#: espalhados: com o ícone presente a folga ficou entre 0,12 e 0,18;
+#: sem ele, nunca passou de 0,04. O corte fica no meio, longe dos dois.
+#:
+#: A folga também se ajusta sozinha ao quadro, o que o limiar absoluto
+#: não faz: nevoeiro e borrão derrubam o pico do ícone, mas derrubam
+#: junto o chão de terreno contra o qual ele é comparado.
+MARGIN = 0.06
+
+#: O que conta como "o mesmo pico", em frações do lado do molde. Serve
+#: para o segundo lugar não ser o pixel vizinho do primeiro: a
+#: correlação de um ícone de verdade é um morro, não uma agulha, e
+#: medir a folga contra a encosta do próprio morro daria zero sempre.
+PEAK_RADIUS = 1.0
+
 #: Quantos quadros seguidos precisam concordar antes do aviso sair. Um
 #: casamento solto pode ser um brilho passageiro; três em sequência, no
 #: mesmo lugar, não.
@@ -47,7 +75,18 @@ CONFIRM_FRAMES = 3
 #: mesmo ícone, em frações do próprio lado. Dois casamentos em pontas
 #: opostas do mapa são dois eventos, e contá-los juntos deixaria um
 #: falso positivo virar aviso.
-JUMP_FRACTION = 1.0
+#:
+#: Um lado inteiro por quadro era folga demais e enfraquecia a
+#: confirmação sem que ninguém pedisse: a cinco quadros por segundo dá
+#: 175 px por segundo num minimapa de 470, um campeão cruzando o mapa
+#: em menos de três segundos. Ninguém anda assim — 400 unidades por
+#: segundo, que é a velocidade de um campeão rápido, valem uns 13 px
+#: por segundo nessa escala, e um Flash inteiro vale 13 px de uma vez.
+#: Metade do lado ainda é sete vezes o movimento real, o bastante para
+#: o centro do casamento tremer entre tamanhos de molde e para os dois
+#: quadros de perdão, e apertado o suficiente para dois falsos
+#: positivos distantes não virarem um só evento.
+JUMP_FRACTION = 0.5
 
 #: Quantos quadros vazios seguidos um casamento já confirmado sobrevive.
 #: O ícone do inimigo pisca o tempo todo — o nevoeiro cobre por um
@@ -74,6 +113,8 @@ class Match:
     y: int
     score: float
     size: int
+    #: Quanto este ponto ganhou do segundo melhor ponto do quadro.
+    margin: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -184,8 +225,30 @@ def score_map(
     )
 
 
+def _runner_up(mapa: np.ndarray, y: int, x: int, size: int) -> float | None:
+    """O melhor ponto do quadro fora da vizinhança do pico.
+
+    Devolve `None` quando não sobra quadro nenhum para olhar — recorte
+    quase do tamanho do molde —, que é diferente de "o resto é ruim".
+
+    As quatro faixas em volta da caixa excluída evitam copiar o mapa
+    inteiro cinco vezes por segundo, e evitam também mexer no mapa de
+    quem chamou.
+    """
+    raio = max(1, int(round(size * PEAK_RADIUS)))
+    altura, largura = mapa.shape
+    y0, y1 = max(0, y - raio), min(altura, y + raio + 1)
+    x0, x1 = max(0, x - raio), min(largura, x + raio + 1)
+    faixas = (mapa[:y0, :], mapa[y1:, :], mapa[y0:y1, :x0], mapa[y0:y1, x1:])
+    valores = [float(faixa.max()) for faixa in faixas if faixa.size]
+    return max(valores) if valores else None
+
+
 def _best(
-    mapa: np.ndarray | None, template: Template, threshold: float
+    mapa: np.ndarray | None,
+    template: Template,
+    threshold: float,
+    margin: float = MARGIN,
 ) -> Match | None:
     if mapa is None or mapa.size == 0:
         return None
@@ -194,17 +257,31 @@ def _best(
     valor = float(mapa[y, x])
     if valor < threshold:
         return None
+    segundo = _runner_up(mapa, y, x, template.size)
+    # Sem segundo lugar não há com o que comparar, e exigir folga de um
+    # quadro que só tem uma posição seria recusar por falta de prova
+    # que ninguém podia dar.
+    folga = valor if segundo is None else valor - segundo
+    if folga < margin:
+        return None
     meio = template.size // 2
-    return Match(x=int(x) + meio, y=int(y) + meio, score=valor, size=template.size)
+    return Match(
+        x=int(x) + meio,
+        y=int(y) + meio,
+        score=valor,
+        size=template.size,
+        margin=folga,
+    )
 
 
 def match_template(
     frame: np.ndarray | None,
     template: Template,
     threshold: float = THRESHOLD,
+    margin: float = MARGIN,
 ) -> Match | None:
     """A melhor posição do molde no quadro, se passar do limiar."""
-    return _best(score_map(frame, template), template, threshold)
+    return _best(score_map(frame, template), template, threshold, margin)
 
 
 class Detector:
@@ -227,9 +304,11 @@ class Detector:
         threshold: float = THRESHOLD,
         confirm: int = CONFIRM_FRAMES,
         forgive: int = FORGIVE_FRAMES,
+        margin: float = MARGIN,
     ) -> None:
         self._templates = [t for t in templates if t.size >= 1]
         self._threshold = float(threshold)
+        self._margin = float(margin)
         self._confirm = max(1, int(confirm))
         self._forgive = max(0, int(forgive))
         self._kernels: dict[tuple[int, tuple[int, int]], _Kernels] = {}
@@ -278,6 +357,7 @@ class Detector:
                 score_map(dados, molde, spectra=spectra, kernels=kernels),
                 molde,
                 self._threshold,
+                self._margin,
             )
             if achado is not None and (melhor is None or achado.score > melhor.score):
                 melhor = achado

@@ -13,9 +13,12 @@ import pytest
 from lolqueue.vision.detect import (
     CONFIRM_FRAMES,
     FORGIVE_FRAMES,
+    MARGIN,
     THRESHOLD,
     Detector,
+    _runner_up,
     match_template,
+    score_map,
 )
 from lolqueue.vision.icons import Template
 
@@ -266,3 +269,99 @@ def test_among_several_sizes_the_best_one_wins(retrato):
 
 def test_a_detector_without_templates_never_speaks():
     assert Detector([]).feed(terreno()) is None
+
+
+def multidao(molde: Template, mistura: float = 0.9, size: int = 200) -> np.ndarray:
+    """Um quadro cheio de sósias: em toda parte quase o ícone, em lugar
+    nenhum o ícone.
+
+    É a forma pura do falso positivo que enchia a partida de aviso. O
+    minimapa de verdade não desenha sósias de propósito, mas oferece
+    quase duzentas mil posições por molde, e entre tantas sempre há uma
+    que passa do limiar sem ser o inimigo — e, como terreno não anda,
+    ela passa de novo no quadro seguinte e no seguinte, até a
+    confirmação carimbar o engano.
+    """
+    rng = np.random.default_rng(11)
+    quadro = rng.integers(0, 200, (size, size, 3)).astype(np.float64)
+    disco = molde.mask[:, :, None]
+    passo = molde.size + 8
+    for y in range(6, size - molde.size, passo):
+        for x in range(6, size - molde.size, passo):
+            janela = quadro[y : y + molde.size, x : x + molde.size, :]
+            quadro[y : y + molde.size, x : x + molde.size, :] = np.where(
+                disco, janela * (1 - mistura) + molde.pixels * mistura, janela
+            )
+    return np.clip(quadro, 0, 255).astype(np.uint8)
+
+
+def test_passing_the_threshold_is_not_enough_to_speak(molde):
+    """O melhor de muitos parecidos não é prova de nada.
+
+    O limiar absoluto sozinho não distingue "achei o inimigo" de "achei
+    o melhor pedaço de terreno entre meio milhão". A folga distingue.
+    """
+    quadro = multidao(molde)
+    mapa = score_map(quadro, molde)
+    assert mapa.max() >= THRESHOLD, "o cenário precisa passar do limiar"
+    assert match_template(quadro, molde) is None
+
+
+def test_the_crowd_is_refused_frame_after_frame(molde):
+    """Terreno não anda, então repetir o quadro não vira confirmação."""
+    detector = Detector([molde])
+    quadro = multidao(molde)
+    for _ in range(CONFIRM_FRAMES + FORGIVE_FRAMES + 2):
+        assert detector.feed(quadro) is None
+    assert not detector.confirmed
+
+
+def test_the_real_icon_wins_by_a_wide_margin(molde):
+    """O ícone de verdade não ganha por pouco: ganha de longe."""
+    achado = match_template(plantar(terreno(), molde, 70, 40), molde)
+    assert achado is not None
+    assert achado.margin > MARGIN * 2
+
+
+def test_the_neighbourhood_of_the_peak_is_not_the_runner_up(molde):
+    """A folga se mede contra outro lugar, não contra a encosta do pico.
+
+    A correlação de um ícone não termina num pixel: os vizinhos do pico
+    também casam bem. Medir a folga contra eles daria quase zero sempre,
+    e nenhum casamento de verdade passaria.
+    """
+    mapa = np.zeros((80, 80))
+    mapa[40, 40] = 0.98
+    mapa[40, 41] = 0.97  # a encosta do mesmo morro
+    mapa[10, 10] = 0.30  # outro lugar, este sim um segundo lugar
+    assert _runner_up(mapa, 40, 40, molde.size) == pytest.approx(0.30)
+
+
+def test_a_frame_with_room_for_one_position_still_counts(molde):
+    """Recorte do tamanho do molde não tem segundo lugar para comparar.
+
+    Recusar por falta de prova que ninguém podia dar seria calar sem
+    motivo. Não acontece com o minimapa inteiro, mas `match_template` é
+    público e não pode estourar nem mentir num recorte apertado.
+    """
+    quadro = np.zeros((molde.size, molde.size, 3), dtype=np.uint8)
+    disco = molde.mask
+    quadro[disco] = molde.pixels[disco].astype(np.uint8)
+    achado = match_template(quadro, molde)
+    assert achado is not None
+    assert achado.score > 0.99
+
+
+def test_a_confirmed_match_cannot_walk_across_the_map(molde):
+    """Seguir o inimigo é seguir, não é aceitar qualquer coisa perto.
+
+    Meio lado por quadro já é sete vezes mais rápido que um campeão
+    correndo. Um salto maior que isso é outro evento, mesmo depois de
+    confirmado, e volta a exigir confirmação.
+    """
+    detector = Detector([molde])
+    for _ in range(CONFIRM_FRAMES):
+        detector.feed(plantar(terreno(), molde, 60, 60))
+    assert detector.confirmed
+    assert detector.feed(plantar(terreno(), molde, 60, 60 + LADO)) is None
+    assert not detector.confirmed
