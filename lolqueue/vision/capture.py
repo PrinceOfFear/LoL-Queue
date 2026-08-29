@@ -42,8 +42,14 @@ from .window import Rect
 #: BitBlt: cópia direta, sem raster op.
 SRCCOPY = 0x00CC0020
 
-#: BitBlt: inclui janelas com camada (overlays). Sem isto, elementos
-#: desenhados por cima podem sair como buracos pretos.
+#: BitBlt: inclui janelas com camada (overlays). Fica documentado e
+#: deliberadamente **fora** do BitBlt logo abaixo, porque o remédio
+#: era pior que a doença: CAPTUREBLT obriga o Windows a redesenhar a
+#: tela inteira a cada cópia, e um jogo em tela cheia exclusiva perde
+#: a exclusividade quando isso acontece — o League minimizava
+#: sozinho, de novo e de novo, a cinco capturas por segundo. O que se
+#: ganhava eram overlays (Discord, GeForce) aparecendo no quadro,
+#: coisa que a detecção do minimapa não usa para nada.
 CAPTUREBLT = 0x40000000
 
 #: GetDIBits: pedir os pixels já decodificados, sem paleta.
@@ -56,6 +62,26 @@ DIB_RGB_COLORS = 0
 #: modo de vídeo terminar, e é pouco o bastante para o usuário não
 #: passar a partida inteira sem aviso caso o DXGI esteja quebrado.
 DUPLICATION_TRIAL_GRABS = 20
+
+
+#: Quanto tempo o GDI tem para provar que dá conta antes de o DXGI
+#: ganhar uma segunda chance. Só corre enquanto o GDI está devolvendo
+#: preto — e preto no plano B, com o jogo aberto, é o sintoma exato da
+#: tela cheia exclusiva. Nesse estado insistir no DXGI não é teimosia:
+#: é a única estratégia que enxerga, e desistir dela para sempre por
+#: causa de um tropeço na troca de modo de vídeo custa a partida
+#: inteira. Quando o GDI está enxergando, nada disto acontece.
+DUPLICATION_RETRY_SECONDS = 15.0
+
+
+def _looks_black(frame) -> bool:
+    """Se o quadro não tem um único pixel aceso — ou nem existe."""
+    if frame is None:
+        return True
+    try:
+        return not frame.any()
+    except Exception:  # pragma: no cover - quadro que não é ndarray
+        return False
 
 
 class GdiGrabber:
@@ -170,7 +196,7 @@ class GdiGrabber:
             self._screen_dc,
             rect.x,
             rect.y,
-            SRCCOPY | CAPTUREBLT,
+            SRCCOPY,
         )
         if not copied:
             return None
@@ -205,16 +231,29 @@ class ScreenGrabber:
     Segundo, o `Rect` pedido é o que diz *qual monitor* duplicar, e ele
     só existe na hora da captura.
 
-    A degradação para GDI é definitiva de propósito. Ela acontece em
-    dois casos: quando montar o dispositivo falha de vez
-    (`DuplicationUnavailable` — máquina virtual, driver antigo), e
-    quando o DXGI monta mas não entrega um único quadro em
-    `DUPLICATION_TRIAL_GRABS` tentativas. O segundo caso existe porque
-    "monta mas nunca entrega" é indistinguível de estar quebrado, e
-    ficar alternando entre as duas estratégias esconderia o problema em
-    vez de resolvê-lo. Uma vez que o DXGI entregou um quadro, ele é a
-    estratégia até o `close`: falhas depois disso são transitórias e o
-    próprio grabber já as trata.
+    A degradação para GDI acontece em dois casos: quando montar o
+    dispositivo falha de vez (`DuplicationUnavailable` — máquina
+    virtual, driver antigo) e quando o DXGI monta mas não entrega um
+    único quadro em `DUPLICATION_TRIAL_GRABS` tentativas. O segundo
+    caso existe porque "monta mas nunca entrega" é indistinguível de
+    estar quebrado.
+
+    Ela já foi definitiva, e era essa a falha que impedia o app de
+    funcionar em tela cheia exclusiva. Entrar em tela cheia derruba a
+    duplicação (`ACCESS_LOST`) e a troca de modo de vídeo leva alguns
+    quadros; quando isso pega o DXGI antes do primeiro quadro provado,
+    a fachada desistia dele para sempre e caía no GDI — que, por cima
+    de um jogo em tela cheia exclusiva, devolve preto para sempre. O
+    jogador ficava cego exatamente no modo em que só o DXGI enxerga, e
+    a única saída oferecida era sair da tela cheia.
+
+    Por isso a desistência agora é revogável, mas só sob a condição que
+    importa: o GDI também estar devolvendo preto. Nesse estado — e só
+    nele — o DXGI ganha uma tentativa nova a cada
+    `DUPLICATION_RETRY_SECONDS`. Com o GDI enxergando, a desistência
+    continua valendo e nada se gasta tentando de novo. Uma vez que o
+    DXGI entregou um quadro, ele é a estratégia até o `close`: falhas
+    depois disso são transitórias e o próprio grabber já as trata.
 
     Como o GDI, um objeto por thread.
     """
@@ -224,23 +263,37 @@ class ScreenGrabber:
         prefer_duplication: bool = True,
         duplication_factory=None,
         gdi_factory=None,
+        clock=None,
     ) -> None:
         # As fábricas entram pelo construtor para que os testes possam
-        # exercitar a escolha inteira sem GPU e sem tela.
+        # exercitar a escolha inteira sem GPU e sem tela. O relógio entra
+        # pelo mesmo motivo: sem ele, testar a segunda chance do DXGI
+        # exigiria esperar quinze segundos de verdade.
+        import time
+
         self._prefer = prefer_duplication
         self._new_duplication = duplication_factory or _default_duplication
         self._new_gdi = gdi_factory or GdiGrabber
+        self._clock = clock or time.monotonic
         self._duplication = None
         self._gdi = None
         self._attempts = 0
         self._proved = False
         self._gave_up = not prefer_duplication
+        self._gave_up_at = None
+        self._blind_gdi = False
         self._closed = False
 
     @property
     def strategy(self) -> str:
         """Qual estratégia está em uso agora: `"dxgi"` ou `"gdi"`."""
         return "gdi" if self._gave_up else "dxgi"
+
+    def _give_up(self) -> None:
+        """Desiste do DXGI agora, guardando a hora para a segunda chance."""
+        self._gave_up = True
+        self._gave_up_at = self._clock()
+        self._close_duplication()
 
     def _duplication_grab(self, rect: Rect) -> "np.ndarray | None":
         """Tenta o DXGI e devolve `None` quando é hora de desistir dele."""
@@ -249,8 +302,10 @@ class ScreenGrabber:
                 self._duplication = self._new_duplication()
             except Exception:
                 # Inclui `DuplicationUnavailable`: esta máquina não
-                # duplica o desktop, e insistir só gastaria CPU.
-                self._gave_up = True
+                # duplica o desktop. Pode ser também o instante em que o
+                # jogo toma a tela para si — daí a segunda chance logo
+                # abaixo, condicionada ao GDI estar cego.
+                self._give_up()
                 return None
         quadro = self._duplication.grab(rect)
         if quadro is not None:
@@ -259,22 +314,47 @@ class ScreenGrabber:
         if not self._proved:
             self._attempts += 1
             if self._attempts >= DUPLICATION_TRIAL_GRABS:
-                self._gave_up = True
-                self._close_duplication()
+                self._give_up()
         return None
+
+    def _retry_is_due(self) -> bool:
+        """Se vale gastar uma tentativa nova no DXGI.
+
+        Duas condições, e as duas precisam valer. A primeira é o GDI
+        estar devolvendo preto: enquanto o plano B enxerga, trocar de
+        estratégia só criaria oscilação sem ganho. A segunda é o tempo
+        de espera, para que uma partida inteira em tela cheia não vire
+        uma fila de montagens de dispositivo D3D11 a cinco por segundo.
+        """
+        if not self._prefer or not self._blind_gdi or self._gave_up_at is None:
+            return False
+        return self._clock() - self._gave_up_at >= DUPLICATION_RETRY_SECONDS
 
     def grab(self, rect: Rect) -> "np.ndarray | None":
         """Os pixels de `rect` como RGB (altura, largura, 3), ou `None`."""
         if self._closed or rect.width <= 0 or rect.height <= 0:
             return None
+        if self._gave_up and self._retry_is_due():
+            # A cota de tentativas recomeça: a anterior pode ter sido
+            # gasta inteira na troca de modo de vídeo.
+            self._gave_up = False
+            self._gave_up_at = None
+            self._attempts = 0
         if not self._gave_up:
             quadro = self._duplication_grab(rect)
-            if quadro is not None or not self._gave_up:
+            if quadro is not None:
+                self._blind_gdi = False
                 return quadro
+            if not self._gave_up:
+                return None
             # Acabou de desistir: o GDI ainda pode salvar este quadro.
         if self._gdi is None:
             self._gdi = self._new_gdi()
-        return self._gdi.grab(rect)
+        quadro = self._gdi.grab(rect)
+        # Preto no plano B, com o jogo aberto, é o sintoma da tela cheia
+        # exclusiva — e é o que libera a segunda chance do DXGI.
+        self._blind_gdi = _looks_black(quadro)
+        return quadro
 
     # -- ciclo de vida --------------------------------------------------
 

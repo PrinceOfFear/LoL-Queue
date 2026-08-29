@@ -13,23 +13,27 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lolqueue.vision import duplication, watcher as watcher_module
-from lolqueue.vision.capture import DUPLICATION_TRIAL_GRABS, ScreenGrabber
+from lolqueue.vision import capture, duplication, watcher as watcher_module
+from lolqueue.vision.capture import (
+    DUPLICATION_RETRY_SECONDS,
+    DUPLICATION_TRIAL_GRABS,
+    ScreenGrabber,
+)
 from lolqueue.vision.duplication import DuplicationGrabber, DuplicationUnavailable
 from lolqueue.vision.gamecfg import exclusive_fullscreen
 from lolqueue.vision.watcher import (
     BLIND_MESSAGE,
+    BLIND_ON_DXGI,
     FLIP_RISK_NOTE,
     FLIP_RISK_SPOKEN,
     BLIND_MODE_IS_FINE,
     BLIND_SECONDS,
     BLIND_SPOKEN,
     FAILURES_BEFORE_WARNING,
-    FULLSCREEN_HINT,
-    FULLSCREEN_SPOKEN,
     GAME_RETRY_SECONDS,
     GAME_TRIES_BEFORE_WARNING,
     JUNGLER_REREADS,
+    NOTE_FULLSCREEN,
     NOTE_NO_GAME,
     NOTE_NO_JUNGLER,
     NOTE_GDI,
@@ -268,11 +272,22 @@ class _GrabberFalso:
         self.fechado = True
 
 
-def _fachada(dxgi=None, gdi=None):
+def _fachada(dxgi=None, gdi=None, clock=None):
     return ScreenGrabber(
         duplication_factory=(lambda: dxgi) if dxgi is not None else None,
         gdi_factory=(lambda: gdi) if gdi is not None else None,
+        clock=clock,
     )
+
+
+class _Relogio:
+    """Um relógio de mentira, para não esperar quinze segundos de verdade."""
+
+    def __init__(self) -> None:
+        self.agora = 0.0
+
+    def __call__(self) -> float:
+        return self.agora
 
 
 def test_duplication_is_the_primary_strategy():
@@ -324,6 +339,94 @@ def test_duplication_that_already_worked_is_never_abandoned():
         fachada.grab(Rect(0, 0, 4, 4))
     assert fachada.strategy == "dxgi"
     assert gdi.pedidos == 0
+
+
+def test_a_blind_gdi_earns_the_fast_capture_a_second_chance():
+    """A falha que impedia jogar em tela cheia exclusiva.
+
+    Entrar em tela cheia derruba a duplicação e a troca de modo leva
+    alguns quadros. Quando isso gastava a cota de tentativas antes do
+    primeiro quadro provado, a fachada caía no GDI para sempre — e o
+    GDI, por cima de um jogo em tela cheia exclusiva, é preto para
+    sempre. O jogador ficava cego justamente no modo em que só o DXGI
+    enxerga.
+    """
+    quadro = np.full((4, 4, 3), 7, dtype=np.uint8)
+    # Falha durante a troca de modo, depois volta a entregar.
+    dxgi = _GrabberFalso([None] * DUPLICATION_TRIAL_GRABS + [quadro] * 5)
+    gdi = _GrabberFalso([np.zeros((4, 4, 3), dtype=np.uint8)] * 50)
+    relogio = _Relogio()
+    fachada = _fachada(dxgi, gdi, clock=relogio)
+
+    for _ in range(DUPLICATION_TRIAL_GRABS):
+        fachada.grab(Rect(0, 0, 4, 4))
+    assert fachada.strategy == "gdi"
+
+    relogio.agora = DUPLICATION_RETRY_SECONDS + 0.1
+    assert fachada.grab(Rect(0, 0, 4, 4)) is not None
+    assert fachada.strategy == "dxgi"
+
+
+def test_a_gdi_that_can_see_keeps_the_fast_capture_retired():
+    """Sem cegueira não há motivo para oscilar entre as duas estratégias."""
+    dxgi = _GrabberFalso([])
+    gdi = _GrabberFalso([np.full((4, 4, 3), 9, dtype=np.uint8)] * 50)
+    relogio = _Relogio()
+    fachada = _fachada(dxgi, gdi, clock=relogio)
+
+    for _ in range(DUPLICATION_TRIAL_GRABS):
+        fachada.grab(Rect(0, 0, 4, 4))
+    assert fachada.strategy == "gdi"
+
+    relogio.agora = DUPLICATION_RETRY_SECONDS * 10
+    fachada.grab(Rect(0, 0, 4, 4))
+    assert fachada.strategy == "gdi"
+
+
+def test_the_second_chance_waits_its_turn():
+    """Sem espera, uma partida em tela cheia viraria uma fila de D3D11."""
+    dxgi = _GrabberFalso([])
+    gdi = _GrabberFalso([np.zeros((4, 4, 3), dtype=np.uint8)] * 80)
+    relogio = _Relogio()
+    fachada = _fachada(dxgi, gdi, clock=relogio)
+
+    for _ in range(DUPLICATION_TRIAL_GRABS):
+        fachada.grab(Rect(0, 0, 4, 4))
+    pedidos = dxgi.pedidos
+
+    relogio.agora = DUPLICATION_RETRY_SECONDS - 1.0
+    for _ in range(10):
+        fachada.grab(Rect(0, 0, 4, 4))
+    assert dxgi.pedidos == pedidos, "cedo demais para tentar de novo"
+
+
+def test_a_machine_without_duplication_also_gets_a_second_chance():
+    """Montar o dispositivo pode falhar só no instante da troca de modo.
+
+    Numa máquina virtual o GDI enxerga, então a condição de cegueira
+    nunca se cumpre e a fábrica não é chamada de novo. Aqui o GDI está
+    preto: é o caso em que insistir é a única saída.
+    """
+    tentativas = []
+    quadro = np.full((4, 4, 3), 5, dtype=np.uint8)
+
+    def fabrica():
+        tentativas.append(1)
+        if len(tentativas) == 1:
+            raise DuplicationUnavailable("a tela acabou de mudar de modo")
+        return _GrabberFalso([quadro] * 5)
+
+    gdi = _GrabberFalso([np.zeros((4, 4, 3), dtype=np.uint8)] * 50)
+    relogio = _Relogio()
+    fachada = ScreenGrabber(
+        duplication_factory=fabrica, gdi_factory=lambda: gdi, clock=relogio
+    )
+    assert fachada.grab(Rect(0, 0, 4, 4)) is not None  # preto, vindo do GDI
+    assert fachada.strategy == "gdi"
+
+    relogio.agora = DUPLICATION_RETRY_SECONDS + 0.1
+    assert fachada.grab(Rect(0, 0, 4, 4)) is not None
+    assert fachada.strategy == "dxgi"
 
 
 def test_an_empty_rectangle_is_refused_before_any_strategy_runs():
@@ -557,10 +660,16 @@ def _vigia_parado(fullscreen, config=Path("game.cfg")):
     return diario
 
 
-def test_exclusive_fullscreen_is_announced_when_the_watch_starts():
+def test_exclusive_fullscreen_is_recorded_without_being_scolded():
+    """Tela cheia exclusiva é suportada — o DXGI lê esse modo.
+
+    O aviso antigo mandava sair da tela cheia antes de qualquer
+    evidência de problema. Atrapalhava quem joga assim e, pior, estava
+    errado: a captura primária enxerga esse modo.
+    """
     diario = _vigia_parado(lambda: True)
-    assert FULLSCREEN_HINT in diario
-    assert "Sem bordas" in FULLSCREEN_HINT
+    assert NOTE_FULLSCREEN in diario
+    assert "Sem bordas" not in NOTE_FULLSCREEN
 
 
 def test_borderless_says_nothing_about_video_mode():
@@ -583,7 +692,7 @@ def test_a_game_cfg_that_was_not_found_is_said_out_loud():
 def test_the_video_mode_is_not_guessed_when_there_is_no_file_to_read():
     """Sem arquivo, nem o alarme da tela cheia: seria chute."""
     diario = _vigia_parado(lambda: True, config=None)
-    assert FULLSCREEN_HINT not in diario
+    assert NOTE_FULLSCREEN not in diario
     assert NOTE_NO_CONFIG in diario
 
 
@@ -778,14 +887,14 @@ def test_the_watch_says_which_side_and_lane_it_read():
 # ---------------------------------------------------------------------------
 
 
-def test_exclusive_fullscreen_is_also_spoken():
-    """O jogador está dentro da partida: o arquivo de registro não o alcança."""
+def test_exclusive_fullscreen_is_no_longer_spoken():
+    """Nada de interromper quem joga em tela cheia para pedir que saia dela."""
     vigia, _relogio, _diario, voz = _vigia(fullscreen_fn=lambda: True)
 
     vigia.start()
     vigia.stop()
 
-    assert voz.ditas == [FULLSCREEN_SPOKEN]
+    assert voz.ditas == []
 
 
 def test_borderless_is_not_spoken():
@@ -826,7 +935,7 @@ def test_a_voice_that_fails_does_not_take_the_watch_down():
     vigia.start()
     vigia.stop()
 
-    assert FULLSCREEN_HINT in diario
+    assert NOTE_FULLSCREEN in diario
 
 
 
@@ -1046,6 +1155,26 @@ def test_a_black_screen_in_exclusive_fullscreen_keeps_the_usual_advice():
     assert BLIND_MESSAGE in diario
 
 
+def test_a_black_screen_with_the_fast_capture_up_clears_the_video_mode():
+    """Com o DXGI de pé, a tela cheia está inocente por construção.
+
+    Ele lê o quadro direto da placa de vídeo. Repetir o conselho de
+    trocar o modo aqui mandaria o jogador sair da tela cheia — que é o
+    que ele quer usar — atrás de um problema que está em outro lugar.
+    """
+    vigia, relogio, diario = _vigia_cego(
+        PRETO, config=Path("game.cfg"), fullscreen=True
+    )
+    vigia._strategy = "dxgi"
+    vigia.tick()
+    relogio.agora = BLIND_SECONDS
+    vigia.tick()
+
+    assert BLIND_ON_DXGI in diario
+    assert BLIND_MESSAGE not in diario
+    assert "Sem bordas" not in BLIND_ON_DXGI
+
+
 def test_falling_back_to_the_old_capture_is_written_down(monkeypatch):
     """A degradação era definitiva e invisível — a pior combinação.
 
@@ -1146,3 +1275,21 @@ def test_a_mirror_matchup_is_declared_once():
 
     esperado = NOTE_TWIN_JUNGLER.format(champion="Kha'Zix")
     assert diario.count(esperado) == 1
+
+
+def test_the_slow_capture_never_asks_for_layered_windows():
+    """`CAPTUREBLT` custava a tela cheia do jogador; não pode voltar.
+
+    A bandeira faz o `BitBlt` incluir janelas com camada — overlays do
+    Discord, da GeForce — e o preço é o Windows redesenhar a tela
+    inteira a cada cópia. Um jogo em tela cheia exclusiva perde a
+    exclusividade quando isso acontece, e a cinco capturas por segundo
+    o League minimizava sozinho, sem parar, enquanto o app estava
+    aberto. O comentário ao lado da constante explica; este teste é o
+    que impede alguém de reintroduzir a bandeira por achar que overlay
+    no quadro é problema — a detecção do minimapa nunca precisou deles.
+    """
+    fonte = (Path(capture.__file__)).read_text(encoding="utf-8")
+
+    assert "SRCCOPY | CAPTUREBLT" not in fonte
+    assert "SRCCOPY,\n" in fonte

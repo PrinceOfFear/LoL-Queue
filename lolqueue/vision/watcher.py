@@ -79,9 +79,25 @@ BLIND_SECONDS = 15.0
 #: ninguém. Sai uma vez por partida, nunca em laço.
 BLIND_MESSAGE = (
     "Não consegui ler a tela do jogo: a captura está vindo toda preta. "
-    "Isso costuma ser o modo de vídeo em tela cheia exclusiva. "
-    'Em Opções > Vídeo, troque o Modo de Vídeo para "Sem bordas" e o '
-    "aviso do jungler volta a funcionar."
+    "A captura rápida (DXGI), que é a única que enxerga o jogo em tela "
+    "cheia exclusiva, não está funcionando nesta máquina — sigo tentando "
+    "religar ela sozinho. Se o aviso não voltar, atualize o driver de "
+    'vídeo ou, como remendo, troque o Modo de Vídeo para "Sem bordas" '
+    "em Opções > Vídeo."
+)
+
+#: A tela preta com a captura rápida funcionando. Aqui a tela cheia
+#: está fora de suspeita — o DXGI lê tela cheia exclusiva sem problema
+#: — e mandar o jogador trocar o modo de vídeo seria jogá-lo contra a
+#: parede errada. O que sobra são as causas que apagam o quadro antes
+#: de ele chegar na captura.
+BLIND_ON_DXGI = (
+    "Não consegui ler a tela do jogo: a captura está vindo toda preta, "
+    "mesmo com a captura rápida (DXGI) ligada. O modo de vídeo não é o "
+    "problema — tela cheia exclusiva funciona. Nesses casos a causa "
+    "costuma ser HDR do Windows ligado, um overlay por cima do jogo "
+    "(Discord, GeForce Experience) ou o jogo rodando numa placa de "
+    "vídeo diferente da que o app captura."
 )
 
 #: A mesma tela preta, quando o game.cfg já disse que o modo de vídeo
@@ -91,8 +107,9 @@ BLIND_MESSAGE = (
 #: lugar o tempo todo.
 BLIND_MODE_IS_FINE = (
     "Não consegui ler a tela do jogo: a captura está vindo toda preta. "
-    "O modo de vídeo não é o problema — conferi no game.cfg e ele não "
-    "está em tela cheia exclusiva. Nesses casos a causa costuma ser o "
+    "O modo de vídeo não é o problema — conferi no game.cfg e ele nem "
+    "está em tela cheia exclusiva, que de todo modo é suportada. "
+    "Nesses casos a causa costuma ser o "
     "HDR do Windows ligado, um overlay por cima do jogo (Discord, "
     "GeForce Experience) ou o jogo rodando numa placa de vídeo "
     "diferente da que o app captura."
@@ -131,32 +148,32 @@ NOTE_TWIN_JUNGLER = (
 )
 
 NOTE_GDI = (
-    "A captura rápida (DXGI) não funcionou nesta máquina e caí para o "
-    "método antigo (GDI), que é mais lento e costuma vir preto por cima "
-    "do jogo. Se o aviso do jungler ficar mudo nesta partida, começe a "
-    "investigação por aqui."
+    "A captura rápida (DXGI) falhou e caí para o método antigo (GDI), "
+    "que é mais lento e vem preto por cima de um jogo em tela cheia "
+    "exclusiva. Não é definitivo: enquanto o GDI estiver devolvendo "
+    "preto, tento o DXGI de novo a cada 15 segundos. Se o aviso do "
+    "jungler ficar mudo nesta partida, comece a investigação por aqui."
 )
 
 #: O mesmo recado, dito antes de custar uma partida. O game.cfg diz o
 #: modo de vídeo sem precisar de um único quadro, então quando ele já
 #: acusa tela cheia exclusiva não há motivo para esperar quinze segundos
 #: de silêncio para explicar o silêncio. Sai uma vez, ao ligar.
-FULLSCREEN_HINT = (
-    "Atenção: o jogo está em tela cheia exclusiva, e nesse modo a captura "
-    "da tela costuma vir preta — o aviso do jungler fica mudo. "
-    'Em Opções > Vídeo, troque o Modo de Vídeo para "Sem bordas".'
+NOTE_FULLSCREEN = (
+    "O jogo está em tela cheia exclusiva. É suportado: a captura rápida "
+    "(DXGI) lê esse modo direto da placa de vídeo. Se ela falhar, o "
+    "diário avisa aqui mesmo em vez de o aviso simplesmente emudecer."
 )
 
-#: As mesmas duas notícias, ditas em voz alta. O registro em arquivo não
-#: chega a quem está dentro da partida — e o jogador que não escuta nada
-#: conclui que o app está quebrado, não que está cego. Curtas de
-#: propósito: uma frase, uma vez, e nunca durante uma luta.
-FULLSCREEN_SPOKEN = (
-    "Aviso do jungler indisponível: o jogo está em tela cheia exclusiva. "
-    "Troque o modo de vídeo para sem bordas."
-)
+#: A notícia dita em voz alta. O registro em arquivo não chega a quem
+#: está dentro da partida — e o jogador que não escuta nada conclui que
+#: o app está quebrado, não que está cego. Curta de propósito: uma
+#: frase, uma vez, e nunca durante uma luta. Não manda trocar o modo de
+#: vídeo: a tela cheia exclusiva é suportada, e o conselho reflexo de
+#: sair dela atrapalhava quem joga assim sem sequer ser a causa.
 BLIND_SPOKEN = (
-    "Não consigo ler a tela do jogo. Troque o modo de vídeo para sem bordas."
+    "Não consigo ler a tela do jogo; o aviso do jungler pode falhar. "
+    "O motivo está no diário."
 )
 
 #: Quantas consultas sem partida antes de dizer que ainda não achei uma.
@@ -273,6 +290,9 @@ class JungleWatcher:
         self._last_said = 0.0
         self._blind_since: float | None = None
         self._blind_warned = False
+        # Qual captura respondeu por último: "dxgi", "gdi" ou vazio
+        # enquanto ninguém capturou nada (ou o grab veio injetado).
+        self._strategy = ""
         self._notes: set[str] = set()
         self._game_tries = 0
 
@@ -296,7 +316,7 @@ class JungleWatcher:
         return True
 
     def _warn_fullscreen(self) -> None:
-        """Avisa do modo de vídeo cego antes que ele custe uma partida.
+        """Registra o modo de vídeo, sem transformá-lo em acusação.
 
         Ler um arquivo de texto não pode derrubar a vigilância que acabou
         de subir, então qualquer tropeço aqui é engolido: o aviso dos
@@ -309,8 +329,7 @@ class JungleWatcher:
                 # tela cheia exclusiva não detectada.
                 self._note("sem_config", NOTE_NO_CONFIG)
             elif self._fullscreen():
-                self._log(FULLSCREEN_HINT)
-                self._speak(FULLSCREEN_SPOKEN)
+                self._log(NOTE_FULLSCREEN)
         except Exception:  # pragma: no cover - rede de segurança
             pass
 
@@ -359,6 +378,7 @@ class JungleWatcher:
         self._last_said = 0.0
         self._blind_since = None
         self._blind_warned = False
+        self._strategy = ""
         self._notes.clear()
         self._game_tries = 0
 
@@ -645,12 +665,18 @@ class JungleWatcher:
     def _blind_message(self) -> str:
         """A queixa de tela preta ajustada ao que se sabe do vídeo.
 
-        A frase padrão manda trocar o modo de vídeo, e ela está certa na
-        maioria das vezes. Mas quando o game.cfg foi encontrado e diz que
-        o modo já não é tela cheia exclusiva, repetir esse conselho manda
-        o jogador consertar o que não está quebrado — ele mexe no vídeo,
-        a tela continua preta, e a conclusão é que o aviso não presta.
+        Três respostas para o mesmo sintoma, porque três causas
+        diferentes o produzem. Com o DXGI de pé, a tela cheia está
+        inocente por construção. Com o game.cfg dizendo que o modo nem é
+        tela cheia, também. Só sobra o conselho do modo de vídeo quando
+        a captura caiu para o GDI e nada desmente a tela cheia — e mesmo
+        aí ele é o remendo, não o conserto: o app continua tentando
+        religar o DXGI sozinho.
         """
+        if self._strategy == "dxgi":
+            # A captura que enxerga tela cheia está de pé e mesmo assim
+            # o quadro veio preto: a culpa é de outra coisa.
+            return BLIND_ON_DXGI
         try:
             if self._config_path() is not None and not self._fullscreen():
                 return BLIND_MODE_IS_FINE
@@ -666,7 +692,8 @@ class JungleWatcher:
             # próprio módulo de captura pede, tanto no DXGI quanto no GDI.
             self._grabber = ScreenGrabber()
         quadro = self._grabber.grab(rect)
-        if getattr(self._grabber, "strategy", "") == "gdi":
+        self._strategy = getattr(self._grabber, "strategy", "")
+        if self._strategy == "gdi":
             self._note("captura_gdi", NOTE_GDI)
         return quadro
 

@@ -9,6 +9,7 @@ sintetizada uma vez só, o cache que sobrevive à partida, e o silêncio
 sem estouro e sem encher o diário quando a rede não responde.
 """
 
+from pathlib import Path
 import threading
 
 import pytest
@@ -336,3 +337,60 @@ def test_a_player_that_raises_does_not_kill_the_voice_thread(tmp_path):
         voz.close()
 
     assert tocados == [voz.path_for(OUTRA).name]
+
+
+# ---------------------------------------------------------------------------
+# A janela do MCI, que minimizava o jogo
+# ---------------------------------------------------------------------------
+
+
+def test_the_player_hides_its_window_before_playing():
+    """O defeito que tirava o jogador da tela cheia a cada frase.
+
+    `mpegvideo` é um dispositivo de vídeo: o `play` mostra a janela de
+    reprodução, ela toma o primeiro plano e o League em tela cheia
+    exclusiva minimiza sozinho. Esconder tem que vir antes do `play` —
+    depois já é tarde, o jogo já saiu da frente.
+    """
+    from lolqueue.vision.voice import play_file
+
+    ditos: list[str] = []
+
+    def send(texto: str) -> int:
+        ditos.append(texto)
+        return 0
+
+    assert play_file(Path("frase.mp3"), send=send) is True
+
+    verbos = [linha.split()[0] for linha in ditos]
+    assert verbos == ["open", "window", "play", "close"]
+    assert "state hide" in ditos[1]
+
+
+def test_a_player_that_cannot_open_the_file_says_so_without_playing():
+    ditos: list[str] = []
+
+    from lolqueue.vision.voice import play_file
+
+    def send(texto: str) -> int:
+        ditos.append(texto)
+        return 1 if texto.startswith("open") else 0
+
+    assert play_file(Path("frase.mp3"), send=send) is False
+    assert [linha.split()[0] for linha in ditos] == ["open"]
+
+
+def test_the_alias_is_always_closed_even_when_playing_explodes():
+    """Um alias vazado deixa o arquivo preso e a próxima frase muda."""
+    ditos: list[str] = []
+
+    from lolqueue.vision.voice import play_file
+
+    def send(texto: str) -> int:
+        ditos.append(texto)
+        if texto.startswith("play"):
+            raise RuntimeError("dispositivo sumiu")
+        return 0
+
+    assert play_file(Path("frase.mp3"), send=send) is False
+    assert ditos[-1].startswith("close")

@@ -139,30 +139,48 @@ def synthesizer_available() -> bool:
     return True
 
 
-def play_file(path: Path) -> bool:
+def _mci(texto: str) -> int:
+    """Manda um comando de texto para o MCI. Zero é sucesso."""
+    import ctypes
+
+    return int(ctypes.windll.winmm.mciSendStringW(texto, None, 0, None))
+
+
+def play_file(path: Path, send=None) -> bool:
     """Toca um mp3 pelo MCI, esperando terminar.
 
     Espera de propósito: quem chama é a thread da fala, e duas frases
     sobrepostas não se entendem.
-    """
-    try:
-        import ctypes
 
-        winmm = ctypes.windll.winmm
+    O `window ... state hide` é cinto de segurança, não conserto.
+    `mpegvideo` é um dispositivo de *vídeo*, e para um arquivo com
+    imagem ele abriria uma janela que o `play` traz para a frente —
+    com o jogo em tela cheia exclusiva, qualquer janela que tome o
+    primeiro plano minimiza o League. Para um mp3, porém, o MCI
+    responde "não há janela de exibição" (erro 346) e nada acontece:
+    isso foi conferido na mão, contra o winmm de verdade, e por isso
+    o retorno do comando é ignorado de propósito. O comando fica
+    porque custa uma chamada e cobre o dia em que o cache guardar
+    algo que não seja só áudio.
+    """
+    comando = send or _mci
+    try:
+        nome = f"lolqueue{next(_alias)}"
+        if comando(f'open "{path}" type mpegvideo alias {nome}') != 0:
+            return False
     except Exception:
         return False
-
-    nome = f"lolqueue{next(_alias)}"
-
-    def comando(texto: str) -> int:
-        return int(winmm.mciSendStringW(texto, None, 0, None))
-
-    if comando(f'open "{path}" type mpegvideo alias {nome}') != 0:
-        return False
     try:
+        # Antes do play: é ele que mostraria a janela.
+        comando(f"window {nome} state hide")
         return comando(f"play {nome} wait") == 0
+    except Exception:
+        return False
     finally:
-        comando(f"close {nome}")
+        try:
+            comando(f"close {nome}")
+        except Exception:
+            pass
 
 
 Synthesizer = Callable[[str, str], "bytes | None"]
