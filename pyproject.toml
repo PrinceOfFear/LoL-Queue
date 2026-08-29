@@ -11,6 +11,12 @@ dependencies = [
     # A leitura do minimapa faz correlação pixel a pixel; em Python puro
     # não fecha dentro de um quadro.
     "numpy>=2.0",
+    # A voz do aviso do jungler. Não é opcional: sem ela o app abre
+    # normalmente e fica mudo a partida inteira, que é o modo de falha
+    # mais caro que existe aqui — parece funcionar e não funciona.
+    # Ficou de fora desta lista por um tempo, e a máquina que instalou
+    # só o que estava declarado nunca falou uma palavra.
+    "edge-tts>=7.0",
 ]
 
 [project.optional-dependencies]

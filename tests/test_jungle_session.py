@@ -8,7 +8,8 @@ quando ele apaga.
 
 from lolqueue.config import Config
 from lolqueue.vision.session import JungleSession
-from lolqueue.vision.voice import DEFAULT_VOICE, VOICES
+from lolqueue.vision import session as session_module
+from lolqueue.vision.voice import DEFAULT_VOICE, MISSING_PACKAGE_NOTICE, VOICES
 
 
 class VigiaFalso:
@@ -106,3 +107,28 @@ def test_a_broken_environment_does_not_take_the_app_down():
     assert sessao.start() is False
     assert sessao.running is False
     assert any("jungler" in linha for linha in registro)
+
+
+# ---------------------------------------------------------------------------
+
+
+def test_a_missing_synthesizer_is_announced_before_the_match(monkeypatch):
+    """Sem o pacote de voz, avisar na largada — não no meio do gank.
+
+    Esta é a falha que fez o app parecer quebrado numa máquina nova: tudo
+    subia, nada falava, e o diário só reclamava depois da primeira fala
+    perdida — quando o aviso já não servia para nada.
+    """
+    monkeypatch.setattr(session_module, "synthesizer_available", lambda: False)
+    sessao, _, registro = make_session()
+    assert sessao.start() is True
+    assert MISSING_PACKAGE_NOTICE in registro
+    assert "pip install edge-tts" in MISSING_PACKAGE_NOTICE
+
+
+def test_a_working_synthesizer_says_nothing(monkeypatch):
+    """Quem tem o pacote não recebe recado sobre pacote."""
+    monkeypatch.setattr(session_module, "synthesizer_available", lambda: True)
+    sessao, _, registro = make_session()
+    sessao.start()
+    assert registro == []

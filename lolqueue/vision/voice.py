@@ -72,8 +72,16 @@ VOICE_LABELS = {
 #: sem parecer um ataque ao serviço.
 PRIME_WORKERS = 3
 
-#: Recado da falha, dito uma vez por sessão.
+#: Recado da falha, dito uma vez por sessão. São dois porque as duas
+#: causas pedem coisas diferentes de quem lê: uma se resolve com um
+#: comando, a outra é esperar a rede voltar. Um recado único mandaria
+#: metade das pessoas procurar problema de rede que não existe.
 SILENT_NOTICE = "Voz indisponível: sem resposta do sintetizador, os avisos ficam mudos."
+MISSING_PACKAGE_NOTICE = (
+    "Voz indisponível: o pacote edge-tts não está instalado neste Python — "
+    "o aviso do jungler fica mudo a partida inteira. Instale com "
+    "py -m pip install edge-tts e reabra o app."
+)
 
 _alias = itertools.count(1)
 
@@ -100,7 +108,11 @@ def synthesize(text: str, voice: str) -> bytes | None:
     """O mp3 da frase, pelo serviço neural. `None` se não deu.
 
     O import é tardio para que a falta do pacote não impeça o app de
-    abrir: sem ele o aviso ainda sai, na voz local.
+    abrir — mas abrir é tudo o que ele faz sem o pacote. Não existe
+    queda para voz local aqui, e o comentário que dizia existir custou
+    a uma máquina inteira uma investigação: o app subia, a partida
+    rodava, e nenhum aviso saía. Quem chama distingue os dois casos
+    por `synthesizer_available()`.
     """
     try:
         import edge_tts
@@ -112,6 +124,19 @@ def synthesize(text: str, voice: str) -> bytes | None:
     except Exception:
         return None
     return bytes(dados) or None
+
+
+def synthesizer_available() -> bool:
+    """Se o sintetizador sequer pode ser carregado nesta máquina.
+
+    Separa "o pacote não está aqui" de "a rede não respondeu". As duas
+    emudecem o aviso igual, mas só a primeira tem conserto imediato.
+    """
+    try:
+        import edge_tts  # noqa: F401
+    except Exception:
+        return False
+    return True
 
 
 def play_file(path: Path) -> bool:
@@ -345,7 +370,10 @@ class Voice:
             return
         self._avisou = True
         try:
-            self._on_message(SILENT_NOTICE)
+            recado = (
+                SILENT_NOTICE if synthesizer_available() else MISSING_PACKAGE_NOTICE
+            )
+            self._on_message(recado)
         except Exception:
             pass
 

@@ -8,6 +8,8 @@ ficar mudo quando a captura não funciona.
 
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -26,6 +28,7 @@ from lolqueue.vision.watcher import (
     JUNGLER_REREADS,
     NOTE_NO_GAME,
     NOTE_NO_JUNGLER,
+    NOTE_NO_CONFIG,
     NOTE_NO_MINIMAP,
     RELOCATE_SECONDS,
     JungleWatcher,
@@ -515,8 +518,14 @@ def test_only_a_truly_black_frame_counts_as_blind(quadro, cego):
 # ---------------------------------------------------------------------------
 
 
-def _vigia_parado(fullscreen):
-    """Vigilância que liga e desliga na hora, sem tocar em tela nem em rede."""
+def _vigia_parado(fullscreen, config=Path("game.cfg")):
+    """Vigilância que liga e desliga na hora, sem tocar em tela nem em rede.
+
+    `config` é o game.cfg que a vigilância diz ter encontrado. Vem
+    preenchido de propósito: deixá-lo à descoberta real amarraria o
+    teste à máquina que o roda — passaria em quem tem o League
+    instalado e falharia em qualquer outra.
+    """
     diario = []
     vigia = JungleWatcher(
         voice=_VozFalsa(),
@@ -526,6 +535,7 @@ def _vigia_parado(fullscreen):
         grab_fn=lambda rect: None,
         game_fn=lambda: None,
         fullscreen_fn=fullscreen,
+        config_fn=lambda: config,
     )
     vigia.start()
     vigia.stop()
@@ -541,6 +551,25 @@ def test_exclusive_fullscreen_is_announced_when_the_watch_starts():
 def test_borderless_says_nothing_about_video_mode():
     diario = _vigia_parado(lambda: False)
     assert all("Sem bordas" not in linha for linha in diario)
+
+
+def test_a_game_cfg_that_was_not_found_is_said_out_loud():
+    """A instalação em outro disco tem que aparecer, não sumir.
+
+    Com o arquivo em lugar nenhum, `exclusive_fullscreen` responde
+    "não" por falta de evidência — indistinguível de um "não" de
+    verdade. Foi assim que um PC ficou mudo sem nenhuma pista: o
+    aviso da tela cheia não saiu porque ninguém sabia o modo de vídeo.
+    """
+    diario = _vigia_parado(lambda: False, config=None)
+    assert NOTE_NO_CONFIG in diario
+
+
+def test_the_video_mode_is_not_guessed_when_there_is_no_file_to_read():
+    """Sem arquivo, nem o alarme da tela cheia: seria chute."""
+    diario = _vigia_parado(lambda: True, config=None)
+    assert FULLSCREEN_HINT not in diario
+    assert NOTE_NO_CONFIG in diario
 
 
 def test_a_broken_config_read_does_not_take_the_watch_down():

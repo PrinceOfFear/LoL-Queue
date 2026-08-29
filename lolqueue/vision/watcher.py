@@ -126,6 +126,17 @@ NOTE_NO_MINIMAP = (
     "Não localizei o minimapa na tela; sigo procurando a cada "
     f"{int(RELOCATE_SECONDS)} segundos."
 )
+#: O game.cfg responde duas perguntas que mudam o aviso: se a captura
+#: vem preta e se o minimapa está girado. Não achar o arquivo não
+#: impede a vigilância de rodar, mas apaga os dois diagnósticos — e um
+#: app que erra o canto do mapa sem nunca dizer por quê é pior que um
+#: app calado. Isto existe para que a instalação em outro disco apareça
+#: no diário em vez de virar mistério.
+NOTE_NO_CONFIG = (
+    "Não encontrei o game.cfg do League nesta máquina. O aviso continua "
+    "funcionando, mas não consigo checar o modo de vídeo nem se o "
+    "minimapa está girado (opção Girar Minimapa)."
+)
 
 
 def _is_blank(frame) -> bool:
@@ -161,6 +172,7 @@ class JungleWatcher:
         game_fn=None,
         clock: Callable[[], float] = time.monotonic,
         fullscreen_fn: Callable[[], bool] | None = None,
+        config_fn=None,
     ) -> None:
         self._voice = voice
         self._icons = icons if icons is not None else ChampionIcons()
@@ -171,6 +183,7 @@ class JungleWatcher:
         self._fetch = game_fn or self._fetch_live
         self._clock = clock
         self._fullscreen = fullscreen_fn or gamecfg.exclusive_fullscreen
+        self._config_path = config_fn or gamecfg.config_path
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -218,7 +231,12 @@ class JungleWatcher:
         quinze segundos continua de guarda.
         """
         try:
-            if self._fullscreen():
+            if self._config_path() is None:
+                # Sem o arquivo não há o que checar, e afirmar "está tudo
+                # certo" seria mentir: o silêncio aqui é o mesmo de uma
+                # tela cheia exclusiva não detectada.
+                self._note("sem_config", NOTE_NO_CONFIG)
+            elif self._fullscreen():
                 self._log(FULLSCREEN_HINT)
                 self._speak(FULLSCREEN_SPOKEN)
         except Exception:  # pragma: no cover - rede de segurança

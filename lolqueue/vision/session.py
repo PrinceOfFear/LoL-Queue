@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .voice import normalize_voice
+from .voice import MISSING_PACKAGE_NOTICE, normalize_voice, synthesizer_available
 
 
 class JungleSession:
@@ -53,8 +53,21 @@ class JungleSession:
             self._log(f"Não deu para ligar o aviso do jungler: {erro}")
             return False
         self._watcher, self._voice = watcher, voice
+        self._warn_if_mute()
         watcher.start()
         return True
+
+    def _warn_if_mute(self) -> None:
+        """Diz na hora de ligar quando nenhuma palavra vai sair.
+
+        Sem o pacote de síntese a vigilância roda inteira, acha o
+        jungler, acerta o canto do mapa — e não fala. A queixa só
+        apareceria na primeira fala perdida, ou seja, no meio do gank
+        que ela deveria ter avisado. Aqui ela sai antes da partida,
+        quando ainda dá tempo de instalar o pacote.
+        """
+        if not synthesizer_available():
+            self._log(MISSING_PACKAGE_NOTICE)
 
     def stop(self) -> None:
         """Fecha tudo o que a partida abriu, na ordem certa."""
