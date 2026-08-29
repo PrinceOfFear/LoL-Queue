@@ -261,6 +261,7 @@ class JungleWatcher:
         clock: Callable[[], float] = time.monotonic,
         fullscreen_fn: Callable[[], bool] | None = None,
         config_fn=None,
+        debug: bool = False,
     ) -> None:
         self._voice = voice
         self._icons = icons if icons is not None else ChampionIcons()
@@ -272,6 +273,11 @@ class JungleWatcher:
         self._clock = clock
         self._fullscreen = fullscreen_fn or gamecfg.exclusive_fullscreen
         self._config_path = config_fn or gamecfg.config_path
+        # Guardar o raciocínio de cada aviso ao lado dele no registro.
+        # Desligado por padrão: uma linha dessas por aviso é ruído para
+        # quem só quer jogar, e é a única coisa que responde "por que
+        # ele falou isso?" para quem foi conferir depois da partida.
+        self._debug = bool(debug)
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -462,7 +468,40 @@ class JungleWatcher:
         self._last_said = agora
         self._speak(aviso.text)
         self._log(aviso.text)
+        self._explain(aviso, achado, mapa, mx, my, jogo)
         return aviso
+
+    def _explain(self, aviso, achado, mapa, mx, my, jogo) -> None:
+        """Registra de onde saiu o aviso que acabou de ser falado.
+
+        Um aviso errado pode ter três causas, e a frase falada não
+        distingue nenhuma delas: o retrato foi achado onde não estava
+        (nitidez e folga baixas), foi achado no lugar certo e o mapa de
+        zonas nomeou errado (coordenada certa, zona torta), ou o lugar
+        está certo e a urgência é que não (âncora chutada). Cada número
+        aqui separa um desses casos, e é barato: só sai quando o
+        diagnóstico está ligado, e só uma vez por aviso.
+        """
+        if not self._debug:
+            return
+        try:
+            wx, wy = jogo.to_world(mx, my)
+            ax, ay = jogo.my_anchor
+            self._log(
+                f"[diagnóstico] {aviso.zone_key} · {aviso.urgency} · "
+                f"mapa ({mx:.3f}, {my:.3f}) · mundo ({wx:.3f}, {wy:.3f}) · "
+                f"eu em ({ax:.3f}, {ay:.3f})"
+                f"{' chutado' if jogo.anchor_is_a_guess else ''} "
+                f"lado {jogo.side} rota {jogo.lane or '?'} · "
+                f"nitidez {achado.score:.3f} folga {achado.margin:.3f} · "
+                f"retrato {achado.size}px em ({achado.x}, {achado.y}) de "
+                f"{mapa.rect.width}px"
+                f"{' · minimapa girado' if mapa.flipped else ''}"
+            )
+        except Exception:  # pragma: no cover - rede de segurança
+            # Diagnóstico nenhum vale um quadro perdido no meio da
+            # partida, muito menos a vigilância inteira caindo.
+            pass
 
     # ---------- as peças ----------
 

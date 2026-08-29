@@ -198,6 +198,23 @@ class SettingsPage(QWidget):
         jungle_note.setWordWrap(True)
         automation_layout.addWidget(jungle_note)
 
+        automation_layout.addWidget(
+            binder.checkbox(
+                "Guardar no registro o porquê de cada aviso",
+                "jungle_debug",
+            )
+        )
+        debug_note = QLabel(
+            "Só para investigar aviso errado. Ao lado de cada frase falada "
+            "fica uma linha com a coordenada onde o retrato foi achado, a "
+            "nitidez do casamento e o nome do lugar — é o que separa "
+            "“achou onde não estava” de “achou certo e "
+            "chamou o lugar errado”. Vale a partir da próxima partida."
+        )
+        debug_note.setObjectName("hint")
+        debug_note.setWordWrap(True)
+        automation_layout.addWidget(debug_note)
+
         layout.addWidget(automation)
 
         timing_card = QFrame()

@@ -104,4 +104,10 @@ class JungleSession:
         from .watcher import JungleWatcher
 
         voice = Voice(voice_name, on_message=self._log)
-        return JungleWatcher(voice, on_message=self._log), voice
+        # Lido aqui, e não guardado na construção da sessão: ligar o
+        # diagnóstico passa a valer na partida seguinte, como a voz.
+        debug = bool(getattr(self._config, "jungle_debug", False))
+        return (
+            JungleWatcher(voice, on_message=self._log, debug=debug),
+            voice,
+        )

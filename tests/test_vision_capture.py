@@ -20,7 +20,9 @@ from lolqueue.vision.capture import (
     ScreenGrabber,
 )
 from lolqueue.vision.duplication import DuplicationGrabber, DuplicationUnavailable
+from lolqueue.vision.detect import Match
 from lolqueue.vision.gamecfg import exclusive_fullscreen
+from lolqueue.vision.minimap import Minimap
 from lolqueue.vision.watcher import (
     BLIND_MESSAGE,
     BLIND_ON_DXGI,
@@ -1293,3 +1295,151 @@ def test_the_slow_capture_never_asks_for_layered_windows():
 
     assert "SRCCOPY | CAPTUREBLT" not in fonte
     assert "SRCCOPY,\n" in fonte
+
+
+# ---------------------------------------------------------------------------
+# O diagnóstico: por que o aviso saiu daquele jeito
+# ---------------------------------------------------------------------------
+
+
+class _DetectorFalso:
+    """Um detector que já sabe onde o retrato estava."""
+
+    def __init__(self, achado):
+        self._achado = achado
+
+    def feed(self, quadro):
+        return self._achado
+
+
+def _jogo_de_meio(**extra):
+    jogo = SimpleNamespace(
+        side=1,
+        lane="middle",
+        lane_name="rota do meio",
+        enemy_jungler=SimpleNamespace(champion="Lee Sin"),
+        jungler_has_a_twin=False,
+        me=SimpleNamespace(is_jungler=False),
+        anchor_is_a_guess=False,
+        my_anchor=(0.5, 0.5),
+        to_world=lambda mx, my: (mx, my),
+    )
+    for nome, valor in extra.items():
+        setattr(jogo, nome, valor)
+    return jogo
+
+
+def _vigia_falante(achado, debug, jogo=None, flipped=False):
+    """Uma vigilância a um `tick` de falar, com tudo o mais dublado.
+
+    O minimapa e o detector entram prontos porque o caminho até o aviso
+    já é testado peça por peça em outro lugar; o que interessa aqui é o
+    fim do `tick`, depois de a frase sair.
+    """
+    mapa = Minimap(rect=Rect(1600, 800, 280, 280), flipped=flipped)
+    vigia, relogio, diario, voz = _vigia(
+        game_fn=lambda: jogo or _jogo_de_meio(),
+        locate_fn=lambda frame, area, flipped=False: mapa,
+        debug=debug,
+    )
+    vigia._minimap = mapa
+    vigia._minimap_at = 1.0
+    vigia._detector = _DetectorFalso(achado)
+    vigia._champion = "Lee Sin"
+    relogio.agora = 2.0
+    return vigia, diario, voz
+
+
+def test_the_diagnosis_writes_down_where_the_warning_came_from():
+    """Um aviso errado não se investiga pela frase que ele falou.
+
+    A mesma frase sai de três defeitos diferentes — retrato achado onde
+    não estava, achado certo com a zona nomeada errada, e lugar certo
+    com urgência errada por âncora chutada. Sem estes números não há
+    como saber qual deles aconteceu na partida de ontem.
+    """
+    vigia, diario, voz = _vigia_falante(
+        Match(x=42, y=238, score=0.91, size=21, margin=0.07), debug=True
+    )
+
+    aviso = vigia.tick()
+
+    assert aviso is not None
+    linhas = [linha for linha in diario if linha.startswith("[diagnóstico]")]
+    assert len(linhas) == 1
+    linha = linhas[0]
+    assert aviso.zone_key in linha
+    assert aviso.urgency in linha
+    assert "mapa (0.150, 0.850)" in linha
+    assert "nitidez 0.910" in linha
+    assert "folga 0.070" in linha
+    assert "retrato 21px em (42, 238) de 280px" in linha
+    # O diagnóstico acompanha o aviso, não o substitui.
+    assert voz.ditas == [aviso.text]
+
+
+def test_the_diagnosis_says_when_the_minimap_is_upside_down():
+    """Minimapa girado troca cada canto pelo oposto: tem de constar."""
+    vigia, diario, _voz = _vigia_falante(
+        Match(x=42, y=238, score=0.91, size=21, margin=0.07),
+        debug=True,
+        flipped=True,
+    )
+
+    vigia.tick()
+
+    assert any("minimapa girado" in linha for linha in diario)
+
+
+def test_the_diagnosis_says_when_the_anchor_was_a_guess():
+    """Sem saber onde o jogador está, a urgência é chute — e explica-se."""
+    vigia, diario, _voz = _vigia_falante(
+        Match(x=42, y=238, score=0.91, size=21, margin=0.07),
+        debug=True,
+        jogo=_jogo_de_meio(lane="", anchor_is_a_guess=True),
+    )
+
+    vigia.tick()
+
+    assert any("chutado" in linha for linha in diario)
+
+
+def test_without_the_diagnosis_the_log_only_has_the_warning():
+    """Ligado sempre, isso seria ruído para quem só quer jogar."""
+    vigia, diario, voz = _vigia_falante(
+        Match(x=42, y=238, score=0.91, size=21, margin=0.07), debug=False
+    )
+
+    aviso = vigia.tick()
+
+    assert aviso is not None
+    assert not any(linha.startswith("[diagnóstico]") for linha in diario)
+    assert voz.ditas == [aviso.text]
+
+
+def test_a_broken_diagnosis_never_costs_the_warning():
+    """Depurar é o menos importante que acontece no meio de uma partida.
+
+    Se algum dia a partida deixar de responder um destes campos, o
+    diagnóstico some sozinho — o aviso, que é o motivo do app existir,
+    continua saindo.
+    """
+    voltas = []
+
+    def mundo(mx, my):
+        voltas.append(1)
+        if len(voltas) > 1:  # a segunda leitura é a do diagnóstico
+            raise AttributeError("partida sumiu no meio")
+        return mx, my
+
+    vigia, diario, voz = _vigia_falante(
+        Match(x=42, y=238, score=0.91, size=21, margin=0.07),
+        debug=True,
+        jogo=_jogo_de_meio(to_world=mundo),
+    )
+
+    aviso = vigia.tick()
+
+    assert aviso is not None
+    assert voz.ditas == [aviso.text]
+    assert not any(linha.startswith("[diagnóstico]") for linha in diario)
