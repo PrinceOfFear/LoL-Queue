@@ -19,7 +19,8 @@ from typing import Callable
 from . import gamecfg
 from . import minimap as minimap_module
 from . import window as window_module
-from .callout import REPEAT_SECONDS, Callout, all_phrases, announce
+from .callout import LONGE, MEDIO, PERTO, REPEAT_SECONDS
+from .callout import Callout, all_phrases, announce
 from .detect import Detector
 from .icons import ChampionIcons
 from .livegame import LiveGame, LiveGameUnavailable
@@ -66,6 +67,24 @@ ICON_SCALES = (0.85, 1.0, 1.18)
 #: Piso entre dois avisos de zonas diferentes. Sem ele, o ícone piscando
 #: na fronteira de duas zonas viraria tagarelice em cima do jogador.
 MIN_GAP_SECONDS = 2.5
+
+#: A ordem em que os avisos se atropelam. Existe porque o piso acima era
+#: cego ao conteúdo: um "no rio de baixo, longe de você" segurava por dois
+#: segundos e meio o "cuidado, na sua selva de cima" que veio logo atrás,
+#: e esses dois segundos e meio são a diferença entre recuar e morrer.
+#: Aviso mais grave que o anterior fura o piso; menos grave espera, como
+#: sempre esperou.
+URGENCY_RANK = {LONGE: 0, MEDIO: 1, PERTO: 2}
+
+#: Quanto tempo um aviso do jungler ainda vale depois de calculado.
+#: Passado o prazo sem ter começado a tocar, ele é descartado em vez de
+#: dito: a fila da voz não é instantânea, e um aviso atrasado não é um
+#: aviso fraco — é uma informação falsa sobre onde o inimigo está.
+CALLOUT_SECONDS = 4.0
+
+#: O assunto dos avisos do jungler, para que um aviso novo cale o que
+#: ainda não foi dito sobre o mesmo campeão. Ver `Voice.say`.
+CALLOUT_TOPIC = "jungler"
 
 #: Quanto tempo de captura inútil seguida antes de avisar o usuário. É
 #: generoso de propósito: tela de carregamento, alt-tab e a transição
@@ -292,8 +311,15 @@ class JungleWatcher:
         self._detector: Detector | None = None
         self._minimap = None
         self._minimap_at = 0.0
-        self._said: dict[str, float] = {}
+        # Zona -> (quando foi dita, o quanto era grave). A gravidade
+        # entra na conta para que o mesmo lugar possa ser dito de novo
+        # quando ele passa de notícia a perigo.
+        self._said: dict[str, tuple[float, int]] = {}
         self._last_said = 0.0
+        self._last_level = 0
+        # A zona vista no quadro anterior, que não é a zona dita: ver
+        # `_steady`.
+        self._zone_seen = ""
         self._blind_since: float | None = None
         self._blind_warned = False
         # Qual captura respondeu por último: "dxgi", "gdi" ou vazio
@@ -382,6 +408,8 @@ class JungleWatcher:
         self._minimap_at = 0.0
         self._said.clear()
         self._last_said = 0.0
+        self._last_level = 0
+        self._zone_seen = ""
         self._blind_since = None
         self._blind_warned = False
         self._strategy = ""
@@ -458,15 +486,22 @@ class JungleWatcher:
             return None
         achado = detector.feed(quadro)
         if achado is None:
+            # Perdeu o rastro: a próxima zona a aparecer é a primeira de
+            # um reaparecimento, e essa não espera confirmação nenhuma.
+            self._zone_seen = ""
             return None
 
         mx, my = mapa.to_map(achado.x, achado.y)
         aviso = announce(jungler.champion, mx, my, jogo)
-        if not self._due(aviso, agora):
+        firme = self._steady(aviso)
+        self._zone_seen = aviso.zone_key
+        if not firme or not self._due(aviso, agora):
             return None
-        self._said[aviso.zone_key] = agora
+        nivel = URGENCY_RANK.get(aviso.urgency, 1)
+        self._said[aviso.zone_key] = (agora, nivel)
         self._last_said = agora
-        self._speak(aviso.text)
+        self._last_level = nivel
+        self._speak(aviso.text, ttl=CALLOUT_SECONDS, group=CALLOUT_TOPIC)
         self._log(aviso.text)
         self._explain(aviso, achado, mapa, mx, my, jogo)
         return aviso
@@ -670,11 +705,47 @@ class JungleWatcher:
         self._detector = Detector(moldes)
         return self._detector
 
+    def _steady(self, aviso: Callout) -> bool:
+        """Se a zona deste quadro já se firmou o bastante para ser dita.
+
+        `zones` não tem histerese: em cima da fronteira de duas zonas, os
+        poucos pixels que o casamento treme entre um quadro e outro trocam
+        o nome do lugar, e a voz passa a descrever um jungler indo e
+        voltando sem sair do lugar. Quem ouve isso não sabe mais onde ele
+        está — é o aviso errado que não vem de erro nenhum de visão.
+
+        Exigir que a zona nova apareça em dois quadros seguidos custa um
+        quinto de segundo e apaga a fronteira inteira. Duas exceções, e as
+        duas são sobre não atrasar o que importa: o primeiro aparecimento
+        depois de um sumiço não tem quadro anterior com que concordar, e
+        "cuidado" nunca espera — se a leitura for a trêmula, o piso entre
+        avisos já impede a repetição.
+        """
+        if aviso.urgency == PERTO or not self._zone_seen:
+            return True
+        return aviso.zone_key == self._zone_seen
+
     def _due(self, aviso: Callout, agora: float) -> bool:
+        """Se este aviso pode ser dito agora, ou se atropela o anterior.
+
+        Os dois silêncios daqui — não repetir a mesma zona, não falar por
+        cima de si mesmo — eram cegos ao que estava sendo dito, e o preço
+        era o pior possível: o aviso segurado era o mais grave, porque é o
+        que costuma vir depois. Agora os dois valem só contra avisos de
+        gravidade igual ou maior. Calar sobre um perigo para não
+        interromper uma notícia é a troca errada.
+        """
+        nivel = URGENCY_RANK.get(aviso.urgency, 1)
         anterior = self._said.get(aviso.zone_key)
-        if anterior is not None and agora - anterior < REPEAT_SECONDS:
-            return False
-        if self._last_said and agora - self._last_said < MIN_GAP_SECONDS:
+        if anterior is not None:
+            quando, antes = anterior
+            if agora - quando < REPEAT_SECONDS and nivel <= antes:
+                return False
+        if (
+            self._last_said
+            and agora - self._last_said < MIN_GAP_SECONDS
+            and nivel <= self._last_level
+        ):
             return False
         return True
 
@@ -757,9 +828,16 @@ class JungleWatcher:
         self._notes.add(key)
         self._log(message)
 
-    def _speak(self, text: str) -> None:
-        """Fala sem deixar a voz derrubar o laço que a chamou."""
+    def _speak(self, text: str, ttl: float | None = None, group: str = "") -> None:
+        """Fala sem deixar a voz derrubar o laço que a chamou.
+
+        `ttl` e `group` são dos avisos do jungler, que descrevem um
+        instante e envelhecem na fila; os recados do app não levam nenhum
+        dos dois, porque continuam verdadeiros depois.
+        """
         try:
+            self._voice.say(text, ttl=ttl, group=group)
+        except TypeError:  # pragma: no cover - voz antiga ou dublê
             self._voice.say(text)
         except Exception:  # pragma: no cover - rede de segurança
             pass

@@ -23,7 +23,11 @@ from lolqueue.vision.duplication import DuplicationGrabber, DuplicationUnavailab
 from lolqueue.vision.detect import Match
 from lolqueue.vision.gamecfg import exclusive_fullscreen
 from lolqueue.vision.minimap import Minimap
+from lolqueue.vision.callout import LONGE, MEDIO, PERTO, Callout
 from lolqueue.vision.watcher import (
+    CALLOUT_SECONDS,
+    CALLOUT_TOPIC,
+    MIN_GAP_SECONDS,
     BLIND_MESSAGE,
     BLIND_ON_DXGI,
     FLIP_RISK_NOTE,
@@ -488,7 +492,7 @@ class _VozFalsa:
     def prime(self, frases):
         pass
 
-    def say(self, texto):
+    def say(self, texto, ttl=None, group=""):
         self.ditas.append(texto)
 
 
@@ -927,7 +931,7 @@ def test_a_voice_that_fails_does_not_take_the_watch_down():
         def prime(self, frases):
             raise RuntimeError("sem áudio")
 
-        def say(self, texto):
+        def say(self, texto, ttl=None, group=""):
             raise RuntimeError("sem áudio")
 
     vigia, _relogio, diario, _voz = _vigia(
@@ -1443,3 +1447,206 @@ def test_a_broken_diagnosis_never_costs_the_warning():
     assert aviso is not None
     assert voz.ditas == [aviso.text]
     assert not any(linha.startswith("[diagnóstico]") for linha in diario)
+
+
+# ---------------------------------------------------------------------------
+# Precisão do aviso: o que espera, o que fura a fila e o que envelhece
+# ---------------------------------------------------------------------------
+
+
+class _VozAnotada(_VozFalsa):
+    """Uma voz que guarda também o prazo e o assunto de cada frase."""
+
+    def __init__(self):
+        super().__init__()
+        self.chamadas = []
+
+    def say(self, texto, ttl=None, group=""):
+        super().say(texto, ttl=ttl, group=group)
+        self.chamadas.append((texto, ttl, group))
+
+
+def _vigia_com_avisos(avisos, voz=None):
+    """Uma vigilância que fala os avisos da lista, um por `tick`.
+
+    `announce` é substituído porque o que se testa aqui é a decisão de
+    falar ou calar, não a leitura do minimapa: montar cada urgência a
+    partir de coordenadas amarraria estes testes à geometria das zonas,
+    que é assunto de `test_callout.py`.
+    """
+    fila = iter(avisos)
+    mapa = Minimap(rect=Rect(1600, 800, 280, 280), flipped=False)
+    vigia, relogio, diario, padrao = _vigia(
+        game_fn=_jogo_de_meio,
+        locate_fn=lambda frame, area, flipped=False: mapa,
+    )
+    if voz is not None:
+        vigia._voice = voz
+    vigia._minimap = mapa
+    vigia._minimap_at = 1.0
+    vigia._detector = _DetectorFalso(
+        Match(x=40.0, y=40.0, score=0.9, size=20, margin=0.2)
+    )
+    vigia._champion = "Lee Sin"
+    ultimo = avisos[-1]
+    watcher_module.announce = lambda *a, **k: next(fila, ultimo)
+    return vigia, relogio, diario, voz or padrao
+
+
+@pytest.fixture
+def announce_original():
+    """Devolve `announce` ao lugar, mesmo se o teste falhar no meio."""
+    guardado = watcher_module.announce
+    yield
+    watcher_module.announce = guardado
+
+
+def _aviso(texto, urgencia, zona):
+    return Callout(text=texto, urgency=urgencia, zone_key=zona)
+
+
+def test_a_zone_that_flickers_on_the_border_is_only_said_once(announce_original):
+    """Tremer entre duas zonas não é o jungler andando de um lado a outro.
+
+    Sem histerese, um casamento que oscila poucos pixels em cima da
+    fronteira faz a voz descrever uma ida e volta que nunca aconteceu —
+    e quem ouve isso perde a noção de onde ele está.
+    """
+    a = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    b = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([a, b, a, b, a])
+
+    for indice in range(5):
+        relogio.agora = 10.0 + indice * 3.0
+        vigia.tick()
+
+    assert voz.ditas == [a.text]
+
+
+def test_a_zone_that_holds_for_two_frames_is_said(announce_original):
+    """A histerese é de um quadro, não um silêncio: quem fica, é dito."""
+    a = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    b = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([a, b, b])
+
+    for indice in range(3):
+        relogio.agora = 10.0 + indice * 4.0
+        vigia.tick()
+
+    assert voz.ditas == [a.text, b.text]
+
+
+def test_danger_never_waits_for_a_second_frame(announce_original):
+    """"Cuidado" atrasado em um quadro é "cuidado" chegando tarde demais."""
+    longe = _aviso("Lee Sin no rio de baixo, longe de você", LONGE, "rio_baixo")
+    perto = _aviso("Cuidado, Lee Sin na sua selva de cima", PERTO, "selva_cima")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([longe, perto])
+
+    relogio.agora = 10.0
+    vigia.tick()
+    relogio.agora = 13.0
+    vigia.tick()
+
+    assert voz.ditas == [longe.text, perto.text]
+
+
+def test_a_worse_warning_cuts_in_front_of_the_floor(announce_original):
+    """O piso entre avisos não pode segurar o aviso que importa.
+
+    Era o pior atraso do sistema: o "longe de você" acabava de sair e
+    prendia por dois segundos e meio o "cuidado" que veio logo atrás —
+    exatamente o intervalo em que dá para recuar.
+    """
+    longe = _aviso("Lee Sin no rio de baixo, longe de você", LONGE, "rio_baixo")
+    perto = _aviso("Cuidado, Lee Sin na sua selva de cima", PERTO, "selva_cima")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([longe, perto, perto])
+
+    relogio.agora = 10.0
+    vigia.tick()
+    relogio.agora = 10.5
+    vigia.tick()
+
+    assert voz.ditas[-1] == perto.text
+    assert relogio.agora - 10.0 < MIN_GAP_SECONDS
+
+
+def test_a_calmer_warning_still_waits_its_turn(announce_original):
+    """Furar a fila é privilégio de quem tem coisa pior a dizer."""
+    perto = _aviso("Cuidado, Lee Sin na sua selva de cima", PERTO, "selva_cima")
+    longe = _aviso("Lee Sin no rio de baixo, longe de você", LONGE, "rio_baixo")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([perto, longe, longe])
+
+    relogio.agora = 10.0
+    vigia.tick()
+    relogio.agora = 10.5
+    vigia.tick()
+    relogio.agora = 11.0
+    vigia.tick()
+
+    assert voz.ditas == [perto.text]
+
+
+def test_the_same_zone_is_repeated_when_it_turns_dangerous(announce_original):
+    """Mudou de notícia para perigo, é outra informação — e vai dita.
+
+    O silêncio por zona existe para não repetir o óbvio, não para
+    engolir a hora em que o mesmo lugar passa a ser um problema.
+    """
+    calmo = _aviso("Lee Sin na selva de cima", MEDIO, "selva_cima")
+    grave = _aviso("Cuidado, Lee Sin na sua selva de cima", PERTO, "selva_cima")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([calmo, grave])
+
+    relogio.agora = 10.0
+    vigia.tick()
+    relogio.agora = 10.4
+    vigia.tick()
+
+    assert voz.ditas == [calmo.text, grave.text]
+
+
+def test_the_warning_reaches_the_voice_with_a_deadline_and_a_topic(announce_original):
+    """Um aviso do jungler descreve um instante, e envelhece na fila.
+
+    Sem prazo, uma fila com duas frases atrasadas diria "longe de você"
+    com o inimigo em cima do jogador; sem assunto, a frase velha seria
+    dita antes da nova em vez de dar lugar a ela.
+    """
+    voz = _VozAnotada()
+    aviso = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    vigia, relogio, _diario, _voz = _vigia_com_avisos([aviso], voz=voz)
+
+    relogio.agora = 10.0
+    vigia.tick()
+
+    assert voz.chamadas == [(aviso.text, CALLOUT_SECONDS, CALLOUT_TOPIC)]
+
+
+def test_the_app_messages_keep_being_said_no_matter_how_late():
+    """Recado do app continua verdadeiro depois; ele não expira."""
+    voz = _VozAnotada()
+    vigia, _relogio, _diario, _padrao = _vigia()
+    vigia._voice = voz
+
+    vigia._speak("Abra o jogo em modo janela.")
+
+    assert voz.chamadas == [("Abra o jogo em modo janela.", None, "")]
+
+
+def test_losing_the_jungler_clears_the_zone_that_was_being_watched(announce_original):
+    """Reaparecer não é continuar: a primeira zona da volta não espera."""
+    a = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    b = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo")
+    vigia, relogio, _diario, voz = _vigia_com_avisos([a, b])
+
+    relogio.agora = 10.0
+    vigia.tick()
+    vigia._detector = _DetectorFalso(None)
+    relogio.agora = 12.0
+    vigia.tick()
+    vigia._detector = _DetectorFalso(
+        Match(x=40.0, y=40.0, score=0.9, size=20, margin=0.2)
+    )
+    relogio.agora = 20.0
+    vigia.tick()
+
+    assert voz.ditas == [a.text, b.text]

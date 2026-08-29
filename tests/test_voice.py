@@ -11,6 +11,7 @@ sem estouro e sem encher o diário quando a rede não responde.
 
 from pathlib import Path
 import threading
+import time
 
 import pytest
 
@@ -394,3 +395,90 @@ def test_the_alias_is_always_closed_even_when_playing_explodes():
 
     assert play_file(Path("frase.mp3"), send=send) is False
     assert ditos[-1].startswith("close")
+
+
+# --- o aviso envelhece na fila -----------------------------------------
+
+TERCEIRA = "Lee Sin voltou para a base"
+
+
+def nomes(voz: Voice, *frases: str) -> list[str]:
+    return [voz.path_for(frase).name for frase in frases]
+
+
+def test_a_newer_warning_takes_the_place_of_the_one_still_waiting(tmp_path):
+    """Duas frases sobre o mesmo campeão não são duas informações.
+
+    A fila não é instantânea — sintetizar leva quase um segundo e cada
+    clipe ocupa outros dois. Dizer todas em ordem é contar onde o
+    inimigo estava, uma posição atrás da verdade, até o jogador reagir
+    a um lugar que ele já deixou. Só a última ainda descreve o agora.
+    """
+    alto_falante = Alto_falante()
+    alto_falante.liberar.clear()
+    voz = montar(tmp_path, play=alto_falante)
+    try:
+        voz.say(FRASE, ttl=30.0, group="jungler")
+        assert alto_falante.entrou.wait(3.0)
+        voz.say(OUTRA, ttl=30.0, group="jungler")
+        voz.say(TERCEIRA, ttl=30.0, group="jungler")
+        alto_falante.liberar.set()
+        assert voz.drain(3.0)
+    finally:
+        voz.close()
+
+    assert alto_falante.tocados == nomes(voz, FRASE, TERCEIRA)
+
+
+def test_a_warning_that_expired_in_the_queue_is_not_said(tmp_path):
+    """"Longe de você" dito tarde não é aviso fraco, é aviso falso."""
+    alto_falante = Alto_falante()
+    alto_falante.liberar.clear()
+    voz = montar(tmp_path, play=alto_falante)
+    try:
+        voz.say(FRASE, group="app")
+        assert alto_falante.entrou.wait(3.0)
+        voz.say(OUTRA, ttl=0.05, group="jungler")
+        time.sleep(0.2)
+        alto_falante.liberar.set()
+        assert voz.drain(3.0)
+    finally:
+        voz.close()
+
+    assert alto_falante.tocados == nomes(voz, FRASE)
+
+
+def test_the_app_messages_never_expire_and_never_replace_each_other(tmp_path):
+    """Recado do app continua verdadeiro depois; ele sai inteiro."""
+    alto_falante = Alto_falante()
+    alto_falante.liberar.clear()
+    voz = montar(tmp_path, play=alto_falante)
+    try:
+        voz.say(FRASE)
+        assert alto_falante.entrou.wait(3.0)
+        voz.say(OUTRA)
+        voz.say(TERCEIRA)
+        alto_falante.liberar.set()
+        assert voz.drain(3.0)
+    finally:
+        voz.close()
+
+    assert alto_falante.tocados == nomes(voz, FRASE, OUTRA, TERCEIRA)
+
+
+def test_two_topics_do_not_silence_each_other(tmp_path):
+    """Calar quem fala de outro assunto seria perder o recado do app."""
+    alto_falante = Alto_falante()
+    alto_falante.liberar.clear()
+    voz = montar(tmp_path, play=alto_falante)
+    try:
+        voz.say(FRASE, group="jungler")
+        assert alto_falante.entrou.wait(3.0)
+        voz.say(OUTRA, group="app")
+        voz.say(TERCEIRA, group="jungler")
+        alto_falante.liberar.set()
+        assert voz.drain(3.0)
+    finally:
+        voz.close()
+
+    assert alto_falante.tocados == nomes(voz, FRASE, OUTRA, TERCEIRA)

@@ -214,6 +214,10 @@ class Voice:
         self._cond = threading.Condition()
         self._pendentes = 0
         self._closed = False
+        # Ordem de chegada e a última ordem vista de cada assunto. Ver
+        # `say`: é assim que um aviso novo cala o que ele já substituiu.
+        self._ordem = 0
+        self._ultimo: dict[str, int] = {}
 
         self._thread = threading.Thread(
             target=self._loop, name="lolqueue-voz", daemon=True
@@ -351,27 +355,63 @@ class Voice:
 
     # -- fala -----------------------------------------------------------
 
-    def say(self, text: str | None) -> bool:
+    def say(
+        self, text: str | None, ttl: float | None = None, group: str = ""
+    ) -> bool:
         """Enfileira a frase. Volta na hora, sem esperar o áudio.
 
         O laço de captura chama isto; esperar a fala terminar cegaria o
         app por dois segundos, justamente durante o gank.
+
+        `ttl` e `group` existem porque uma frase enfileirada é uma
+        afirmação sobre o presente, e a fila leva tempo: síntese são
+        centenas de milissegundos e cada áudio ocupa a saída por uns
+        dois segundos. Uma frase que espera a vez atrás de outras é
+        dita quando já não é verdade, e ouvir "longe de você" com o
+        inimigo em cima é pior do que não ouvir nada.
+
+        *   `ttl` é a validade em segundos: passou do prazo antes de
+            começar a tocar, a frase é descartada em silêncio.
+        *   `group` é o assunto. Duas frases do mesmo assunto se
+            excluem: a mais nova cala a que ainda estava na fila, em
+            vez de as duas serem ditas em sequência descrevendo dois
+            lugares diferentes para o mesmo campeão.
+
+        Sem os dois a fila é o que sempre foi — nada expira e nada é
+        engolido —, que é o que as mensagens do app precisam.
         """
         texto = (text or "").strip()
         if not texto or self._closed:
             return False
+        prazo = None if ttl is None else time.monotonic() + float(ttl)
+        with self._cond:
+            self._ordem += 1
+            ordem = self._ordem
+            if group:
+                self._ultimo[group] = ordem
         self._begin()
-        self._fila.put(texto)
+        self._fila.put((texto, prazo, group, ordem))
         return True
+
+    def _stale(self, prazo: float | None, group: str, ordem: int) -> bool:
+        """Se a frase perdeu a validade enquanto esperava a vez."""
+        if prazo is not None and time.monotonic() > prazo:
+            return True
+        if not group:
+            return False
+        with self._cond:
+            return self._ultimo.get(group, ordem) > ordem
 
     def _loop(self) -> None:
         while True:
-            texto = self._fila.get()
-            if texto is None:
+            item = self._fila.get()
+            if item is None:
                 self._fila.task_done()
                 return
+            texto, prazo, group, ordem = item
             try:
-                self._speak(texto)
+                if not self._stale(prazo, group, ordem):
+                    self._speak(texto)
             except Exception:
                 # Uma frase perdida não pode derrubar a voz da partida
                 # inteira.

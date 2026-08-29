@@ -98,6 +98,30 @@ JUMP_FRACTION = 0.5
 #: contra o falso positivo, e ela fica exatamente como era.
 FORGIVE_FRAMES = 2
 
+#: A folga exigida de um casamento que não tem rastro a que se agarrar:
+#: o primeiro da partida, ou um que apareceu longe demais do anterior
+#: para ser o mesmo campeão andando.
+#:
+#: É a mesma medida de `MARGIN` respondendo a outra pergunta, e por isso
+#: o número é outro. `MARGIN` decide se vale a pena continuar olhando
+#: para um ponto; aqui se decide para onde o rastro vai apontar, e errar
+#: aqui não atrasa um aviso: inventa um. O terreno não anda, então um
+#: pedaço de mato que vença o argmax enquanto o ícone está sob o
+#: nevoeiro vira um rastro confirmado do outro lado do mapa, e o app
+#: aponta gank onde não há ninguém — que é exatamente o aviso errado
+#: que o jogador ouvia.
+#:
+#: Contra o desenho do mapa 11 com nevoeiro, ruído e nove ícones
+#: espalhados, o retrato de verdade mediu folga de 0,12 a 0,18 e o
+#: terreno nunca passou de 0,04. 0,10 fica acima de todo terreno medido
+#: e abaixo de todo ícone medido.
+#:
+#: Enquanto o rastro existe a exigência volta a ser `MARGIN`: um ícone
+#: já acompanhado pode perder folga por causa do nevoeiro sem deixar de
+#: ser ele. Adquirir com rigor e acompanhar com folga é a diferença
+#: entre este detector e o anterior.
+ACQUIRE_MARGIN = 0.10
+
 _EPS = 1e-9
 
 
@@ -305,10 +329,12 @@ class Detector:
         confirm: int = CONFIRM_FRAMES,
         forgive: int = FORGIVE_FRAMES,
         margin: float = MARGIN,
+        acquire: float = ACQUIRE_MARGIN,
     ) -> None:
         self._templates = [t for t in templates if t.size >= 1]
         self._threshold = float(threshold)
         self._margin = float(margin)
+        self._acquire = max(float(margin), float(acquire))
         self._confirm = max(1, int(confirm))
         self._forgive = max(0, int(forgive))
         self._kernels: dict[tuple[int, tuple[int, int]], _Kernels] = {}
@@ -316,6 +342,13 @@ class Detector:
         self._streak = 0
         self._confirmed = False
         self._misses = 0
+        # Qual molde venceu o último quadro, e qual deles ficou preso
+        # depois da confirmação. O ícone não muda de tamanho no meio da
+        # partida, então continuar varrendo os três é pagar três vezes
+        # pelo mesmo resultado — e dar duas chances a mais para um pico
+        # de terreno em escala errada roubar o rastro.
+        self._winner: int | None = None
+        self._locked: int | None = None
 
     @property
     def templates(self) -> list[Template]:
@@ -331,6 +364,8 @@ class Detector:
         self._streak = 0
         self._confirmed = False
         self._misses = 0
+        self._winner = None
+        self._locked = None
 
     def scan(self, frame: np.ndarray | None) -> Match | None:
         """O melhor casamento deste quadro, sem olhar para o passado."""
@@ -344,8 +379,13 @@ class Detector:
         # os tamanhos, já que os moldes são preenchidos até a forma dele.
         spectra = _frame_spectra(dados)
 
+        alvos = list(enumerate(self._templates))
+        if self._locked is not None and self._locked < len(self._templates):
+            alvos = [(self._locked, self._templates[self._locked])]
+
         melhor: Match | None = None
-        for indice, molde in enumerate(self._templates):
+        vencedor: int | None = None
+        for indice, molde in alvos:
             if molde.size > menor_lado:
                 continue
             chave = (indice, forma)
@@ -360,12 +400,21 @@ class Detector:
                 self._margin,
             )
             if achado is not None and (melhor is None or achado.score > melhor.score):
-                melhor = achado
+                melhor, vencedor = achado, indice
+        self._winner = vencedor
         return melhor
 
     def feed(self, frame: np.ndarray | None) -> Match | None:
         """Mais um quadro. Devolve o casamento só quando ele é confiável."""
         achado = self.scan(frame)
+        if achado is not None and not self._plausible(achado):
+            # Casou, mas longe do rastro e sem folga que prove ser ele.
+            # É o terreno vencendo o argmax enquanto o ícone está sob o
+            # nevoeiro, e isso vale como quadro vazio — nunca como troca
+            # de alvo. Trocar era como o aviso ia parar do outro lado do
+            # mapa, e era como um quadro solto derrubava uma confirmação
+            # que custou mais de meio segundo para juntar.
+            achado = None
         if achado is None:
             # Quadro vazio antes da confirmação recomeça tudo; depois
             # dela, é o piscar normal do minimapa e vale a pena esperar
@@ -387,9 +436,32 @@ class Detector:
         self._last = achado
         if self._streak >= self._confirm:
             self._confirmed = True
+            self._locked = self._winner
         return achado if self._confirmed else None
 
+    def _plausible(self, achado: Match) -> bool:
+        """Se este casamento pode mesmo ser o campeão que se acompanha.
+
+        Duas saídas, e a diferença entre elas é ter passado ou não. Se
+        o ponto cabe no que o ícone teria conseguido andar desde a
+        última vez que foi visto, ele é a continuação do rastro e basta
+        a folga de sempre. Se não cabe — o primeiro da partida, um
+        Flash, um retorno à base, ou terreno se passando por gente —
+        não há continuidade nenhuma a favor dele, e aí a prova tem que
+        vir inteira da folga.
+        """
+        if self._last is not None and self._near(achado, self._last, self._misses):
+            return True
+        return achado.margin >= self._acquire
+
     @staticmethod
-    def _near(a: Match, b: Match) -> bool:
-        limite = max(a.size, b.size) * JUMP_FRACTION
+    def _near(a: Match, b: Match, blind: int = 0) -> bool:
+        """Se os dois casamentos podem ser o mesmo ícone.
+
+        `blind` são os quadros vazios entre um e outro: quem passou um
+        instante sob o nevoeiro reaparece mais longe de onde sumiu, e
+        cobrar dele o passo de um quadro só transformaria cada piscada
+        do minimapa em um alvo novo.
+        """
+        limite = max(a.size, b.size) * JUMP_FRACTION * (1 + max(0, int(blind)))
         return float(np.hypot(a.x - b.x, a.y - b.y)) <= limite

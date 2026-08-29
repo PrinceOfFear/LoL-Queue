@@ -11,11 +11,13 @@ import numpy as np
 import pytest
 
 from lolqueue.vision.detect import (
+    ACQUIRE_MARGIN,
     CONFIRM_FRAMES,
     FORGIVE_FRAMES,
     MARGIN,
     THRESHOLD,
     Detector,
+    Match,
     _runner_up,
     match_template,
     score_map,
@@ -365,3 +367,89 @@ def test_a_confirmed_match_cannot_walk_across_the_map(molde):
     assert detector.confirmed
     assert detector.feed(plantar(terreno(), molde, 60, 60 + LADO)) is None
     assert not detector.confirmed
+
+
+# ---------------------------------------------------------------------------
+# Adquirir é mais difícil que seguir
+# ---------------------------------------------------------------------------
+
+
+def confirmar(detector: Detector, molde: Template, x: int, y: int) -> None:
+    for _ in range(CONFIRM_FRAMES):
+        detector.feed(plantar(terreno(), molde, x, y))
+    assert detector.confirmed
+
+
+def test_a_distant_peak_with_no_margin_does_not_steal_the_track(molde):
+    """Terreno vencendo o argmax não pode virar o inimigo que se segue.
+
+    Sob nevoeiro o ícone some e o melhor ponto do quadro passa a ser um
+    pedaço de mapa parado. Ele passa do limiar, mas por pouco — e como
+    não anda, três quadros seguidos o confirmavam do outro lado do
+    mapa. Era daí que saía o aviso apontando para o lugar errado.
+    """
+    detector = Detector([molde])
+    confirmar(detector, molde, 60, 60)
+    intruso = Match(x=160.0, y=160.0, score=0.87, size=LADO, margin=MARGIN + 0.01)
+    detector.scan = lambda frame: intruso
+
+    assert detector.feed(terreno()) is None
+    assert detector.confirmed
+    assert detector._last is not None
+    assert abs(detector._last.x - intruso.x) > LADO
+
+
+def test_a_distant_peak_that_proves_itself_is_accepted_as_a_new_event(molde):
+    """Flash e volta à base existem: pular longe não é sempre engano.
+
+    A diferença é a prova. Com folga de sobra o salto é aceito, mas
+    como evento novo — volta a pedir confirmação em vez de já falar.
+    """
+    detector = Detector([molde])
+    confirmar(detector, molde, 60, 60)
+    salto = Match(
+        x=160.0, y=160.0, score=0.95, size=LADO, margin=ACQUIRE_MARGIN + 0.05
+    )
+    detector.scan = lambda frame: salto
+
+    assert detector.feed(terreno()) is None
+    assert not detector.confirmed
+    assert detector._last is salto
+
+
+def test_an_implausible_frame_costs_nothing_to_a_live_track(molde):
+    """Um quadro solto não pode custar meio segundo de silêncio.
+
+    Perder a confirmação é ficar mudo pelos quadros que ela leva para
+    voltar a se juntar — e o inimigo não saiu do lugar nesse tempo.
+    """
+    detector = Detector([molde])
+    confirmar(detector, molde, 60, 60)
+    detector.scan = lambda frame: Match(
+        x=10.0, y=10.0, score=0.86, size=LADO, margin=MARGIN + 0.005
+    )
+    detector.feed(terreno())
+    del detector.scan
+
+    achado = detector.feed(plantar(terreno(), molde, 60, 60))
+
+    assert achado is not None
+    assert detector.confirmed
+
+
+def test_the_scale_that_won_is_the_only_one_tried_afterwards(molde, retrato):
+    """Três escalas por quadro são duas chances a mais de errar.
+
+    E de gastar: depois que uma delas se provou, as outras só podem
+    contradizê-la. O trinco cai junto com o rastro, para o caso de o
+    jogador mexer no zoom do próprio minimapa.
+    """
+    outra = Template.from_portrait(retrato, LADO - 4)
+    detector = Detector([outra, molde])
+    confirmar(detector, molde, 60, 60)
+
+    assert detector.templates[detector._locked].size == LADO
+
+    detector.reset()
+
+    assert detector._locked is None
