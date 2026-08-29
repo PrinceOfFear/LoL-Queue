@@ -32,6 +32,32 @@ Cria um atalho "LoL Queue" na Área de Trabalho que abre o app pelo
 `pythonw.exe` — sem janela de console, com o ícone certo na barra de
 tarefas. Rode uma vez; depois é só o atalho.
 
+### Levar para outra máquina
+
+Copie a pasta do projeto inteira e rode, dentro dela, uma vez:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\instalar.ps1
+```
+
+Ele confere o Python, instala as dependências lendo o `pyproject.toml`,
+confirma que cada uma responde ao `import` e cria o atalho. Se faltar o
+Python, ele diz onde baixar em vez de falhar no meio.
+
+A conferência do import não é redundante com o `pip`: "instalou" e
+"importa" são coisas diferentes, e a diferença aqui é cara. O app é
+aberto pelo `pythonw.exe`, que não tem console — numa máquina sem as
+dependências, o import morre, o erro não vai para lugar nenhum e o duplo
+clique não produz nada, nem janela nem aviso. Foi assim que o app "não
+funcionou" no outro PC. Por isso o `main.py` também pergunta antes de
+abrir e, quando falta algo, põe uma caixa do Windows na tela dizendo o
+nome do que falta e o comando acima.
+
+O que o app procura sozinho na máquina nova: a instalação do League
+(pelo processo em execução, depois nos lugares prováveis, depois
+varrendo os discos) e o `game.cfg`, para saber se o minimapa está
+girado. Nada disso está preso a `C:`.
+
 ### E o executável?
 
 ```powershell
