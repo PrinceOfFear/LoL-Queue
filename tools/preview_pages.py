@@ -50,6 +50,8 @@ def main() -> int:
             auto_items=True,
             opgg_tier="grandmaster",
             flash_key="d",
+            primary_position="middle",
+            secondary_position="jungle",
         )
     )
     window.show()

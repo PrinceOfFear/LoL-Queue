@@ -13,8 +13,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...config import OPGG_TIERS
+from ...config import (
+    FLASH_KEYS,
+    OPGG_TIERS,
+    POSITION_QUEUES,
+    Config,
+    preference_name,
+)
 from ...resources import asset_path
+from ..binding import ConfigBinder
 from ..widgets.log_pane import LogPane
 from ..widgets.loadout_studio import rank_icon
 from ..widgets.pick_order import PickOrderPanel
@@ -25,6 +32,100 @@ PREDICTION_ICON = QSize(38, 38)
 #: Casa com a largura do chip de previsão; mais que isso rouba espaço
 #: do texto do cartão, e menos corta os nomes longos de campeão.
 ORDER_WIDTH = 236
+
+FEATURE_ICON_SIZE = QSize(28, 28)
+
+POSITION_ASSETS: dict[str, str] = {
+    "": "unselected.png",
+    "top": "top.png",
+    "jungle": "jungle.png",
+    "middle": "middle.png",
+    "bottom": "bottom.png",
+    "utility": "utility.png",
+    "fill": "fill.png",
+}
+
+FEATURE_CONFIG_FIELDS = frozenset(
+    {
+        "queue_id",
+        "primary_position",
+        "secondary_position",
+        "flash_key",
+        "auto_spells",
+        "opgg_tier",
+        "auto_runes",
+        "auto_items",
+    }
+)
+
+
+class _FeatureTile(QFrame):
+    """Cartão pequeno cujo ícone e texto acompanham a conta ativa."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("featureTile")
+        self.icon_keys: tuple[str, ...] = ()
+
+        box = QHBoxLayout(self)
+        box.setContentsMargins(10, 8, 12, 8)
+        box.setSpacing(9)
+
+        icon_group = QWidget()
+        icon_layout = QHBoxLayout(icon_group)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_layout.setSpacing(4)
+        self.icon_labels: list[QLabel] = []
+        for _ in range(2):
+            image = QLabel()
+            image.setObjectName("featureIcon")
+            image.setFixedSize(34, 34)
+            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon_layout.addWidget(image)
+            self.icon_labels.append(image)
+        box.addWidget(icon_group)
+
+        words = QVBoxLayout()
+        words.setSpacing(0)
+        self.eyebrow_label = QLabel()
+        self.eyebrow_label.setObjectName("featureEyebrow")
+        words.addWidget(self.eyebrow_label)
+        self.detail_label = QLabel()
+        self.detail_label.setObjectName("featureDetail")
+        words.addWidget(self.detail_label)
+        box.addLayout(words, 1)
+
+    def set_content(
+        self,
+        icons: list[tuple[str, str, QIcon]],
+        eyebrow: str,
+        detail: str,
+        tooltip: str,
+    ) -> None:
+        """Troca o resumo inteiro e elimina qualquer segundo ícone antigo."""
+
+        self.icon_keys = tuple(key for key, _name, _icon in icons)
+        for index, label in enumerate(self.icon_labels):
+            if index >= len(icons):
+                label.clear()
+                label.setAccessibleName("")
+                label.setToolTip("")
+                label.hide()
+                continue
+            _key, name, icon = icons[index]
+            pixmap = icon.pixmap(FEATURE_ICON_SIZE)
+            if pixmap.isNull():
+                label.clear()
+            else:
+                label.setPixmap(pixmap)
+            label.setAccessibleName(f"Ícone de {name}")
+            label.setToolTip(name)
+            label.show()
+
+        self.eyebrow_label.setText(eyebrow)
+        self.detail_label.setText(detail)
+        self.setAccessibleName(f"{eyebrow}: {detail}")
+        self.setToolTip(tooltip)
 
 
 class DashboardPage(QWidget):
@@ -44,8 +145,15 @@ class DashboardPage(QWidget):
     #: janela, que é quem acompanha a seleção.
     pick_order_changed = Signal(list)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        binder: ConfigBinder | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._binder = binder
+        self._feature_config = binder.config if binder is not None else Config()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(36, 20, 36, 20)
         layout.setSpacing(13)
@@ -186,35 +294,24 @@ class DashboardPage(QWidget):
         details.addLayout(options_row)
         self._runes.hide()
 
-        # Três capacidades-chave ocupam o respiro do herói quando não há
-        # seleção em andamento. Além de organizar a proposta do app, trazem
-        # para a Central os mesmos assets reconhecíveis dos controles.
+        # Um resumo vivo da conta ocupa o respiro do herói quando não há
+        # seleção em andamento. Ele não anuncia recursos genéricos: mostra
+        # exatamente as rotas, a tecla do Flash e o elo configurados agora.
         self._features = QWidget()
         feature_row = QHBoxLayout(self._features)
         feature_row.setContentsMargins(0, 0, 0, 0)
         feature_row.setSpacing(8)
-        feature_row.addWidget(
-            self._feature_tile(
-                QIcon(str(asset_path("positions/fill.png"))),
-                "FILA",
-                "Rotas sincronizadas",
-            )
-        )
-        feature_row.addWidget(
-            self._feature_tile(
-                QIcon(str(asset_path("spells/flash.png"))),
-                "LOADOUT",
-                "Feitiços e runas",
-            )
-        )
-        feature_row.addWidget(
-            self._feature_tile(
-                rank_icon("diamond", QSize(30, 30)),
-                "BUILD",
-                "Dados por elo",
-            )
-        )
+        self._route_feature = _FeatureTile()
+        self._flash_feature = _FeatureTile()
+        self._build_feature = _FeatureTile()
+        feature_row.addWidget(self._route_feature, 1)
+        feature_row.addWidget(self._flash_feature, 1)
+        feature_row.addWidget(self._build_feature, 1)
         details.addWidget(self._features)
+        self._refresh_features()
+        if binder is not None:
+            binder.changed.connect(self._on_feature_config_changed)
+            binder.on_reload(self._refresh_features)
 
         # Preenchidos quando o catálogo de runas termina de carregar e a
         # cada publicação do motor. Sem catálogo a grade fica de fora e
@@ -241,28 +338,81 @@ class DashboardPage(QWidget):
         layout.addWidget(log_card)
 
     @staticmethod
-    def _feature_tile(icon: QIcon, eyebrow: str, detail: str) -> QFrame:
-        tile = QFrame()
-        tile.setObjectName("featureTile")
-        box = QHBoxLayout(tile)
-        box.setContentsMargins(10, 8, 12, 8)
-        box.setSpacing(9)
-        image = QLabel()
-        image.setObjectName("featureIcon")
-        image.setFixedSize(34, 34)
-        image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        image.setPixmap(icon.pixmap(QSize(28, 28)))
-        box.addWidget(image)
-        words = QVBoxLayout()
-        words.setSpacing(0)
-        top = QLabel(eyebrow)
-        top.setObjectName("featureEyebrow")
-        words.addWidget(top)
-        bottom = QLabel(detail)
-        bottom.setObjectName("featureDetail")
-        words.addWidget(bottom)
-        box.addLayout(words, 1)
-        return tile
+    def _position_icon(position: str) -> QIcon:
+        filename = POSITION_ASSETS.get(position, POSITION_ASSETS[""])
+        return QIcon(str(asset_path(f"positions/{filename}")))
+
+    def _refresh_features(self) -> None:
+        """Redesenha os três cartões a partir do perfil que está valendo."""
+
+        config = self._feature_config
+
+        if config.queue_id not in POSITION_QUEUES:
+            route_icons = [
+                ("unselected", "fila sem escolha de rota", self._position_icon(""))
+            ]
+            route_detail = "Esta fila não usa rotas"
+            route_tooltip = "A fila selecionada não permite escolher rotas."
+        elif not config.primary_position:
+            route_icons = [
+                ("unselected", "rotas atuais do cliente", self._position_icon(""))
+            ]
+            route_detail = "Como está no cliente"
+            route_tooltip = "O app preservará as rotas que já estiverem no cliente."
+        else:
+            positions = [config.primary_position]
+            if config.secondary_position:
+                positions.append(config.secondary_position)
+            route_icons = [
+                (position, preference_name(position), self._position_icon(position))
+                for position in positions
+            ]
+            route_detail = (
+                "Qualquer rota"
+                if positions == ["fill"]
+                else " + ".join(preference_name(position) for position in positions)
+            )
+            route_tooltip = f"Rotas escolhidas: {route_detail}."
+        self._route_feature.set_content(
+            route_icons,
+            "ROTAS",
+            route_detail,
+            route_tooltip,
+        )
+
+        flash_key = str(config.flash_key).casefold()
+        flash_detail = FLASH_KEYS.get(flash_key, "Como já estiver na conta")
+        spell_state = "ligada" if config.auto_spells else "desligada"
+        self._flash_feature.set_content(
+            [
+                (
+                    "flash",
+                    "Flash",
+                    QIcon(str(asset_path("spells/flash.png"))),
+                )
+            ],
+            "FLASH",
+            flash_detail,
+            f"Tecla configurada do Flash. Aplicação automática {spell_state}.",
+        )
+
+        tier = str(config.opgg_tier).casefold()
+        build_detail = OPGG_TIERS.get(tier, tier)
+        build_state = (
+            "ativa"
+            if config.auto_runes or config.auto_items
+            else "desligada"
+        )
+        self._build_feature.set_content(
+            [(tier, build_detail, rank_icon(tier, QSize(30, 30)))],
+            "BUILD",
+            build_detail,
+            f"Elo usado para buscar a build. Aplicação automática {build_state}.",
+        )
+
+    def _on_feature_config_changed(self, attribute: str) -> None:
+        if attribute in FEATURE_CONFIG_FIELDS:
+            self._refresh_features()
 
     def set_running(self, running: bool) -> None:
         self._button.setProperty("running", "true" if running else "false")

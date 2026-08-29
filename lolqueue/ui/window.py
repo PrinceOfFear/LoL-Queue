@@ -190,7 +190,7 @@ class MainWindow(QWidget):
         right.setSpacing(0)
         right.addWidget(TitleBar(self.showMinimized, self.close))
 
-        self._dashboard = DashboardPage()
+        self._dashboard = DashboardPage(binder=self._binder)
         self._dashboard.toggled.connect(self.toggle_engine)
         self._dashboard.rune_option_chosen.connect(self._on_rune_option_chosen)
         self._dashboard.pick_order_changed.connect(self._on_pick_order_changed)
