@@ -79,6 +79,14 @@ def test_it_names_the_champion_and_says_where_he_plays(page):
     assert "Diamante+" in page._where.text()
 
 
+def test_the_build_tier_is_also_shown_as_an_official_crest(page):
+    page.set_analysis("Yasuo", "Yasuo", None, "middle", "Diamante+", build())
+
+    assert not page._tier_crest.isHidden()
+    assert page._tier_crest.pixmap() is not None
+    assert not page._tier_crest.pixmap().isNull()
+
+
 def test_the_damage_type_is_said_in_words(page):
     page.set_analysis("Yasuo", "Yasuo", None, "middle", "", build())
 

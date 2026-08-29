@@ -1,11 +1,9 @@
 """Perfil e últimas partidas do invocador conectado, pelo OP.GG.
 
-Cabeçalho com nick#tag, nível e elo por fila — só texto: o único ícone
-remoto seria o retrato de perfil do OP.GG, e baixar imagem de URL
-arbitrária seria um mecanismo novo para um ganho cosmético (a única
-imagem que o app já sabe buscar e cachear é o retrato de campeão, por
-id, via LCU). Abaixo, uma linha por partida, reaproveitando esse mesmo
-cache de retrato.
+Cabeçalho com nick#tag, nível e elo por fila, usando os brasões oficiais
+empacotados. O retrato de perfil remoto continua de fora: baixar imagem de
+URL arbitrária seria um mecanismo novo só por cosmética. Abaixo, uma linha
+por partida reaproveita o cache de retrato de campeão por id, via LCU.
 
 Sem cliente aberto, sem identidade resolvida ou falha do OP.GG: mesmo
 aviso de vazio que `AnalysisPage` já usa — um cabeçalho vazio com uma
@@ -29,12 +27,15 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.summoner_history import relative_time
+from ..widgets.illustrated_empty import IllustratedEmptyState
+from ..widgets.loadout_studio import rank_pixmap
 
 MATCH_PORTRAIT = QSize(40, 40)
 LEVEL_BADGE = QSize(16, 16)
 RUNE_ICON = QSize(20, 20)
 SPELL_ICON = QSize(20, 20)
 ITEM_ICON = QSize(24, 24)
+RANK_ICON = QSize(58, 58)
 
 #: Como o OP.GG chama a fila, e como se diz aqui.
 QUEUE_LABELS = {
@@ -49,6 +50,19 @@ QUEUE_LABELS = {
 RANK_QUEUE_LABELS = {
     "SOLORANKED": "Solo/Duo",
     "FLEXRANKED": "Flexível",
+}
+
+RANK_TIER_LABELS = {
+    "IRON": "Ferro",
+    "BRONZE": "Bronze",
+    "SILVER": "Prata",
+    "GOLD": "Ouro",
+    "PLATINUM": "Platina",
+    "EMERALD": "Esmeralda",
+    "DIAMOND": "Diamante",
+    "MASTER": "Mestre",
+    "GRANDMASTER": "Grão-Mestre",
+    "CHALLENGER": "Desafiante",
 }
 
 
@@ -117,12 +131,21 @@ class HistoryPage(QWidget):
 
         # O aviso de vazio e o conteúdo se revezam, igual à análise: um
         # dos dois está sempre escondido, e nunca os dois ao mesmo tempo.
-        self._empty = QLabel(
-            "Nada por enquanto. Abra o cliente do LoL para ver perfil e "
-            "partidas recentes."
+        self._empty = IllustratedEmptyState(
+            asset="ranks/all.png",
+            mini_assets=(
+                "ranks/bronze.png",
+                "ranks/gold.png",
+                "ranks/diamond.png",
+            ),
+            eyebrow="HISTÓRICO COMPETITIVO",
+            title="Seu desempenho, com contexto",
+            detail=(
+                "Perfil ranqueado, vitórias, KDA, itens, runas e o placar "
+                "completo das partidas aparecem aqui."
+            ),
+            footnote="Conecte o cliente do LoL e use Atualizar.",
         )
-        self._empty.setObjectName("listNotice")
-        self._empty.setWordWrap(True)
         layout.addWidget(self._empty)
 
         self._content = QWidget()
@@ -253,21 +276,45 @@ class HistoryPage(QWidget):
                 continue
             games = rank.wins + rank.losses
             rate = f"{rank.wins / games:.0%}" if games else "—"
-            value = f"{rank.tier.title()} {rank.division} · {rank.lp} PDL"
-            self._ranks.addWidget(self._measure(label.upper(), f"{value}  ({rate})"))
+            tier_label = RANK_TIER_LABELS.get(rank.tier.upper(), rank.tier.title())
+            value = f"{tier_label} {rank.division} · {rank.lp} PDL"
+            self._ranks.addWidget(
+                self._rank_measure(rank.tier, label.upper(), value, rate)
+            )
 
     @staticmethod
-    def _measure(label: str, value: str) -> QWidget:
-        block = QWidget()
-        box = QVBoxLayout(block)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(1)
+    def _rank_measure(tier: str, label: str, value: str, rate: str) -> QWidget:
+        """Resumo ranqueado com o brasão oficial do elo."""
+
+        block = QFrame()
+        block.setObjectName("rankSummary")
+        block.setProperty("tier", tier.casefold())
+        box = QHBoxLayout(block)
+        box.setContentsMargins(10, 7, 13, 7)
+        box.setSpacing(10)
+
+        crest = QLabel()
+        crest.setObjectName("rankCrestSmall")
+        crest.setFixedSize(RANK_ICON)
+        crest.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = rank_pixmap(tier, RANK_ICON)
+        if not pixmap.isNull():
+            crest.setPixmap(pixmap)
+        crest.setAccessibleName(f"Brasão {tier.title()}")
+        box.addWidget(crest)
+
+        words = QVBoxLayout()
+        words.setSpacing(1)
         top = QLabel(label)
         top.setObjectName("cardLabel")
-        box.addWidget(top, 0, Qt.AlignmentFlag.AlignHCenter)
+        words.addWidget(top)
         bottom = QLabel(value)
-        bottom.setObjectName("cardValue")
-        box.addWidget(bottom, 0, Qt.AlignmentFlag.AlignHCenter)
+        bottom.setObjectName("rankValue")
+        words.addWidget(bottom)
+        win_rate = QLabel(f"{rate} de vitórias")
+        win_rate.setObjectName("rankRate")
+        words.addWidget(win_rate)
+        box.addLayout(words)
         return block
 
     def _fill_matches(self, matches) -> None:

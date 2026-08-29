@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from ..resources import asset_path
 from ..core.phases import GameflowPhase
+
+
+CHECKMARK_URL = asset_path("ui-check.svg").as_posix()
 
 
 class Palette:
@@ -60,7 +64,7 @@ PHASE_LABELS: dict[str, str] = {
 
 STYLESHEET = f"""
 * {{
-    font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+    font-family: "Spiegel";
     color: {Palette.TEXT};
 }}
 /* O Backdrop desenha a arte; esta é a cor de contingência do tema: {Palette.BACKGROUND}. */
@@ -113,6 +117,7 @@ STYLESHEET = f"""
     border-radius: 13px;
 }}
 #brandTitle {{
+    font-family: "Beaufort for LOL";
     color: {Palette.TEXT};
     font-size: 13px;
     font-weight: 800;
@@ -161,6 +166,7 @@ STYLESHEET = f"""
 
 /* Cabeçalhos e superfícies ------------------------------------------ */
 #pageTitle {{
+    font-family: "Beaufort for LOL";
     color: {Palette.TEXT};
     font-size: 25px;
     font-weight: 700;
@@ -172,6 +178,7 @@ STYLESHEET = f"""
     padding-top: 2px;
 }}
 #sectionTitle {{
+    font-family: "Beaufort for LOL";
     color: #F0D79D;
     font-size: 10px;
     font-weight: 800;
@@ -258,6 +265,214 @@ STYLESHEET = f"""
     line-height: 1.45;
 }}
 
+/* Resumo visual de fila ------------------------------------------------- */
+#queueVisualSummary {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(20, 54, 82, 206), stop:.56 rgba(11, 35, 61, 218),
+        stop:1 rgba(8, 25, 47, 232));
+    border: 1px solid rgba(200, 170, 110, 96);
+    border-radius: 13px;
+}}
+#queueMapIcon {{
+    background: rgba(4, 16, 32, 170);
+    border: 1px solid rgba(10, 200, 185, 100);
+    border-radius: 12px;
+}}
+#queueSummaryEyebrow {{
+    color: #6DECE2;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1.7px;
+}}
+#queueSummaryTitle {{
+    font-family: "Beaufort for LOL";
+    color: #F7E8C4;
+    font-size: 20px;
+    font-weight: 700;
+}}
+#queueSummaryMap {{ color: #D7E2EB; font-size: 12px; font-weight: 700; }}
+#queueSummaryDetail {{ color: #91A7BA; font-size: 10px; }}
+
+/* Laboratório de build ------------------------------------------------- */
+#loadoutStudioCard {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(20, 48, 75, 238), stop:.52 rgba(10, 31, 55, 242),
+        stop:1 rgba(11, 24, 45, 244));
+    border: 1px solid rgba(200, 170, 110, 120);
+    border-radius: 16px;
+}}
+#featureBadge {{
+    background: rgba(10, 200, 185, 25);
+    border: 1px solid rgba(10, 200, 185, 102);
+    border-radius: 8px;
+    color: #83ECE4;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+    padding: 5px 9px;
+}}
+#studioPanel {{
+    background: rgba(5, 20, 39, 194);
+    border: 1px solid rgba(105, 150, 188, 86);
+    border-radius: 13px;
+}}
+#rankPreview {{
+    background: qradialgradient(cx:.20, cy:.5, radius:.75,
+        stop:0 rgba(200, 170, 110, 25), stop:1 rgba(5, 20, 39, 0));
+    border: none;
+}}
+#rankCrest {{
+    background: rgba(3, 14, 29, 112);
+    border: 1px solid rgba(200, 170, 110, 74);
+    border-radius: 14px;
+}}
+#rankTitle {{
+    font-family: "Beaufort for LOL";
+    color: #F7E8C4;
+    font-size: 20px;
+    font-weight: 700;
+}}
+#rankSubtitle {{
+    color: #83ECE4;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+}}
+#rankSummary {{
+    background: rgba(5, 20, 39, 174);
+    border: 1px solid rgba(200, 170, 110, 82);
+    border-radius: 11px;
+}}
+#rankCrestSmall {{
+    background: rgba(3, 14, 29, 112);
+    border: 1px solid rgba(200, 170, 110, 65);
+    border-radius: 9px;
+}}
+#rankValue {{
+    font-family: "Beaufort for LOL";
+    color: #F4E3BB;
+    font-size: 14px;
+    font-weight: 700;
+}}
+#rankRate {{ color: #82E6DE; font-size: 9px; font-weight: 700; }}
+#analysisRankCrest {{
+    background: rgba(3, 14, 29, 112);
+    border: 1px solid rgba(200, 170, 110, 70);
+    border-radius: 9px;
+}}
+#spellSimulation {{ background: transparent; border: none; }}
+#spellSimulationBadge {{
+    background: rgba(116, 169, 214, 25);
+    border: 1px solid rgba(116, 169, 214, 90);
+    border-radius: 7px;
+    color: #A7C9E7;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 1.3px;
+    padding: 4px 8px;
+}}
+#spellSlot {{
+    background: rgba(6, 21, 40, 226);
+    border: 1px solid rgba(77, 116, 151, 110);
+    border-radius: 12px;
+}}
+#spellSlot[spell="flash"] {{
+    background: qradialgradient(cx:.5, cy:.48, radius:.72,
+        stop:0 rgba(250, 211, 82, 58), stop:.45 rgba(120, 79, 17, 26),
+        stop:1 rgba(6, 21, 40, 226));
+    border: 1px solid rgba(242, 206, 86, 188);
+}}
+#spellSlot[spell="barrier"] {{
+    background: qradialgradient(cx:.5, cy:.48, radius:.72,
+        stop:0 rgba(74, 191, 255, 50), stop:.46 rgba(16, 88, 141, 22),
+        stop:1 rgba(6, 21, 40, 226));
+    border: 1px solid rgba(84, 183, 232, 158);
+}}
+#spellIcon {{
+    background: rgba(2, 10, 21, 180);
+    border: 1px solid rgba(231, 207, 144, 100);
+    border-radius: 8px;
+}}
+#keyCap {{
+    background: rgba(2, 12, 25, 220);
+    border: 1px solid rgba(218, 193, 128, 140);
+    border-radius: 6px;
+    color: #F4E4BD;
+    font-size: 12px;
+    font-weight: 800;
+}}
+#spellName {{ color: #EDF2F6; font-size: 11px; font-weight: 700; }}
+#spellSwapIndicator {{ color: #C8AA6E; font-size: 20px; font-weight: 700; }}
+#spellSimulationTitle {{ color: #E9EDF2; font-size: 11px; font-weight: 700; }}
+#spellSimulationNote {{ color: #8FA5B9; font-size: 9px; }}
+#featureTile {{
+    background: rgba(5, 20, 39, 150);
+    border: 1px solid rgba(105, 150, 188, 65);
+    border-radius: 9px;
+}}
+#featureIcon {{
+    background: rgba(2, 12, 25, 180);
+    border: 1px solid rgba(200, 170, 110, 64);
+    border-radius: 8px;
+}}
+#featureEyebrow {{
+    color: #75E5DD;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+}}
+#featureDetail {{ color: #CBD5DE; font-size: 9px; font-weight: 700; }}
+
+/* Estados vazios ilustrados -------------------------------------------- */
+#emptyState {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(17, 44, 71, 214), stop:.55 rgba(9, 29, 53, 220),
+        stop:1 rgba(6, 20, 39, 232));
+    border: 1px solid rgba(114, 155, 190, 88);
+    border-radius: 17px;
+}}
+#emptyArt {{
+    background: qradialgradient(cx:.5, cy:.42, radius:.75,
+        stop:0 rgba(10, 200, 185, 34), stop:.58 rgba(200, 170, 110, 18),
+        stop:1 rgba(4, 16, 32, 150));
+    border: 1px solid rgba(200, 170, 110, 104);
+    border-radius: 94px;
+}}
+#emptyMainImage {{ background: transparent; border: none; }}
+#emptyMiniIcon {{
+    background: rgba(2, 12, 25, 218);
+    border: 1px solid rgba(116, 169, 214, 90);
+    border-radius: 17px;
+}}
+#emptyEyebrow {{
+    color: #71E6DE;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 2px;
+}}
+#emptyTitle {{
+    font-family: "Beaufort for LOL";
+    color: #F5E6C4;
+    font-size: 24px;
+    font-weight: 700;
+}}
+#emptyDetail {{ color: #C1CED9; font-size: 12px; line-height: 1.4; }}
+#emptyFootnote {{
+    background: rgba(10, 200, 185, 20);
+    border: 1px solid rgba(10, 200, 185, 70);
+    border-radius: 8px;
+    color: #8EDFD9;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 8px 10px;
+}}
+#legalNotice {{
+    color: #758A9E;
+    font-size: 8px;
+    letter-spacing: .4px;
+    padding: 6px 4px;
+}}
+
 /* Painel ---------------------------------------------------------------- */
 #heroCard {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -273,6 +488,7 @@ STYLESHEET = f"""
     letter-spacing: 2.2px;
 }}
 #heroHeadline {{
+    font-family: "Beaufort for LOL";
     color: {Palette.TEXT};
     font-size: 27px;
     font-weight: 700;
@@ -435,6 +651,7 @@ QCheckBox::indicator:hover {{ border-color: {Palette.ACTIVE}; }}
 QCheckBox::indicator:checked {{
     background: {Palette.ACTIVE};
     border: 1px solid #8CF2E9;
+    image: url("{CHECKMARK_URL}");
 }}
 QComboBox, QDoubleSpinBox {{
     background: rgba(4, 16, 33, 218);

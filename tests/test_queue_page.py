@@ -77,3 +77,23 @@ def test_the_chosen_queue_is_not_swapped_behind_the_players_back(page):
 
     assert page._combo.currentData() == 430
     assert page._binder.config.queue_id == 430
+
+
+def test_every_position_choice_uses_an_original_role_icon(page):
+    for combo in (page._primary, page._secondary):
+        assert all(not combo.itemIcon(index).isNull() for index in range(combo.count()))
+
+
+def test_the_queue_summary_starts_on_the_selected_map(page):
+    assert page._queue_summary_title.text() == "Ranqueada Solo/Duo"
+    assert page._queue_summary_map.text() == "Summoner's Rift"
+    assert page._queue_map.pixmap() is not None
+    assert not page._queue_map.pixmap().isNull()
+
+
+def test_changing_queue_redraws_its_map_and_description(page):
+    page._combo.setCurrentIndex(page._combo.findData(450))
+
+    assert page._queue_summary_title.text() == "ARAM"
+    assert page._queue_summary_map.text() == "Howling Abyss"
+    assert "uma única rota" in page._queue_summary_detail.text()

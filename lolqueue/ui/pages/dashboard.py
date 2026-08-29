@@ -14,7 +14,9 @@ from PySide6.QtWidgets import (
 )
 
 from ...config import OPGG_TIERS
+from ...resources import asset_path
 from ..widgets.log_pane import LogPane
+from ..widgets.loadout_studio import rank_icon
 from ..widgets.pick_order import PickOrderPanel
 from ..widgets.rune_tree import RuneTreeView
 from ..widgets.status_ring import StatusRing
@@ -184,6 +186,36 @@ class DashboardPage(QWidget):
         details.addLayout(options_row)
         self._runes.hide()
 
+        # Três capacidades-chave ocupam o respiro do herói quando não há
+        # seleção em andamento. Além de organizar a proposta do app, trazem
+        # para a Central os mesmos assets reconhecíveis dos controles.
+        self._features = QWidget()
+        feature_row = QHBoxLayout(self._features)
+        feature_row.setContentsMargins(0, 0, 0, 0)
+        feature_row.setSpacing(8)
+        feature_row.addWidget(
+            self._feature_tile(
+                QIcon(str(asset_path("positions/fill.png"))),
+                "FILA",
+                "Rotas sincronizadas",
+            )
+        )
+        feature_row.addWidget(
+            self._feature_tile(
+                QIcon(str(asset_path("spells/flash.png"))),
+                "LOADOUT",
+                "Feitiços e runas",
+            )
+        )
+        feature_row.addWidget(
+            self._feature_tile(
+                rank_icon("diamond", QSize(30, 30)),
+                "BUILD",
+                "Dados por elo",
+            )
+        )
+        details.addWidget(self._features)
+
         # Preenchidos quando o catálogo de runas termina de carregar e a
         # cada publicação do motor. Sem catálogo a grade fica de fora e
         # os botões de elo continuam funcionando sozinhos.
@@ -207,6 +239,30 @@ class DashboardPage(QWidget):
         self._log = LogPane()
         log_layout.addWidget(self._log)
         layout.addWidget(log_card)
+
+    @staticmethod
+    def _feature_tile(icon: QIcon, eyebrow: str, detail: str) -> QFrame:
+        tile = QFrame()
+        tile.setObjectName("featureTile")
+        box = QHBoxLayout(tile)
+        box.setContentsMargins(10, 8, 12, 8)
+        box.setSpacing(9)
+        image = QLabel()
+        image.setObjectName("featureIcon")
+        image.setFixedSize(34, 34)
+        image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image.setPixmap(icon.pixmap(QSize(28, 28)))
+        box.addWidget(image)
+        words = QVBoxLayout()
+        words.setSpacing(0)
+        top = QLabel(eyebrow)
+        top.setObjectName("featureEyebrow")
+        words.addWidget(top)
+        bottom = QLabel(detail)
+        bottom.setObjectName("featureDetail")
+        words.addWidget(bottom)
+        box.addLayout(words, 1)
+        return tile
 
     def set_running(self, running: bool) -> None:
         self._button.setProperty("running", "true" if running else "false")
@@ -288,11 +344,16 @@ class DashboardPage(QWidget):
         if not tiers:
             self._draw_tree()
             self._runes.hide()
+            self._features.show()
             return
         for tier in tiers:
             atual = tier == active
             button = QPushButton(OPGG_TIERS.get(tier, tier))
             button.setObjectName("runeOption")
+            crest = rank_icon(tier, QSize(24, 24))
+            if not crest.isNull():
+                button.setIcon(crest)
+                button.setIconSize(QSize(24, 24))
             # A dica virou balão: como linha de texto ela custava altura
             # que a janela pequena não tem, e o botão desligado já diz
             # sozinho qual elo está no cliente.
@@ -302,6 +363,7 @@ class DashboardPage(QWidget):
             button.clicked.connect(partial(self.rune_option_chosen.emit, tier))
             self._rune_options.addWidget(button)
         self._draw_tree()
+        self._features.hide()
         self._runes.show()
 
     def _draw_tree(self) -> None:

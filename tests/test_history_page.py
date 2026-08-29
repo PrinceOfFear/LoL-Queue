@@ -166,6 +166,15 @@ def test_a_full_profile_shows_name_and_level(page):
     assert "1098" in page._level.text()
 
 
+def test_the_ranked_profile_uses_the_official_crest(page):
+    page.set_history(profile(), ())
+
+    crests = page.findChildren(QtWidgets.QLabel, "rankCrestSmall")
+    assert len(crests) == 1
+    assert crests[0].pixmap() is not None
+    assert not crests[0].pixmap().isNull()
+
+
 def test_the_match_row_shows_champion_and_kda(page):
     page.set_history(profile(), (match(),))
 

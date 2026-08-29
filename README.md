@@ -180,8 +180,14 @@ usada e se o banimento entrou.
 
 ```powershell
 py -m pytest          # a suíte inteira, sem precisar do cliente aberto
-py tools\preview_pages.py     # desenha as páginas em PNG, sem abrir janela
+py tools\preview_pages.py     # desenha as 6 páginas + o laboratório de build
 ```
+
+As prévias usam as fontes Spiegel e Beaufort empacotadas e desviam a config
+para uma pasta temporária. Os ícones de Flash/Barreira, brasões de elo, mapas e
+rotas também viajam com o app, então a interface mantém a mesma aparência sem
+depender da internet ou das fontes instaladas no computador. A origem de cada
+asset está registrada em `lolqueue/assets/SOURCES.md`.
 
 Os testes não tocam a config real: cada um escreve num diretório
 temporário.

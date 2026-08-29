@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -9,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...config import PREFERENCE_POSITIONS, QUEUES, preference_name
+from ...resources import asset_path
 from ..binding import ConfigBinder
 
 
@@ -23,6 +26,39 @@ UNAVAILABLE_SUFFIX = "  ·  indisponível agora"
 NO_PRIMARY = "Deixar como está no cliente"
 
 NO_SECONDARY = "Sem segunda rota"
+
+
+#: Os arquivos da Riot têm bastante respiro transparente. Em 24 px o
+#: símbolo continua legível sem fazer a caixa crescer além dos outros
+#: controles da página.
+POSITION_ICON_SIZE = QSize(24, 24)
+
+#: Cada PNG de mapa traz dois estados de 128 px empilhados. O primeiro é
+#: o colorido, usado neste resumo; 72 px preserva os traços sem transformar
+#: a escolha da fila num segundo cartão principal.
+MAP_ICON_SIZE = QSize(72, 72)
+
+POSITION_ICONS: dict[str, str] = {
+    "": "unselected.png",
+    "top": "top.png",
+    "jungle": "jungle.png",
+    "middle": "middle.png",
+    "bottom": "bottom.png",
+    "utility": "utility.png",
+    "fill": "fill.png",
+}
+
+#: Arte, nome do mapa e explicação curta para cada fila. As cinco filas
+#: abaixo dividem o Rift; ARAM e Arena recebem sua própria leitura visual.
+QUEUE_VISUALS: dict[int, tuple[str, str, str]] = {
+    400: ("summoners-rift.png", "Summoner's Rift", "Mapa clássico 5v5"),
+    420: ("summoners-rift.png", "Summoner's Rift", "Mapa clássico 5v5"),
+    430: ("summoners-rift.png", "Summoner's Rift", "Mapa clássico 5v5"),
+    440: ("summoners-rift.png", "Summoner's Rift", "Mapa clássico 5v5"),
+    490: ("summoners-rift.png", "Summoner's Rift", "Mapa clássico 5v5"),
+    450: ("howling-abyss.png", "Howling Abyss", "ARAM · uma única rota"),
+    1700: ("rotating-mode.png", "Modo rotativo", "Arena"),
+}
 
 
 class QueuePage(QWidget):
@@ -51,6 +87,38 @@ class QueuePage(QWidget):
         label = QLabel("MODO DE PARTIDA")
         label.setObjectName("sectionTitle")
         content.addWidget(label)
+
+        self._summary = QFrame()
+        self._summary.setObjectName("queueVisualSummary")
+        summary_layout = QHBoxLayout(self._summary)
+        summary_layout.setContentsMargins(16, 10, 18, 10)
+        summary_layout.setSpacing(16)
+
+        self._queue_map = QLabel()
+        self._queue_map.setObjectName("queueMapIcon")
+        self._queue_map.setFixedSize(MAP_ICON_SIZE)
+        self._queue_map.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        summary_layout.addWidget(self._queue_map)
+
+        summary_words = QVBoxLayout()
+        summary_words.setContentsMargins(0, 0, 0, 0)
+        summary_words.setSpacing(2)
+        summary_eyebrow = QLabel("FILA SELECIONADA")
+        summary_eyebrow.setObjectName("queueSummaryEyebrow")
+        summary_words.addWidget(summary_eyebrow)
+        self._queue_summary_title = QLabel()
+        self._queue_summary_title.setObjectName("queueSummaryTitle")
+        summary_words.addWidget(self._queue_summary_title)
+        self._queue_summary_map = QLabel()
+        self._queue_summary_map.setObjectName("queueSummaryMap")
+        summary_words.addWidget(self._queue_summary_map)
+        self._queue_summary_detail = QLabel()
+        self._queue_summary_detail.setObjectName("queueSummaryDetail")
+        summary_words.addWidget(self._queue_summary_detail)
+        summary_words.addStretch(1)
+        summary_layout.addLayout(summary_words, 1)
+        content.addWidget(self._summary)
+
         helper = QLabel("A opção fica salva e é usada sempre que a automação iniciar.")
         helper.setObjectName("hint")
         content.addWidget(helper)
@@ -61,6 +129,7 @@ class QueuePage(QWidget):
             "queueSelector",
         )
         content.addWidget(self._combo)
+        self._refresh_queue_summary()
 
         content.addSpacing(7)
         positions = QFrame()
@@ -97,6 +166,7 @@ class QueuePage(QWidget):
         self._sync_secondary()
         binder.changed.connect(self._on_config_changed)
         binder.on_reload(self._sync_secondary)
+        binder.on_reload(self._refresh_queue_summary)
 
         content.addSpacing(7)
         behavior = QFrame()
@@ -156,6 +226,7 @@ class QueuePage(QWidget):
         options = [(empty, "")]
         options += [(preference_name(name), name) for name in PREFERENCE_POSITIONS]
         box = self._binder.combo(attribute, options, object_name)
+        self._decorate_positions(box)
         row.addWidget(box)
         row.addStretch(1)
         layout.addLayout(row)
@@ -164,6 +235,56 @@ class QueuePage(QWidget):
     def _on_config_changed(self, attribute: str) -> None:
         if attribute == "primary_position":
             self._sync_secondary()
+        if attribute == "queue_id":
+            self._refresh_queue_summary()
+
+    @staticmethod
+    def _decorate_positions(box) -> None:
+        """Põe o símbolo oficial ao lado de cada valor, inclusive o vazio."""
+        box.setIconSize(POSITION_ICON_SIZE)
+        for index in range(box.count()):
+            value = str(box.itemData(index) or "").casefold()
+            filename = POSITION_ICONS.get(value, POSITION_ICONS[""])
+            box.setItemIcon(
+                index,
+                QIcon(str(asset_path(f"positions/{filename}"))),
+            )
+
+    @staticmethod
+    def _active_map_pixmap(filename: str) -> QPixmap:
+        """Recorta do sprite o estado colorido e o reduz com suavização."""
+        source = QPixmap(str(asset_path(f"maps/{filename}")))
+        if source.isNull():
+            return source
+        # Os assets atuais têm dois quadrados empilhados: ativo em cima e
+        # inativo embaixo. Se a Riot trocar o arquivo por um quadrado simples,
+        # este recorte continua correto.
+        side = min(source.width(), source.height())
+        active = source.copy(0, 0, side, side)
+        return active.scaled(
+            MAP_ICON_SIZE,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def _refresh_queue_summary(self) -> None:
+        """Redesenha o resumo a partir da config, inclusive após trocar conta."""
+        queue_id = self._binder.config.queue_id
+        visual = QUEUE_VISUALS.get(queue_id)
+        if visual is None:
+            self._queue_map.clear()
+            self._queue_summary_title.setText(QUEUES.get(queue_id, f"Fila {queue_id}"))
+            self._queue_summary_map.setText("Mapa não identificado")
+            self._queue_summary_detail.clear()
+            self._queue_map.setToolTip("")
+            return
+
+        filename, map_name, detail = visual
+        self._queue_map.setPixmap(self._active_map_pixmap(filename))
+        self._queue_map.setToolTip(map_name)
+        self._queue_summary_title.setText(QUEUES.get(queue_id, f"Fila {queue_id}"))
+        self._queue_summary_map.setText(map_name)
+        self._queue_summary_detail.setText(detail)
 
     def _sync_secondary(self) -> None:
         """Deixa a segunda rota coerente com a primeira.

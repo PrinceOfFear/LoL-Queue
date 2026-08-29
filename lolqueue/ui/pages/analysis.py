@@ -31,10 +31,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...config import POSITION_NAMES
+from ...config import OPGG_TIERS, POSITION_NAMES
+from ..widgets.illustrated_empty import IllustratedEmptyState
+from ..widgets.loadout_studio import rank_pixmap
 
 PORTRAIT = QSize(56, 56)
 COUNTER_ICON = QSize(28, 28)
+ANALYSIS_RANK = QSize(54, 54)
+RANK_LABEL_TO_KEY = {label.casefold(): tier for tier, label in OPGG_TIERS.items()}
 
 #: Como o OP.GG chama as rotas nas duplas, e como se diz aqui.
 LANES = {
@@ -121,12 +125,21 @@ class AnalysisPage(QWidget):
 
         # O aviso de vazio e o conteúdo se revezam: um dos dois está
         # sempre escondido, e nunca os dois ao mesmo tempo.
-        self._empty = QLabel(
-            "Nada por enquanto. A análise aparece assim que um campeão "
-            "for travado na seleção."
+        self._empty = IllustratedEmptyState(
+            asset="maps/summoners-rift.png",
+            mini_assets=(
+                "positions/top.png",
+                "positions/middle.png",
+                "positions/bottom.png",
+            ),
+            eyebrow="ANÁLISE CONTEXTUAL",
+            title="A leitura começa na seleção",
+            detail=(
+                "Assim que um campeão for confirmado, você verá ordem de "
+                "habilidades, confrontos, sinergias e o desempenho da build."
+            ),
+            footnote="Abra o cliente e entre em uma seleção de campeões.",
         )
-        self._empty.setObjectName("listNotice")
-        self._empty.setWordWrap(True)
         layout.addWidget(self._empty)
 
         self._content = QWidget()
@@ -168,6 +181,12 @@ class AnalysisPage(QWidget):
         naming.addWidget(self._where)
         row.addLayout(naming)
         row.addStretch(1)
+
+        self._tier_crest = QLabel()
+        self._tier_crest.setObjectName("analysisRankCrest")
+        self._tier_crest.setFixedSize(ANALYSIS_RANK)
+        self._tier_crest.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(self._tier_crest, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # O boletim. Cada número mora numa caixinha própria para poder
         # sumir sozinho quando o campo não vier.
@@ -412,6 +431,11 @@ class AnalysisPage(QWidget):
             build.damage_type, build.damage_type
         )
         self._where.setText(" · ".join(part for part in (onde, damage) if part))
+        tier_key = RANK_LABEL_TO_KEY.get((tier_label or "").casefold(), tier_label)
+        crest = rank_pixmap(tier_key, ANALYSIS_RANK)
+        self._tier_crest.setPixmap(crest)
+        self._tier_crest.setVisible(not crest.isNull())
+        self._tier_crest.setToolTip(tier_label or "")
         if icon_path:
             self._portrait.setPixmap(QIcon(icon_path).pixmap(PORTRAIT))
         else:

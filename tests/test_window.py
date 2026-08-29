@@ -190,6 +190,7 @@ def test_every_sidebar_button_opens_the_page_that_matches_it(window):
         # que está dentro dele.
         aberta = window._pages.currentWidget().widget()
         assert isinstance(aberta, esperado[name]), f"{name} abriu {type(aberta).__name__}"
+        assert window._sidebar._group.button(index).isChecked()
 
 
 def test_the_stack_has_exactly_one_page_per_section(window):
@@ -312,6 +313,16 @@ def test_only_the_tiers_that_answered_become_buttons(window):
     options = window._dashboard._rune_options
     rotulos = [options.itemAt(i).widget().text() for i in range(options.count())]
     assert rotulos == ["Diamante+", "Desafiante"]
+
+
+def test_rune_tier_buttons_carry_the_same_rank_crests_as_settings(window):
+    window._dashboard.set_rune_options(["diamond_plus", "challenger"], "diamond_plus")
+
+    options = window._dashboard._rune_options
+    assert all(
+        not options.itemAt(index).widget().icon().isNull()
+        for index in range(options.count())
+    )
 
 
 def test_the_tier_already_applied_is_not_clickable(window):

@@ -49,7 +49,9 @@ class Sidebar(QWidget):
         brand_layout.setSpacing(10)
         mark = QLabel()
         mark.setObjectName("brandMark")
-        mark.setPixmap(QIcon(str(asset_path("logo-mark.svg"))).pixmap(32, 32))
+        # A mesma marca do atalho e da barra de tarefas: a identidade não
+        # muda quando o olhar sai do Windows e entra no app.
+        mark.setPixmap(QIcon(str(asset_path("icon.png"))).pixmap(34, 34))
         brand_layout.addWidget(mark)
         words = QVBoxLayout()
         words.setSpacing(0)
@@ -90,3 +92,10 @@ class Sidebar(QWidget):
         self._connection.setText(f"●  CLIENTE {label.upper()}")
         self._connection.style().unpolish(self._connection)
         self._connection.style().polish(self._connection)
+
+    def set_current(self, index: int) -> None:
+        """Mantém o destaque em acordo com navegação feita por código."""
+
+        button = self._group.button(index)
+        if button is not None:
+            button.setChecked(True)

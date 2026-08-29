@@ -34,6 +34,7 @@ from ..core.summoner_history import SummonerHistorySource
 from ..core.watcher import PhaseWatcher
 from ..vision.session import JungleSession
 from .binding import ConfigBinder
+from .fonts import install_application_fonts
 from .game_detail_loader import GameDetailLoader
 from .history_loader import HistoryLoader
 from .icon_loader import IconLoader
@@ -69,6 +70,9 @@ class MainWindow(QWidget):
 
     def __init__(self, config: Config) -> None:
         super().__init__()
+        # Registra antes de aplicar o QSS: além de manter o visual igual em
+        # qualquer PC, isto permite que as prévias offscreen desenhem texto.
+        install_application_fonts()
         self._config = config
         self._binder = ConfigBinder(config, self)
         self._catalog: ChampionCatalog | None = None
@@ -258,6 +262,7 @@ class MainWindow(QWidget):
     _HISTORY_INDEX = 2
 
     def _navigate(self, index: int) -> None:
+        self._sidebar.set_current(index)
         self._pages.setCurrentIndex(index)
         if index == self._HISTORY_INDEX:
             self._refresh_history()

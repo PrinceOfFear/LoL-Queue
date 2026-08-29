@@ -18,6 +18,11 @@ from ...config import (
 )
 from ..binding import ConfigBinder
 from ..widgets.accounts_card import AccountsCard
+from ..widgets.loadout_studio import (
+    RankPreview,
+    SpellKeyPreview,
+    decorate_rank_combo,
+)
 
 
 class SettingsPage(QWidget):
@@ -78,29 +83,8 @@ class SettingsPage(QWidget):
             indent=22,
         )
 
-        for label, attribute in (
-            ("Banir campeão automaticamente", "auto_ban"),
-            ("Aplicar os feitiços recomendados", "auto_spells"),
-            ("Aplicar as runas recomendadas", "auto_runes"),
-        ):
-            automation_layout.addWidget(binder.checkbox(label, attribute))
-
-        # Indentada porque depende da linha acima: sem as runas
-        # automáticas ligadas, esta não tem efeito nenhum.
-        options_row = QHBoxLayout()
-        options_row.setContentsMargins(22, 0, 0, 0)
-        options_row.addWidget(
-            binder.checkbox(
-                "Oferecer até 3 opções de runa, uma por elo, para escolher "
-                "na Central",
-                "auto_runes_options",
-            )
-        )
-        options_row.addStretch(1)
-        automation_layout.addLayout(options_row)
-
         automation_layout.addWidget(
-            binder.checkbox("Montar o arsenal na loja", "auto_items")
+            binder.checkbox("Banir campeão automaticamente", "auto_ban")
         )
         automation_layout.addWidget(
             binder.checkbox(
@@ -109,66 +93,133 @@ class SettingsPage(QWidget):
             )
         )
         mute_note = QLabel(
-            "Desliga, nas opções do próprio jogo, o chat dos aliados, o chat "
-            "de todos e os emotes dos inimigos — antes de a partida abrir, "
-            "que é a única hora em que isso ainda dá para fazer. O jogo não "
-            "expõe uma opção para os emotes dos aliados; essa fica de fora. "
-            "Tudo volta ao que estava quando a partida termina, ou quando "
-            "você desliga o motor."
+            "Protege a seleção desligando chat e emotes inimigos. Tudo volta "
+            "ao estado anterior quando a partida termina ou a automação para."
         )
         mute_note.setObjectName("hint")
         mute_note.setWordWrap(True)
         automation_layout.addWidget(mute_note)
 
+        layout.addWidget(automation)
+
+        # O antigo cartão único misturava decisões de fila, build e aviso
+        # de voz. O laboratório dá às escolhas de equipamento uma linguagem
+        # própria — com os mesmos assets que o jogador reconhece no cliente.
+        loadout = QFrame()
+        loadout.setObjectName("loadoutStudioCard")
+        loadout_layout = QVBoxLayout(loadout)
+        loadout_layout.setContentsMargins(24, 20, 24, 22)
+        loadout_layout.setSpacing(12)
+
+        loadout_heading = QHBoxLayout()
+        loadout_title = QLabel("LABORATÓRIO DE BUILD")
+        loadout_title.setObjectName("sectionTitle")
+        loadout_heading.addWidget(loadout_title)
+        loadout_heading.addStretch(1)
+        source_badge = QLabel("ASSETS ORIGINAIS DO JOGO")
+        source_badge.setObjectName("featureBadge")
+        loadout_heading.addWidget(source_badge)
+        loadout_layout.addLayout(loadout_heading)
+
+        loadout_subtitle = QLabel(
+            "Escolha a faixa competitiva e veja como os feitiços serão "
+            "organizados antes de entrar na seleção."
+        )
+        loadout_subtitle.setObjectName("heroDetail")
+        loadout_subtitle.setWordWrap(True)
+        loadout_layout.addWidget(loadout_subtitle)
+
+        automation_columns = QHBoxLayout()
+        automation_columns.setSpacing(28)
+        build_left = QVBoxLayout()
+        build_left.setSpacing(2)
+        build_left.addWidget(
+            binder.checkbox("Aplicar os feitiços recomendados", "auto_spells")
+        )
+        build_left.addWidget(
+            binder.checkbox("Aplicar as runas recomendadas", "auto_runes")
+        )
+        build_right = QVBoxLayout()
+        build_right.setSpacing(2)
+        build_right.addWidget(
+            binder.checkbox("Montar o arsenal na loja", "auto_items")
+        )
+        build_right.addWidget(
+            binder.checkbox(
+                "Oferecer até 3 opções de runa por elo na Central",
+                "auto_runes_options",
+            )
+        )
+        automation_columns.addLayout(build_left, 1)
+        automation_columns.addLayout(build_right, 1)
+        loadout_layout.addLayout(automation_columns)
+
+        studio = QHBoxLayout()
+        studio.setSpacing(12)
+
+        rank_panel = QFrame()
+        rank_panel.setObjectName("studioPanel")
+        rank_layout = QVBoxLayout(rank_panel)
+        rank_layout.setContentsMargins(16, 14, 16, 16)
+        rank_layout.setSpacing(9)
+        rank_label = QLabel("ELO DA BUILD DO OP.GG")
+        rank_label.setObjectName("predictionEyebrow")
+        rank_layout.addWidget(rank_label)
+
         tier_row = QHBoxLayout()
-        tier_row.addWidget(QLabel("Elo das builds do OP.GG"))
         self._tier = binder.combo(
             "opgg_tier",
             [(label, tier) for tier, label in OPGG_TIERS.items()],
             "tierSelector",
         )
-        tier_row.addWidget(self._tier)
-        tier_row.addStretch(1)
-        automation_layout.addLayout(tier_row)
+        decorate_rank_combo(self._tier)
+        tier_row.addWidget(self._tier, 1)
+        rank_layout.addLayout(tier_row)
+        self._rank_preview = RankPreview()
+        rank_layout.addWidget(self._rank_preview)
+        studio.addWidget(rank_panel, 1)
 
-        # Estas três não têm lista para configurar, e sem uma linha de
-        # explicação "recomendados" não diz por quem — nem que a
-        # resposta vem de fora do cliente.
-        note = QLabel(
-            "Feitiços, runas e itens saem do que mais venceu no OP.GG, no "
-            "elo escolhido acima, para o campeão e a rota da partida; se o "
-            "OP.GG não responder, valem os do próprio cliente do LoL. O app "
-            "mantém uma página de runas e um conjunto de itens, ambos "
-            "chamados “LoL Queue”, e não mexe nos seus. As opções de runa "
-            "comparam Diamante+, Mestre e Desafiante: a do elo acima "
-            "continua entrando sozinha, e as outras ficam na Central para "
-            "você trocar com um clique durante a seleção."
-        )
-        note.setObjectName("hint")
-        note.setWordWrap(True)
-        automation_layout.addWidget(note)
+        flash_panel = QFrame()
+        flash_panel.setObjectName("studioPanel")
+        flash_layout = QVBoxLayout(flash_panel)
+        flash_layout.setContentsMargins(16, 14, 16, 16)
+        flash_layout.setSpacing(9)
+        flash_label = QLabel("SIMULAÇÃO DOS FEITIÇOS")
+        flash_label.setObjectName("predictionEyebrow")
+        flash_layout.addWidget(flash_label)
 
         flash_row = QHBoxLayout()
-        flash_row.addWidget(QLabel("Tecla do Flash"))
         self._flash = binder.combo(
             "flash_key",
             [(label, key) for key, label in FLASH_KEYS.items()],
             "flashSelector",
         )
-        flash_row.addWidget(self._flash)
-        flash_row.addStretch(1)
-        automation_layout.addLayout(flash_row)
+        flash_row.addWidget(self._flash, 1)
+        flash_layout.addLayout(flash_row)
+        self._spell_preview = SpellKeyPreview()
+        flash_layout.addWidget(self._spell_preview)
+        studio.addWidget(flash_panel, 1)
+        loadout_layout.addLayout(studio)
 
-        flash_note = QLabel(
-            "Vale quando os feitiços recomendados entram. Em “como já "
-            "estiver”, o app mantém o Flash do lado em que a conta já o "
-            "tinha. Fixar o D ou o F serve para jogar em conta emprestada: "
-            "a recomendação entra igual, mas o Flash vai para a tecla que "
-            "você usa, e não para a do dono da conta."
+        note = QLabel(
+            "A build usa os dados de vitória do OP.GG para o campeão, rota e "
+            "elo escolhidos. Se a fonte não responder, runas e feitiços usam "
+            "a recomendação do próprio cliente; suas páginas pessoais não são "
+            "alteradas. A Barreira acima serve apenas para visualizar os slots."
         )
-        flash_note.setObjectName("hint")
-        flash_note.setWordWrap(True)
-        automation_layout.addWidget(flash_note)
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        loadout_layout.addWidget(note)
+        layout.addWidget(loadout)
+
+        assistance = QFrame()
+        assistance.setObjectName("settingsCard")
+        assistance_layout = QVBoxLayout(assistance)
+        assistance_layout.setContentsMargins(24, 20, 24, 20)
+        assistance_layout.setSpacing(8)
+        assistance_title = QLabel("ASSISTÊNCIA DURANTE A PARTIDA")
+        assistance_title.setObjectName("sectionTitle")
+        assistance_layout.addWidget(assistance_title)
 
         jungle_row = QHBoxLayout()
         jungle_row.addWidget(
@@ -184,38 +235,30 @@ class SettingsPage(QWidget):
         )
         jungle_row.addWidget(self._voice)
         jungle_row.addStretch(1)
-        automation_layout.addLayout(jungle_row)
+        assistance_layout.addLayout(jungle_row)
 
         jungle_note = QLabel(
-            "Durante a partida, o app procura o retrato do jungler inimigo "
-            "no minimapa e diz em voz alta onde ele apareceu — quem está "
-            "olhando a própria rota não está olhando o canto da tela. As "
-            "frases são preparadas assim que a partida abre e ficam "
-            "guardadas para as próximas; se a internet estiver fora no "
-            "momento do preparo, o aviso fica mudo em vez de atrasar."
+            "O minimapa é acompanhado durante a partida e a voz informa onde "
+            "o jungler inimigo apareceu, sem tirar seus olhos da rota."
         )
         jungle_note.setObjectName("hint")
         jungle_note.setWordWrap(True)
-        automation_layout.addWidget(jungle_note)
+        assistance_layout.addWidget(jungle_note)
 
-        automation_layout.addWidget(
+        assistance_layout.addWidget(
             binder.checkbox(
                 "Guardar no registro o porquê de cada aviso",
                 "jungle_debug",
             )
         )
         debug_note = QLabel(
-            "Só para investigar aviso errado. Ao lado de cada frase falada "
-            "fica uma linha com a coordenada onde o retrato foi achado, a "
-            "nitidez do casamento e o nome do lugar — é o que separa "
-            "“achou onde não estava” de “achou certo e "
-            "chamou o lugar errado”. Vale a partir da próxima partida."
+            "Modo técnico: registra coordenada, confiança e zona detectada "
+            "para investigar um aviso incorreto."
         )
         debug_note.setObjectName("hint")
         debug_note.setWordWrap(True)
-        automation_layout.addWidget(debug_note)
-
-        layout.addWidget(automation)
+        assistance_layout.addWidget(debug_note)
+        layout.addWidget(assistance)
 
         timing_card = QFrame()
         timing_card.setObjectName("settingsCard")
@@ -256,9 +299,31 @@ class SettingsPage(QWidget):
         self.accounts = AccountsCard()
         layout.addWidget(self.accounts)
 
+        legal = QLabel(
+            "PROJETO INDEPENDENTE · LoL Queue não é endossado pela Riot Games. "
+            "League of Legends e suas propriedades pertencem à Riot Games, Inc."
+        )
+        legal.setObjectName("legalNotice")
+        legal.setWordWrap(True)
+        layout.addWidget(legal)
+
         layout.addStretch(1)
 
         binder.on_reload(self._restore_numbers)
+        binder.on_reload(self._restore_visuals)
+        binder.changed.connect(self._refresh_visual_setting)
+        self._restore_visuals()
+
+    def _refresh_visual_setting(self, attribute: str) -> None:
+        if attribute in {"opgg_tier", "flash_key"}:
+            self._restore_visuals()
+
+    def _restore_visuals(self, *_args) -> None:
+        """Mantém brasão e slots em acordo inclusive após trocar de conta."""
+
+        tier = self._binder.config.opgg_tier
+        self._rank_preview.set_tier(tier, OPGG_TIERS.get(tier, tier))
+        self._spell_preview.set_key(self._binder.config.flash_key)
 
     def _restore_numbers(self) -> None:
         """Traz os números de volta do que a config diz agora.
