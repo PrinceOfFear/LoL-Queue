@@ -280,6 +280,28 @@ def test_the_note_is_left_for_the_thread_that_holds_the_client(window):
 
     window._on_identity_changed(quem())
     window._game_sync = GameSettingsSync(object(), window._accounts)
+    window._on_connection_changed(True)
     window._on_capture_game(window._accounts.main)
 
     assert window._game_sync._capture == window._accounts.main
+
+
+def test_a_client_that_closed_does_not_swallow_the_note(window):
+    """A referência da cópia sobrevive à queda; o bilhete não pode.
+
+    Sem ninguém do outro lado para lê-lo, o botão faria nada e não
+    diria por quê.
+    """
+    from lolqueue.core.gamesettings import GameSettingsSync
+
+    window._on_identity_changed(quem())
+    window._game_sync = GameSettingsSync(object(), window._accounts)
+    window._on_connection_changed(True)
+    window._on_connection_changed(False)
+
+    ditas = []
+    window._log_message = ditas.append
+    window._on_capture_game(window._accounts.main)
+
+    assert window._game_sync._capture == ""
+    assert any("Abra o cliente do LoL" in linha for linha in ditas)

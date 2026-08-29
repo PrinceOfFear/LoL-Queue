@@ -93,6 +93,11 @@ class MainWindow(QWidget):
         # conexão, na thread da vigia; até lá os botões avisam que o
         # cliente do LoL precisa estar aberto.
         self._game_sync: GameSettingsSync | None = None
+        # Se o cliente do LoL está de pé agora. A referência acima
+        # sobrevive à queda da conexão de propósito (ver
+        # `_on_connection_changed`), então ela sozinha não diz se há
+        # alguém do outro lado para ler o bilhete.
+        self._connected = False
         # Filas que a Riot desligou nesta região. Descobertas na thread
         # do watcher e lidas na da GUI, igual ao catálogo.
         self._blocked_queues: set[int] | None = None
@@ -707,6 +712,7 @@ class MainWindow(QWidget):
         self._champions.set_pick_list(scope, ids)
 
     def _on_connection_changed(self, connected: bool) -> None:
+        self._connected = connected
         self._sidebar.set_connected(connected)
         self._dashboard.ring.set_connected(connected)
         if not connected:
@@ -816,8 +822,13 @@ class MainWindow(QWidget):
         self._game_sync.request_apply(key)
 
     def _ask_sync(self, verb: str) -> bool:
-        """Sem cliente conectado não há o que ler nem onde escrever."""
-        if self._game_sync is None:
+        """Sem cliente conectado não há o que ler nem onde escrever.
+
+        A cópia é feita do outro lado, pela vigia; deixar o bilhete com
+        o cliente fechado seria um botão que não faz nada e não diz por
+        quê.
+        """
+        if self._game_sync is None or not self._connected:
             self._log_message(
                 f"Abra o cliente do LoL para {verb} as configurações do jogo."
             )
