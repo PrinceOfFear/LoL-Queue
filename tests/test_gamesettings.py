@@ -15,9 +15,12 @@ from lolqueue.config import Config
 from lolqueue.core.accounts import Accounts, account_key
 from lolqueue.core.gamesettings import (
     APPLY_DELAYS,
+    MAX_ROUNDS,
+    RETRY_DELAY,
     GameSettingsSync,
     apply,
     capture,
+    mismatches,
     strip_machine,
 )
 from lolqueue.core.identity import Identity
@@ -395,3 +398,173 @@ def test_forgetting_the_account_takes_the_model_with_it():
 def test_a_broken_snapshot_is_ignored_instead_of_crashing(torto):
     assert apply(ClienteFalso(), torto) == []
     assert strip_machine(torto) == {}
+
+
+# --- a conferência ------------------------------------------------------
+#
+# O PATCH responde 2xx e mesmo assim não gruda: na troca de conta o
+# cliente ainda está baixando os ajustes de quem entrou e escreve por
+# cima logo depois. Sem conferir, o app anunciava sucesso e o jogador
+# clicava no botão à mão sete vezes seguidas, foi o que o diário de
+# 29/08 mostrou. Daqui para baixo é a prova de que ele confere.
+
+
+#: Uma fotografia que o `ClienteFalso` NÃO devolve — sem isso nenhum
+#: teste veria divergência, porque o modelo de `com_modelo` é
+#: exatamente o que o cliente falso responde.
+TEIMOSO = {"game": {"HUD": {"MinimapScale": 1.5}}, "input": TECLAS}
+
+
+def com(modelo):
+    """Duas contas, com a fotografia que o teste escolher."""
+    contas = Accounts(now=lambda: "2026-01-01T00:00:00")
+    contas.arrive(quem(), Config())
+    contas.arrive(quem("Amigo", "BR2"), Config())
+    contas.set_game_settings(contas.main, modelo)
+    return contas
+
+
+def test_a_key_the_client_omits_is_not_a_mismatch():
+    """O cliente cala o que está no padrão dele.
+
+    Cobrar essas chaves reprovaria para sempre uma cópia que pegou, e a
+    insistência viraria um laço que nunca converge.
+    """
+    cliente = ClienteFalso(jogo={"HUD": {"MinimapScale": 0.8}}, teclas={})
+    modelo = {"game": {"HUD": {"MinimapScale": 0.8, "FlipMiniMap": True}}}
+
+    assert mismatches(cliente, modelo) == []
+
+
+def test_a_key_the_client_answers_differently_is_a_mismatch():
+    assert mismatches(ClienteFalso(), TEIMOSO) == ["interface: HUD/MinimapScale"]
+
+
+def test_the_copy_is_written_again_when_it_did_not_stick():
+    """E a nova rodada entra na fila na ordem certa.
+
+    A segunda passada de `APPLY_DELAYS` cai em 25s; a repetição, em 20s.
+    Como `tick` só olha o primeiro da fila, uma repetição empilhada no
+    fim ficaria presa atrás dela — a fila tem de estar ordenada.
+    """
+    agora, tempo = relogio([0.0])
+    cliente = ClienteFalso()
+    sync = GameSettingsSync(cliente, com(TEIMOSO), now=agora)
+
+    sync.account_arrived(quem("Amigo", "BR2"))
+    tempo["agora"] = APPLY_DELAYS[0]
+    sync.tick()
+    assert len(cliente.escrito) == 2
+
+    tempo["agora"] = APPLY_DELAYS[0] + RETRY_DELAY
+    sync.tick()
+
+    assert len(cliente.escrito) == 4
+
+
+def test_the_insisting_has_an_end():
+    """Insistir para sempre encheria o diário e nunca convenceria o cliente."""
+    ditas: list[str] = []
+    agora, tempo = relogio([0.0])
+    cliente = ClienteFalso()
+    sync = GameSettingsSync(cliente, com(TEIMOSO), log=ditas.append, now=agora)
+
+    sync.account_arrived(quem("Amigo", "BR2"))
+    for _ in range(20):
+        tempo["agora"] += RETRY_DELAY + 1.0
+        sync.tick()
+
+    assert len(cliente.escrito) == 2 * MAX_ROUNDS
+    assert sum("não aceitou" in linha for linha in ditas) == 1
+
+
+def test_the_copy_only_announces_success_once_per_arrival():
+    """Duas passadas de propósito, uma frase só — senão parece defeito."""
+    ditas: list[str] = []
+    agora, tempo = relogio([0.0])
+    sync = GameSettingsSync(ClienteFalso(), com_modelo(), log=ditas.append, now=agora)
+
+    sync.account_arrived(quem("Amigo", "BR2"))
+    for espera in APPLY_DELAYS:
+        tempo["agora"] = espera
+        sync.tick()
+
+    # "Valem a partir" e não "aplicadas nesta conta": o aviso de que a
+    # cópia *vai* acontecer usa quase as mesmas palavras.
+    assert sum("Valem a partir" in linha for linha in ditas) == 1
+
+
+def test_the_button_answers_even_when_it_did_not_stick():
+    """Houve um clique esperando resposta; calar é o que fazia clicar de novo."""
+    ditas: list[str] = []
+    agora, _tempo = relogio([0.0])
+    sync = GameSettingsSync(ClienteFalso(), com(TEIMOSO), log=ditas.append, now=agora)
+
+    sync.request_apply("amigo#br2@br")
+    sync.tick()
+
+    assert any("ainda não aceitou" in linha for linha in ditas)
+
+
+# --- o silêncio tem preferência ----------------------------------------
+
+
+def test_what_the_silence_holds_survives_the_copy():
+    """As duas escrevem em `GAME_SETTINGS`; só uma pode ganhar.
+
+    A fotografia da conta principal tem o chat ligado, e sem esta
+    ressalva a cópia desligava metade do silêncio de antes da partida —
+    o "de lado fica meio muda" do relato.
+    """
+    cliente = ClienteFalso()
+    segurado = {"Chat": {"EnableChat": False}, "HUD": {"ShowAlliedChat": False}}
+    modelo = {
+        "game": {
+            "Chat": {"EnableChat": True},
+            "HUD": {"ShowAlliedChat": True, "MinimapScale": 0.8},
+        },
+        "input": {},
+    }
+
+    apply(cliente, modelo, segurado)
+    corpo = cliente.escrito[0][1]
+
+    assert corpo["Chat"]["EnableChat"] is False
+    assert corpo["HUD"]["ShowAlliedChat"] is False
+    # E o resto da cópia continua acontecendo: a ressalva é cirúrgica.
+    assert corpo["HUD"]["MinimapScale"] == 0.8
+
+
+def test_the_copy_asks_the_silence_before_writing():
+    agora, tempo = relogio([0.0])
+    cliente = ClienteFalso()
+    modelo = {"game": {"HUD": {"ShowAlliedChat": True}}, "input": {}}
+    sync = GameSettingsSync(
+        cliente,
+        com(modelo),
+        now=agora,
+        hold=lambda: {"HUD": {"ShowAlliedChat": False}},
+    )
+
+    sync.account_arrived(quem("Amigo", "BR2"))
+    tempo["agora"] = APPLY_DELAYS[0]
+    sync.tick()
+
+    assert cliente.escrito[0][1]["HUD"]["ShowAlliedChat"] is False
+
+
+def test_a_silence_that_breaks_does_not_take_the_copy_down():
+    """Perguntar é uma cortesia; a cópia não depende da resposta."""
+
+    def explode() -> dict:
+        raise RuntimeError("o silêncio caiu")
+
+    agora, tempo = relogio([0.0])
+    cliente = ClienteFalso()
+    sync = GameSettingsSync(cliente, com_modelo(), now=agora, hold=explode)
+
+    sync.account_arrived(quem("Amigo", "BR2"))
+    tempo["agora"] = APPLY_DELAYS[0]
+    sync.tick()
+
+    assert len(cliente.escrito) == 2

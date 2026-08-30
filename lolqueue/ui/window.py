@@ -326,6 +326,10 @@ class MainWindow(QWidget):
             save=self._accounts.save,
             log=self._watcher.message.emit,
             on_change=self._watcher.accounts_changed.emit,
+            # As duas escrevem em `GAME_SETTINGS`. Sem esta pergunta a
+            # cópia desfazia o silêncio de antes da partida, e o
+            # jogador ficava com metade do chat de volta sem entender.
+            hold=antitoxic.forced,
         )
         self._game_sync = sync
         engine.set_game_sync(sync)

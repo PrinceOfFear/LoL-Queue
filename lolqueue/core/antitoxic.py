@@ -98,6 +98,10 @@ class MuteGuard:
         self._original: dict[str, dict[str, Any]] | None = None
         # Sem isto, cada tick da seleção mandaria o mesmo PATCH.
         self._applied = False
+        # Se o jogo está mudo agora — por obra nossa ou porque já
+        # estava. Ver `forced`: é isto, e não `_original`, que diz o
+        # que ninguém mais pode escrever por cima.
+        self._silent = False
 
     @property
     def applied(self) -> bool:
@@ -136,6 +140,7 @@ class MuteGuard:
             if diferente:
                 mudanca[secao] = diferente
         if not mudanca:
+            self._silent = True
             self._log("Chat e emotes já estavam no silêncio.")
             return False
 
@@ -152,14 +157,42 @@ class MuteGuard:
 
         if not self._write(mudanca):
             return False
+        self._silent = True
         self._log(
             "Silêncio ligado antes da partida: "
             f"{', '.join(sorted(_keys(mudanca)))}."
         )
         return True
 
+    def forced(self) -> dict[str, dict[str, Any]]:
+        """O que o silêncio está segurando agora, para quem escreve depois.
+
+        A cópia das configurações da conta principal usa exatamente
+        esta rota (`GAME_SETTINGS`) e manda o bloco inteiro — inclusive
+        as chaves de chat, no valor ligado que a conta principal tinha.
+        Chegando depois do silêncio, ela devolvia o chat aliado e os
+        emotes do inimigo sem que uma linha do diário dissesse por quê,
+        e o `_applied` daqui ainda impedia o silêncio de voltar: o jogo
+        ficava meio mudo pelo resto da partida. Quem escreve por cima
+        pergunta antes o que não pode mexer.
+
+        Quem responde é `_silent`, e não `_applied` nem `_original`.
+        `_applied` dura menos que o silêncio — `reset` o limpa quando a
+        seleção acaba, e a partida, que é onde o chat incomoda, começa
+        depois disso. E `_original` guarda só o que *mudou*: num jogador
+        que já jogava com o chat de aliado desligado, essa chave não
+        estaria ali, e a cópia a religaria justamente para quem tinha
+        pedido silêncio primeiro. O silêncio inteiro é indivisível.
+        """
+        if not self._silent:
+            return {}
+        return {secao: dict(chaves) for secao, chaves in MUTED.items()}
+
     def restore(self) -> bool:
         """Devolve as opções como estavam antes do primeiro `apply`."""
+        # Sai do ar antes de qualquer saída: mesmo quando não há o que
+        # reescrever, o silêncio acabou e ninguém mais precisa respeitá-lo.
+        self._silent = False
         if not self._original:
             return False
         anterior = self._original

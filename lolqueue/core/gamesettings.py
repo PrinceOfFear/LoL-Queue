@@ -46,6 +46,13 @@ from .identity import Identity
 #: mais para terminar de carregar o que era da conta que entrou.
 APPLY_DELAYS = (8.0, 25.0)
 
+#: Quando a conferência reprova, quanto esperar antes de reescrever, e
+#: quantas rodadas no total. O cliente costuma terminar de carregar a
+#: conta em menos de um minuto; passar disso é sinal de que o problema
+#: não é tempo, e insistir só encheria o diário.
+RETRY_DELAY = 12.0
+MAX_ROUNDS = 5
+
 #: Blocos que são da máquina, não de quem joga.
 MACHINE_BLOCKS = ("Performance",)
 #: Ajustes soltos que são da máquina, dentro de blocos que não são.
@@ -78,25 +85,90 @@ def capture(client) -> dict:
     }
 
 
-def apply(client, snapshot: dict) -> list[str]:
-    """Despeja a fotografia no cliente. Devolve o que foi escrito.
+def wanted(snapshot: dict, hold: dict | None = None) -> tuple[dict, dict]:
+    """O que se quer escrever em cada rota, já limpo e já ressalvado.
 
     A limpeza é refeita aqui: uma fotografia antiga, gravada por uma
     versão que ainda copiava o modo de vídeo, não pode trocar a tela de
     quem atualizar o app.
+
+    `hold` é o que outra parte do app está segurando nesta mesma rota
+    agora — na prática, o silêncio de antes da partida. Sem isso a
+    cópia passava por cima do que o silêncio tinha acabado de escrever,
+    porque as duas coisas mandam PATCH para `GAME_SETTINGS` e a
+    fotografia da conta principal tem o chat ligado.
     """
     if not isinstance(snapshot, dict):
-        return []
-    written: list[str] = []
+        return {}, {}
     game = strip_machine(snapshot.get("game") or {})
+    if game and hold:
+        game = _merge(game, hold)
+    keys = snapshot.get("input") or {}
+    return game, keys if isinstance(keys, dict) else {}
+
+
+def apply(client, snapshot: dict, hold: dict | None = None) -> list[str]:
+    """Despeja a fotografia no cliente. Devolve o que foi escrito."""
+    game, keys = wanted(snapshot, hold)
+    written: list[str] = []
     if game:
         client.patch(GAME_SETTINGS, json=game)
         written.append("interface")
-    keys = snapshot.get("input") or {}
-    if isinstance(keys, dict) and keys:
+    if keys:
         client.patch(INPUT_SETTINGS, json=keys)
         written.append("teclas")
     return written
+
+
+def mismatches(client, snapshot: dict, hold: dict | None = None) -> list[str]:
+    """O que o cliente continua devolvendo diferente do que se escreveu.
+
+    O PATCH responde 2xx e mesmo assim não gruda: durante a troca de
+    conta o cliente ainda está baixando os ajustes de quem entrou e
+    escreve por cima logo depois. Era esse o "volta nas config da
+    conta" — e, sem conferir, o app anunciava sucesso e o jogador
+    clicava no botão à mão seis, sete vezes seguidas.
+    """
+    game, keys = wanted(snapshot, hold)
+    fora: list[str] = []
+    if game:
+        fora += _diff(_read(client, GAME_SETTINGS), game, "interface")
+    if keys:
+        fora += _diff(_read(client, INPUT_SETTINGS), keys, "teclas")
+    return fora
+
+
+def _merge(base: dict, over: dict) -> dict:
+    """Dois níveis, que é a profundidade que estas rotas têm."""
+    saida = {b: dict(v) if isinstance(v, dict) else v for b, v in base.items()}
+    for block, values in over.items():
+        atual = saida.get(block)
+        if isinstance(atual, dict) and isinstance(values, dict):
+            atual.update(values)
+        else:
+            saida[block] = dict(values) if isinstance(values, dict) else values
+    return saida
+
+
+def _diff(live: dict, want: dict, label: str) -> list[str]:
+    """Só o que o cliente devolveu, e devolveu diferente.
+
+    Chave ausente da resposta não conta como divergência: o cliente
+    omite o que está no padrão dele, e cobrar essas faria a conferência
+    reprovar para sempre uma cópia que pegou.
+    """
+    fora: list[str] = []
+    for block, values in want.items():
+        atual = live.get(block)
+        if isinstance(values, dict) and isinstance(atual, dict):
+            fora += [
+                f"{label}: {block}/{key}"
+                for key, value in values.items()
+                if key in atual and atual[key] != value
+            ]
+        elif block in live and live[block] != values:
+            fora.append(f"{label}: {block}")
+    return fora
 
 
 def _read(client, path: str) -> dict:
@@ -120,6 +192,7 @@ class GameSettingsSync:
         log: Callable[[str], None] | None = None,
         on_change: Callable[[], None] | None = None,
         now: Callable[[], float] = time.monotonic,
+        hold: Callable[[], dict] | None = None,
     ) -> None:
         self._client = client
         self._accounts = accounts
@@ -127,9 +200,15 @@ class GameSettingsSync:
         self._log = log or (lambda message: None)
         self._on_change = on_change or (lambda: None)
         self._now = now
+        # O que outra parte do app está segurando na mesma rota agora.
+        # Hoje é só o silêncio de antes da partida; a cópia pergunta
+        # para não escrever por cima dele.
+        self._hold = hold or (lambda: {})
         self._due: list[float] = []
         self._capture = ""
         self._apply = ""
+        self._rounds = 0
+        self._announced = False
 
     # -- pedidos de fora ------------------------------------------------
 
@@ -144,6 +223,8 @@ class GameSettingsSync:
             return
         agora = self._now()
         self._due = [agora + espera for espera in APPLY_DELAYS]
+        self._rounds = 0
+        self._announced = False
         self._log(
             "Configurações do jogo da conta principal serão aplicadas "
             "nesta conta em instantes."
@@ -156,6 +237,7 @@ class GameSettingsSync:
     def request_apply(self, _key: str = "") -> None:
         """A janela pediu para aplicar agora, sem esperar."""
         self._apply = "agora"
+        self._rounds = 0
 
     # -- trabalho -------------------------------------------------------
 
@@ -205,18 +287,64 @@ class GameSettingsSync:
                     "conta principal e use o botão de guardar."
                 )
             return
+        hold = self._held()
         try:
-            written = apply(self._client, snapshot)
+            written = apply(self._client, snapshot, hold)
         except LcuError as exc:
             self._log(f"Não consegui aplicar as configurações do jogo: {exc}")
             self._due = []
             return
         if not written:
             return
+        self._rounds += 1
+        try:
+            fora = mismatches(self._client, snapshot, hold)
+        except LcuError:
+            # Sem leitura não há veredito. Vale o que sempre valeu: a
+            # escrita foi aceita, e é isso que se conta.
+            fora = []
+        if fora and self._rounds < MAX_ROUNDS:
+            # Ainda não grudou — o cliente costuma estar terminando de
+            # baixar a conta que entrou. Marcar outra rodada é o que
+            # antes o usuário fazia à mão, clicando no botão.
+            self._due.append(self._now() + RETRY_DELAY)
+            self._due.sort()
+            if asked:
+                self._log(
+                    "Configurações enviadas, mas o cliente ainda não "
+                    f"aceitou {len(fora)} ajuste(s). Tento de novo em "
+                    "instantes — deixe o cliente na tela inicial."
+                )
+            return
+        if fora:
+            # Passou da conta de rodadas: o problema não é tempo, e
+            # insistir daqui em diante só encheria o diário. O botão
+            # da tela continua valendo para quem quiser tentar de novo.
+            self._due = []
+            self._log(
+                "Apliquei as configurações da conta principal, mas o "
+                f"cliente não aceitou {len(fora)} ajuste(s) "
+                f"({', '.join(fora[:3])}). Confira dentro do jogo."
+            )
+            self._announced = True
+            return
+        # Uma vez por chegada de conta. O botão da tela fala sempre,
+        # porque ali houve um clique esperando resposta.
+        if self._announced and not asked:
+            return
+        self._announced = True
         self._log(
             "Configurações do jogo da conta principal aplicadas nesta conta "
             f"({' e '.join(written)}). Valem a partir da próxima partida."
         )
+
+    def _held(self) -> dict:
+        """O que não pode ser sobrescrito agora, se alguém estiver segurando."""
+        try:
+            segurado = self._hold()
+        except Exception:  # noqa: BLE001 - a cópia não cai por causa disto
+            return {}
+        return segurado if isinstance(segurado, dict) else {}
 
     def _store(self) -> None:
         try:

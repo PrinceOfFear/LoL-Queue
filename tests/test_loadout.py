@@ -17,14 +17,16 @@ import pytest
 from lolqueue.config import Config
 from lolqueue.core.champions import ChampionCatalog
 from lolqueue.core.loadout import (
+    MAX_SPELL_ATTEMPTS,
     PAGE_PREFIX,
+    SPELL_RETRY_SECONDS,
     WAIT_SECONDS,
     Loadout,
     align_spells,
 )
 from lolqueue.core.opgg import Block, Build as OpggBuild, Page
 from lolqueue.lcu import endpoints
-from lolqueue.lcu.client import ClientClosed
+from lolqueue.lcu.client import ClientClosed, LcuError
 from tests.fakes import FakeLcuClient
 
 SUMMARY = [{"id": 96, "name": "Kog Maw", "alias": "KogMaw"}]
@@ -189,6 +191,96 @@ def test_it_does_not_touch_spells_that_are_already_right():
     assert client.paths("PATCH") == []
 
 
+class Relogio:
+    """Um relógio que só anda quando o teste manda."""
+
+    def __init__(self) -> None:
+        self.agora = 0.0
+
+    def __call__(self) -> float:
+        return self.agora
+
+    def adiante(self, segundos: float) -> None:
+        self.agora += segundos
+
+
+def patches_de_feitico(client) -> int:
+    return client.paths("PATCH").count(endpoints.CHAMP_SELECT_MY_SELECTION)
+
+
+def test_the_spells_are_only_announced_after_the_session_confirms():
+    """O PATCH responde 2xx sem obedecer, e o diário mentia por isso.
+
+    Em três seleções seguidas o app escreveu "feitiços aplicados" com a
+    dupla velha na tela até o jogo começar: a frase saía da ausência de
+    exceção, não da troca. Agora quem confirma é a sessão relida.
+    """
+    relogio = Relogio()
+    loadout, _, mensagens = build(Config(auto_spells=True), now=relogio)
+
+    loadout.apply(session())
+
+    assert not [m for m in mensagens if "Feitiços" in m]
+
+    loadout.apply(session(spell1=4, spell2=21))
+
+    assert [m for m in mensagens if "Feitiços" in m]
+
+
+def test_it_insists_when_the_client_ignores_the_spell_patch():
+    """Uma tentativa por seleção era uma tentativa só — a do pior momento.
+
+    `apply` marca `_done_for` antes de agir, então o único envio caía
+    no cliente ainda ocupado abrindo a seleção, que é justamente quando
+    ele engole o pedido.
+    """
+    relogio = Relogio()
+    loadout, client, _ = build(Config(auto_spells=True), now=relogio)
+
+    loadout.apply(session())
+    loadout.apply(session())
+
+    assert patches_de_feitico(client) == 1
+
+    relogio.adiante(SPELL_RETRY_SECONDS + 0.1)
+    loadout.apply(session())
+
+    assert patches_de_feitico(client) == 2
+
+
+def test_it_stops_insisting_and_says_so():
+    """Teimar para sempre seria pior que não trocar: o jogador precisa
+    saber a tempo de trocar à mão."""
+    relogio = Relogio()
+    loadout, client, mensagens = build(Config(auto_spells=True), now=relogio)
+
+    loadout.apply(session())
+    for _ in range(MAX_SPELL_ATTEMPTS + 3):
+        relogio.adiante(SPELL_RETRY_SECONDS + 0.1)
+        loadout.apply(session())
+
+    assert patches_de_feitico(client) == MAX_SPELL_ATTEMPTS
+    assert sum("Não consegui trocar os feitiços" in m for m in mensagens) == 1
+
+
+def test_an_explicit_refusal_does_not_become_stubbornness():
+    """Recusa declarada é resposta; insistir contra ela só atrapalharia
+    o resto da seleção."""
+    relogio = Relogio()
+    loadout, client, _ = build(Config(auto_spells=True), now=relogio)
+
+    loadout.apply(session())
+    client.failures.add(("PATCH", endpoints.CHAMP_SELECT_MY_SELECTION))
+    relogio.adiante(SPELL_RETRY_SECONDS + 0.1)
+    loadout.apply(session())
+
+    client.failures.clear()
+    relogio.adiante(SPELL_RETRY_SECONDS * 10)
+    loadout.apply(session())
+
+    assert patches_de_feitico(client) == 2
+
+
 # ---------- runas ----------
 
 
@@ -202,6 +294,83 @@ def test_it_creates_the_page_from_the_recommendation():
     assert body["subStyleId"] == 8400
     assert body["selectedPerkIds"] == PERK_IDS
     assert body["name"].startswith(PAGE_PREFIX)
+
+
+def test_the_page_is_born_temporary_so_it_takes_no_slot():
+    """`isTemporary` é o mesmo campo das páginas que o cliente recomenda:
+    aparecem na lista, dá para ativar, e não ocupam vaga."""
+    loadout, client, _ = build(Config(auto_runes=True))
+
+    loadout.apply(session())
+
+    assert page_body(client)["isTemporary"] is True
+
+
+def test_a_full_account_still_gets_its_page():
+    """A conta emprestada com as duas vagas ocupadas por páginas do dono.
+
+    Era o defeito: o POST permanente recusava para sempre, porque não
+    há o que apagar — página alheia não se toca e não existe página
+    nossa para reaproveitar. Onze seleções sem runa nenhuma.
+    """
+    outra = {"id": 3, "name": "Mago", "isDeletable": True}
+    loadout, client, _ = build(
+        Config(auto_runes=True),
+        responses={
+            endpoints.PERK_PAGES: [USER_PAGE, outra],
+            endpoints.PERK_INVENTORY: {"canAddCustomPage": False},
+        },
+    )
+
+    loadout.apply(session())
+
+    assert page_body(client)["selectedPerkIds"] == PERK_IDS
+    assert client.paths("DELETE") == []
+    assert (endpoints.PERK_CURRENT_PAGE, 77) in client.payloads
+
+
+def recusa_temporaria(client) -> None:
+    """Um cliente que não aceita a bandeira, para provar o outro caminho."""
+    original = client.post
+
+    def post(path, json=None):
+        if path == endpoints.PERK_PAGES and (json or {}).get("isTemporary"):
+            client.calls.append(("POST", path))
+            raise LcuError("página temporária recusada")
+        return original(path, json)
+
+    client.post = post
+
+
+def test_a_client_that_refuses_the_temporary_page_still_gets_one():
+    """A permanente segue sendo o segundo caminho, não o único."""
+    loadout, client, _ = build(Config(auto_runes=True))
+    recusa_temporaria(client)
+
+    loadout.apply(session())
+
+    corpo = page_body(client)
+    assert "isTemporary" not in corpo
+    assert corpo["selectedPerkIds"] == PERK_IDS
+    assert (endpoints.PERK_CURRENT_PAGE, 77) in client.payloads
+
+
+def test_the_permanent_fallback_still_frees_our_own_slot_first():
+    """Sem vaga, a conversa sobre abrir espaço continua onde sempre esteve."""
+    loadout, client, _ = build(
+        Config(auto_runes=True),
+        responses={
+            endpoints.PERK_PAGES: [USER_PAGE, MY_PAGE],
+            endpoints.PERK_INVENTORY: {"canAddCustomPage": False},
+        },
+    )
+    recusa_temporaria(client)
+
+    loadout.apply(session())
+
+    apagadas = client.paths("DELETE")
+    assert endpoints.PERK_PAGE.format(page_id=1) in apagadas
+    assert endpoints.PERK_PAGE.format(page_id=2) not in apagadas
 
 
 def test_it_makes_the_new_page_the_current_one():
@@ -901,6 +1070,11 @@ def test_the_automatic_page_is_still_the_settings_tier():
             "primaryStyleId": 8100,
             "subStyleId": 8200,
             "selectedPerkIds": list(DESAFIANTE.perks),
+            # A página nasce temporária porque assim ela não ocupa vaga
+            # nenhuma — ver `_create_page`. Numa conta com as duas vagas
+            # cheias de páginas do dono, era este `isTemporary` que
+            # faltava para a runa entrar.
+            "isTemporary": True,
         }
     ]
 

@@ -147,6 +147,54 @@ def test_only_sends_what_actually_changes():
     ]
 
 
+def test_nothing_is_held_before_the_silence():
+    """Antes de mutar, a cópia das configurações escreve à vontade."""
+    guard, _, _ = make_guard()
+
+    assert guard.forced() == {}
+
+
+def test_the_silence_holds_every_key_it_stands_on():
+    """Quem escreve depois na mesma rota pergunta o que não pode mexer.
+
+    A cópia da conta principal usa `GAME_SETTINGS` e manda o bloco
+    inteiro, com o chat ligado. Chegando depois, ela devolvia o chat
+    aliado e os emotes do inimigo, e o `_applied` daqui impedia o
+    silêncio de voltar: o jogo ficava meio mudo pelo resto da partida.
+    """
+    guard, _, _ = make_guard()
+    guard.apply()
+
+    assert guard.forced() == {secao: dict(v) for secao, v in MUTED.items()}
+
+
+def test_a_player_who_was_already_silent_is_held_too():
+    """O caso que `_original` não cobria: nada mudou, e mesmo assim o
+    jogo está mudo — e é dele o pedido de silêncio, não nosso."""
+    ja = {"HUD": dict(BARULHO["HUD"], **MUTED[SECTION])}
+    guard, _, _ = make_guard(settings=ja, disco={"EnableChat": False})
+    guard.apply()
+
+    assert guard.forced() == {secao: dict(v) for secao, v in MUTED.items()}
+
+
+def test_the_hold_lasts_longer_than_the_selection():
+    """`reset` acaba com a seleção; o chat só incomoda depois dela."""
+    guard, _, _ = make_guard()
+    guard.apply()
+    guard.reset()
+
+    assert guard.forced()
+
+
+def test_giving_the_settings_back_ends_the_hold():
+    guard, _, _ = make_guard()
+    guard.apply()
+    guard.restore()
+
+    assert guard.forced() == {}
+
+
 def test_gives_back_exactly_what_the_player_had():
     quase = {
         "HUD": dict(BARULHO["HUD"], ShowAllChannelChat=False, ChatChannelVisibility=0)

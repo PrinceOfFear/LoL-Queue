@@ -70,6 +70,14 @@ WAIT_SECONDS = 8.0
 #: Sinal interno de "ainda não sei" — diferente de "não veio nada".
 PENDING = object()
 
+#: Quantas vezes reenviar os feitiços antes de desistir, e quanto
+#: esperar entre uma tentativa e a seguinte. O PATCH da seleção
+#: responde 2xx sem surtir efeito — a mesma mentira que já custou um
+#: banimento em `champ_select` —, então quem confirma é a releitura da
+#: sessão no tick seguinte, não a resposta.
+MAX_SPELL_ATTEMPTS = 4
+SPELL_RETRY_SECONDS = 1.5
+
 #: Elos consultados para as opções de runa: três pontos bem separados
 #: da escala, fixos de propósito. Não é o elo dos Ajustes — aquele
 #: decide o que é aplicado sozinho, este é o leque que a tela oferece
@@ -262,6 +270,12 @@ class Loadout:
         # Se a tela chegou a receber alguma opção. Sem isso o "não há
         # nada a mostrar" seria repetido a cada seleção que não tem.
         self._published = False
+        # A dupla de feitiços pedida ao cliente e ainda não confirmada.
+        # Enquanto ela existir, todo tick relê a sessão e insiste.
+        self._spells_wanted: tuple[int, int] | None = None
+        self._spells_at = 0.0
+        self._spell_attempts = 0
+        self._spells_origin = ORIGIN_RIOT
 
     def reset(self) -> None:
         self._done_for = None
@@ -271,6 +285,8 @@ class Loadout:
         # A thread em voo, se houver, é daemon e some sozinha; o que
         # importa é não colar a resposta de uma seleção na seguinte.
         self._pending = None
+        self._spells_wanted = None
+        self._spell_attempts = 0
         self._clear_options()
 
     def request_rune_option(self, tier: str) -> None:
@@ -310,6 +326,10 @@ class Loadout:
         ):
             return
         champion_id = local_champion(session)
+        # Antes de qualquer outra coisa, e nos dois caminhos: a troca
+        # de feitiço só é verdade quando a sessão devolve a dupla nova,
+        # e a sessão só é relida aqui.
+        self._settle_spells(session)
         if champion_id <= 0:
             return
         if champion_id == self._done_for:
@@ -559,11 +579,58 @@ class Loadout:
         first, second = align_spells(spells, current, self._config.flash_key)
         if (first, second) == current:
             return
+        self._spells_origin = origem
+        self._spell_attempts = 0
+        self._send_spells(first, second)
+
+    def _send_spells(self, first: int, second: int) -> None:
+        """Pede a dupla. Nada é anunciado aqui — ver `_settle_spells`."""
         self._client.patch(
             endpoints.CHAMP_SELECT_MY_SELECTION,
             json={"spell1Id": first, "spell2Id": second},
         )
-        self._log(f"Feitiços do {origem} aplicados.")
+        self._spells_wanted = (first, second)
+        self._spells_at = self._now()
+        self._spell_attempts += 1
+
+    def _settle_spells(self, session: dict) -> None:
+        """Relê a sessão: ou pegou, ou insiste, ou conta que não deu.
+
+        O único jeito de saber se o feitiço trocou é olhar de novo para
+        a sessão. Anunciar em cima da resposta do PATCH era anunciar
+        que o cliente ouviu, não que ele obedeceu: em três seleções
+        seguidas o diário disse "feitiços aplicados" com a dupla errada
+        na tela até o jogo começar.
+
+        E a insistência precisa de uma porta própria porque `apply`
+        marca `_done_for` antes de agir: sem isto a troca tem uma
+        tentativa só na seleção inteira, e ela é justamente a que cai
+        no cliente ainda ocupado abrindo a seleção.
+        """
+        wanted = self._spells_wanted
+        if wanted is None:
+            return
+        if local_spells(session) == wanted:
+            self._spells_wanted = None
+            self._log(f"Feitiços do {self._spells_origin} aplicados.")
+            return
+        if self._now() - self._spells_at < SPELL_RETRY_SECONDS:
+            return
+        if self._spell_attempts >= MAX_SPELL_ATTEMPTS:
+            self._spells_wanted = None
+            self._complain(
+                "Não consegui trocar os feitiços de invocador — o cliente "
+                "recusou. Troque à mão antes de travar."
+            )
+            return
+        try:
+            self._send_spells(*wanted)
+        except ClientClosed:
+            raise
+        except LcuError:
+            # Recusa explícita não vira teimosia: o resto da seleção
+            # segue, e o campeão e as runas não pagam por isto.
+            self._spells_wanted = None
 
     # ---------- runas ----------
 
@@ -610,19 +677,57 @@ class Loadout:
         vezes seguidas, com o diário repetindo que a culpa era dele.
         """
         name = f"{PAGE_PREFIX}: {self._catalog.name(champion_id)}"
+        page = self._create_page(
+            {
+                "name": name,
+                "primaryStyleId": style,
+                "subStyleId": sub_style,
+                "selectedPerkIds": list(perks),
+            }
+        )
+        page_id = page.get("id") if isinstance(page, dict) else None
+        if page_id is None:
+            self._complain("O cliente não devolveu a página de runas criada.")
+            return None
+        # Criar não ativa: sem este passo o jogador entraria na partida
+        # com a página que estava selecionada antes.
+        self._client.put(endpoints.PERK_CURRENT_PAGE, json=page_id)
+        self._discard_old_pages(keep=page_id)
+        return name
+
+    def _create_page(self, body: dict) -> dict | None:
+        """Cria a página. Primeiro como temporária, que não ocupa vaga.
+
+        `isTemporary` é o mesmo campo que o próprio cliente usa nas
+        páginas que ele recomenda na seleção: elas aparecem na lista,
+        dá para ativá-las, e não entram na conta de `customPageCount`.
+
+        Isso deixou de ser detalhe quando o app passou a ser usado em
+        conta emprestada. Medido contra o cliente real, numa conta com
+        as duas vagas ocupadas por páginas do dono: o POST permanente
+        devolve recusa para sempre — não há o que apagar, porque apagar
+        página alheia está fora de questão, e não existe página nossa
+        para reaproveitar —, enquanto o mesmo POST com `isTemporary`
+        devolve 200, ativa, e ainda é apagável pela limpeza de sempre.
+        Foi essa a diferença entre onze seleções sem runa nenhuma e
+        onze seleções com a runa certa.
+
+        A permanente continua sendo o segundo caminho: um cliente que
+        um dia recuse a bandeira ainda tem por onde passar, e é lá que
+        mora a conversa sobre abrir espaço.
+        """
+        try:
+            return self._client.post(
+                endpoints.PERK_PAGES, json={**body, "isTemporary": True}
+            )
+        except ClientClosed:
+            raise
+        except LcuError:
+            pass
         if not self._has_room():
             self._discard_old_pages()
-
         try:
-            page = self._client.post(
-                endpoints.PERK_PAGES,
-                json={
-                    "name": name,
-                    "primaryStyleId": style,
-                    "subStyleId": sub_style,
-                    "selectedPerkIds": list(perks),
-                },
-            )
+            return self._client.post(endpoints.PERK_PAGES, json=body)
         except ClientClosed:
             raise
         except LcuError as exc:
@@ -633,15 +738,6 @@ class Loadout:
                 else f"O cliente recusou a página de runas: {exc}"
             )
             return None
-        page_id = page.get("id") if isinstance(page, dict) else None
-        if page_id is None:
-            self._complain("O cliente não devolveu a página de runas criada.")
-            return None
-        # Criar não ativa: sem este passo o jogador entraria na partida
-        # com a página que estava selecionada antes.
-        self._client.put(endpoints.PERK_CURRENT_PAGE, json=page_id)
-        self._discard_old_pages(keep=page_id)
-        return name
 
     # ---------- as opções de runa ----------
 
