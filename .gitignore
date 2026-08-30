@@ -18,3 +18,10 @@ dist-standalone/
 
 # Amostras de voz geradas por tools/comparar_vozes.py (regeraveis, nao versionar)
 docs/amostras-voz/
+
+# Chave privada Ed25519 do servidor de licencas. NUNCA versionar:
+# quem tem este arquivo emite licenca de graca para sempre.
+chaves-licenca/
+*.chave-privada
+servidor/.env
+servidor/licencas.db*

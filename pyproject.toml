@@ -17,6 +17,11 @@ dependencies = [
     # Ficou de fora desta lista por um tempo, e a máquina que instalou
     # só o que estava declarado nunca falou uma palavra.
     "edge-tts>=7.0",
+    # Assinatura Ed25519 da licenca. Precisa ser assinatura, e nao um
+    # segredo compartilhado: o app confere a licenca sozinho quando esta
+    # sem internet, e com HMAC o segredo teria que viajar dentro do
+    # executavel -- quem tivesse o executavel emitiria licenca.
+    "cryptography>=43.0",
 ]
 
 [project.optional-dependencies]
