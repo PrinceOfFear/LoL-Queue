@@ -78,6 +78,17 @@ PENDING = object()
 MAX_SPELL_ATTEMPTS = 4
 SPELL_RETRY_SECONDS = 1.5
 
+#: De quanto em quanto tempo se confere se a página que o app gravou
+#: ainda é a página ativa, e quantas vezes se insiste em pô-la de volta
+#: antes de desistir. O cliente troca a página ativa sozinho no fim da
+#: seleção — medido: gravada às 08:05:34, trocada pela recomendação
+#: dele às 08:07:18, quase dois minutos depois do lock —, então conferir
+#: uma vez na hora de gravar não prova nada sobre o que entra na
+#: partida. O teto existe para o app não brigar em laço com um cliente
+#: que insista: três recolocações e ele conta o que houve e para.
+PAGE_CHECK_SECONDS = 2.0
+MAX_PAGE_FIXES = 3
+
 #: Elos consultados para as opções de runa: três pontos bem separados
 #: da escala, fixos de propósito. Não é o elo dos Ajustes — aquele
 #: decide o que é aplicado sozinho, este é o leque que a tela oferece
@@ -180,6 +191,49 @@ def option_label(key: str) -> str:
     return f"de {OPGG_TIERS.get(key, key)}"
 
 
+def same_page(current, watch) -> bool:
+    """A página ativa no cliente é a que o app gravou?
+
+    Comparar o `id` bastaria se o cliente sempre gravasse o que
+    recebeu, e ele nem sempre grava: um perk fora da árvore some do
+    corpo sem que o POST reclame. Então o conteúdo entra na conta —
+    mas só o que foi pedido de verdade, para uma recomendação sem
+    árvore declarada não virar divergência eterna.
+    """
+    if not isinstance(current, dict) or current.get("id") != watch.page_id:
+        return False
+    for campo, esperado in (
+        ("primaryStyleId", watch.style),
+        ("subStyleId", watch.sub_style),
+    ):
+        if esperado is not None and current.get(campo) != esperado:
+            return False
+    if not watch.perks:
+        return True
+    perks = tuple(
+        perk
+        for perk in current.get("selectedPerkIds") or []
+        if isinstance(perk, int)
+    )
+    return perks == watch.perks
+
+
+def replaceable(current) -> bool:
+    """Se dá para pôr a página do app de volta sem passar por cima do jogador.
+
+    Sem página ativa, volta. Página temporária, volta: é a gaveta das
+    recomendações do cliente, onde jogador nenhum grava. Outra página
+    nossa, volta. Permanente com nome alheio é escolha feita à mão na
+    tela de runas, e essa ganha.
+    """
+    if not isinstance(current, dict):
+        return True
+    if current.get("isTemporary"):
+        return True
+    name = current.get("name")
+    return isinstance(name, str) and name.startswith(f"{PAGE_PREFIX}: ")
+
+
 def versus_pages(pages: Sequence[Page], opponent: str) -> tuple[Page, ...]:
     """As páginas do guia rotuladas pelo adversário que as produziu.
 
@@ -209,6 +263,17 @@ class _Search:
     started: float
     thread: threading.Thread | None = None
     result: Build | None = None
+
+
+@dataclass
+class _Watch:
+    """A página que o app gravou, e o bastante para gravá-la de novo."""
+
+    page_id: int
+    name: str
+    style: int | None
+    sub_style: int | None
+    perks: tuple[int, ...]
 
 
 class Loadout:
@@ -276,6 +341,13 @@ class Loadout:
         self._spells_at = 0.0
         self._spell_attempts = 0
         self._spells_origin = ORIGIN_RIOT
+        # A página que o app gravou, para conferir a cada tick se ela
+        # continua sendo a ativa. Guardado o conteúdo inteiro porque
+        # recolocar pode significar criar de novo: o cliente às vezes
+        # apaga a nossa antes de pôr a dele.
+        self._page_watch: _Watch | None = None
+        self._page_checked_at = 0.0
+        self._page_fixes = 0
 
     def reset(self) -> None:
         self._done_for = None
@@ -287,6 +359,9 @@ class Loadout:
         self._pending = None
         self._spells_wanted = None
         self._spell_attempts = 0
+        self._page_watch = None
+        self._page_checked_at = 0.0
+        self._page_fixes = 0
         self._clear_options()
 
     def request_rune_option(self, tier: str) -> None:
@@ -333,10 +408,10 @@ class Loadout:
         if champion_id <= 0:
             return
         if champion_id == self._done_for:
-            # Já equipado. O que ainda pode chegar aqui são os
-            # cliques do usuário na tela — a opção de runa e o
-            # adversário da rota —, que rodam neste tick e não em cima
-            # da thread da GUI.
+            # Já equipado — o que não quer dizer que continue equipado.
+            # A conferência vem antes dos cliques porque é ela que
+            # decide o que entra na partida.
+            self._guard_page()
             self._serve_matchup(champion_id)
             self._serve_choice(champion_id)
             return
@@ -676,7 +751,17 @@ class Loadout:
         bandeira custou ao jogador entrar em partida sem runa, onze
         vezes seguidas, com o diário repetindo que a culpa era dele.
         """
-        name = f"{PAGE_PREFIX}: {self._catalog.name(champion_id)}"
+        return self._write_page(
+            f"{PAGE_PREFIX}: {self._catalog.name(champion_id)}",
+            style,
+            sub_style,
+            perks,
+        )
+
+    def _write_page(
+        self, name: str, style, sub_style, perks: Sequence[int]
+    ) -> str | None:
+        """Cria, ativa, confere e só então diz que deu certo."""
         page = self._create_page(
             {
                 "name": name,
@@ -689,45 +774,167 @@ class Loadout:
         if page_id is None:
             self._complain("O cliente não devolveu a página de runas criada.")
             return None
-        # Criar não ativa: sem este passo o jogador entraria na partida
-        # com a página que estava selecionada antes.
-        self._client.put(endpoints.PERK_CURRENT_PAGE, json=page_id)
+        watch = _Watch(
+            page_id=page_id,
+            name=name,
+            style=style,
+            sub_style=sub_style,
+            perks=tuple(perk for perk in perks if isinstance(perk, int)),
+        )
+        if not self._activate(watch):
+            self._complain(
+                "O cliente não ficou com a página de runas do app — "
+                "confira a runa antes de a partida começar."
+            )
+            return None
+        # Só depois de haver página ativa confirmada é que a de antes
+        # perde a vaga: uma limpeza feita mais cedo deixaria o jogador
+        # sem página nenhuma toda vez que a ativação falhasse.
         self._discard_old_pages(keep=page_id)
+        self._page_watch = watch
+        self._page_checked_at = self._now()
         return name
 
-    def _create_page(self, body: dict) -> dict | None:
-        """Cria a página. Primeiro como temporária, que não ocupa vaga.
+    def _activate(self, watch: _Watch) -> bool:
+        """Ativa a página e relê para saber se pegou.
 
-        `isTemporary` é o mesmo campo que o próprio cliente usa nas
-        páginas que ele recomenda na seleção: elas aparecem na lista,
-        dá para ativá-las, e não entram na conta de `customPageCount`.
+        Criar não ativa, e ativar não garante: `PUT /currentpage`
+        responde 2xx e às vezes não muda nada — a mesma mentira que o
+        PATCH dos feitiços já contava. Sem esta releitura o diário
+        anunciava “Runas aplicadas” enquanto a partida carregava outra
+        página, e foi assim por seleções inteiras sem ninguém saber.
 
-        Isso deixou de ser detalhe quando o app passou a ser usado em
-        conta emprestada. Medido contra o cliente real, numa conta com
-        as duas vagas ocupadas por páginas do dono: o POST permanente
-        devolve recusa para sempre — não há o que apagar, porque apagar
-        página alheia está fora de questão, e não existe página nossa
-        para reaproveitar —, enquanto o mesmo POST com `isTemporary`
-        devolve 200, ativa, e ainda é apagável pela limpeza de sempre.
-        Foi essa a diferença entre onze seleções sem runa nenhuma e
-        onze seleções com a runa certa.
+        Duas tentativas porque a primeira cai no cliente ainda ocupado
+        montando a seleção; da terceira em diante quem insiste é a
+        conferência por tick, que tem tempo do lado dela.
+        """
+        for _ in range(2):
+            self._client.put(endpoints.PERK_CURRENT_PAGE, json=watch.page_id)
+            if self._is_current(watch):
+                return True
+        return False
 
-        A permanente continua sendo o segundo caminho: um cliente que
-        um dia recuse a bandeira ainda tem por onde passar, e é lá que
-        mora a conversa sobre abrir espaço.
+    def _is_current(self, watch: _Watch) -> bool:
+        """Se a página ativa é a nossa. Sem leitura, assume que sim.
+
+        Chutar “não” numa leitura que falhou faria o app regravar a
+        página por engano, e regravar é a operação cara: cria, ativa e
+        apaga. Falha de leitura não é evidência de troca.
         """
         try:
-            return self._client.post(
-                endpoints.PERK_PAGES, json={**body, "isTemporary": True}
-            )
+            current = self._client.get(endpoints.PERK_CURRENT_PAGE)
+        except ClientClosed:
+            raise
+        except LcuError:
+            return True
+        return same_page(current, watch)
+
+    def _guard_page(self) -> None:
+        """A cada tick: a página do app ainda é a ativa? Se não, volta.
+
+        O app parava de olhar no instante em que gravava, e o cliente
+        troca a página ativa bem depois disso. Medido no cliente real:
+        página do app gravada às 08:05:34, recomendação do próprio
+        cliente ativa às 08:07:18 — quase dois minutos depois, já com o
+        campeão travado —, e a partida carregou as runas dele. Do lado
+        do jogador isso é exatamente “o app não trocou a runa”, com o
+        diário jurando que trocou.
+
+        O que não se faz aqui é brigar com o jogador: `replaceable`
+        deixa a escolha à mão dele encerrar a vigilância.
+        """
+        watch = self._page_watch
+        if watch is None or not self._config.auto_runes:
+            return
+        if self._now() - self._page_checked_at < PAGE_CHECK_SECONDS:
+            return
+        self._page_checked_at = self._now()
+        try:
+            current = self._client.get(endpoints.PERK_CURRENT_PAGE)
+            if same_page(current, watch):
+                return
+            if not replaceable(current):
+                self._page_watch = None
+                return
+            if self._page_fixes >= MAX_PAGE_FIXES:
+                self._page_watch = None
+                self._complain(
+                    "O cliente insiste em trocar a página de runas — "
+                    "confira a runa antes de a partida começar."
+                )
+                return
+            self._page_fixes += 1
+            name = self._reinstall(watch)
+        except ClientClosed:
+            raise
+        except LcuError as exc:
+            self._log(f"Não deu para conferir a página de runas: {exc}")
+            return
+        if name is not None:
+            self._log(f"O cliente trocou a página de runas — “{name}” de volta.")
+
+    def _reinstall(self, watch: _Watch) -> str | None:
+        """Põe a nossa de volta: ativando, ou criando de novo se sumiu."""
+        try:
+            if self._activate(watch):
+                self._page_checked_at = self._now()
+                return watch.name
+        except ClientClosed:
+            raise
+        except LcuError:
+            # A página não existe mais — o cliente a apagou para pôr a
+            # dele. Não há o que ativar, há o que recriar.
+            pass
+        return self._write_page(
+            watch.name, watch.style, watch.sub_style, watch.perks
+        )
+
+    def _create_page(self, body: dict) -> dict | None:
+        """Cria a página. Permanente primeiro; temporária só se não couber.
+
+        `isTemporary` parecia de graça: a página aparece na lista, dá
+        para ativá-la e não entra na conta de `customPageCount`. O que
+        ela não diz é de quem é a gaveta. É a mesma que o cliente usa
+        para as páginas que ele próprio recomenda na seleção, e ele a
+        esvazia quando quer. Medido: a nossa criada temporária às
+        08:05:34, a recomendação do cliente ocupando o lugar às
+        08:07:18 com o `recommendationId` dele, e a partida carregando
+        as runas dele. Página temporária é página emprestada.
+
+        Permanente ele não mexe. Por isso a ordem é esta, e a recusa
+        tem uma resposta antes de desistir: a vaga que dá para abrir é
+        a da nossa página de uma seleção anterior — apagar página do
+        usuário continua fora de questão.
+
+        A temporária fica para o único caso em que a permanente não tem
+        saída: conta emprestada com todas as vagas ocupadas por páginas
+        do dono. Lá, uma runa que talvez o cliente substitua ainda é
+        melhor do que entrar em partida sem runa nenhuma — e agora há
+        quem confira e a reponha enquanto a seleção durar.
+        """
+        try:
+            return self._client.post(endpoints.PERK_PAGES, json=body)
         except ClientClosed:
             raise
         except LcuError:
             pass
-        if not self._has_room():
-            self._discard_old_pages()
+        # A vaga que dá para abrir é a da nossa página de uma seleção
+        # anterior, e só quando o cliente diz não haver nenhuma: apagar
+        # a que está ativa por causa de uma recusa que tinha outro
+        # motivo deixaria o jogador sem página se a segunda também
+        # falhasse.
+        if self._out_of_room():
+            try:
+                self._discard_old_pages()
+                return self._client.post(endpoints.PERK_PAGES, json=body)
+            except ClientClosed:
+                raise
+            except LcuError:
+                pass
         try:
-            return self._client.post(endpoints.PERK_PAGES, json=body)
+            return self._client.post(
+                endpoints.PERK_PAGES, json={**body, "isTemporary": True}
+            )
         except ClientClosed:
             raise
         except LcuError as exc:

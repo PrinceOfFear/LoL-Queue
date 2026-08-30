@@ -17,7 +17,9 @@ import pytest
 from lolqueue.config import Config
 from lolqueue.core.champions import ChampionCatalog
 from lolqueue.core.loadout import (
+    MAX_PAGE_FIXES,
     MAX_SPELL_ATTEMPTS,
+    PAGE_CHECK_SECONDS,
     PAGE_PREFIX,
     SPELL_RETRY_SECONDS,
     WAIT_SECONDS,
@@ -74,6 +76,7 @@ def build(
     source=None,
     now=None,
     on_options=None,
+    deaf=None,
 ):
     base = {
         endpoints.CHAMPION_SUMMARY: SUMMARY,
@@ -86,7 +89,10 @@ def build(
     }
     base.update(responses or {})
     client = FakeLcuClient(
-        base, posts={endpoints.PERK_PAGES: {"id": 77}}, failures=failures
+        base,
+        posts={endpoints.PERK_PAGES: {"id": 77}},
+        failures=failures,
+        deaf=deaf,
     )
     catalog = ChampionCatalog(client)
     catalog.load()
@@ -296,14 +302,17 @@ def test_it_creates_the_page_from_the_recommendation():
     assert body["name"].startswith(PAGE_PREFIX)
 
 
-def test_the_page_is_born_temporary_so_it_takes_no_slot():
-    """`isTemporary` é o mesmo campo das páginas que o cliente recomenda:
-    aparecem na lista, dá para ativar, e não ocupam vaga."""
+def test_the_page_is_born_permanent_because_temporary_is_the_clients_drawer():
+    """`isTemporary` parecia de graça — não ocupa vaga — até se ver de
+    quem é a gaveta: é a mesma das páginas que o cliente recomenda, e
+    ele a esvazia quando quer. Medido no cliente real: a nossa criada
+    temporária às 08:05:34, a recomendação dele no lugar às 08:07:18, e
+    a partida carregando as runas dele."""
     loadout, client, _ = build(Config(auto_runes=True))
 
     loadout.apply(session())
 
-    assert page_body(client)["isTemporary"] is True
+    assert "isTemporary" not in page_body(client)
 
 
 def test_a_full_account_still_gets_its_page():
@@ -322,6 +331,8 @@ def test_a_full_account_still_gets_its_page():
         },
     )
 
+    recusa_permanente(client)
+
     loadout.apply(session())
 
     assert page_body(client)["selectedPerkIds"] == PERK_IDS
@@ -329,48 +340,65 @@ def test_a_full_account_still_gets_its_page():
     assert (endpoints.PERK_CURRENT_PAGE, 77) in client.payloads
 
 
-def recusa_temporaria(client) -> None:
-    """Um cliente que não aceita a bandeira, para provar o outro caminho."""
+def recusa_permanente(client) -> None:
+    """Um cliente sem vaga: recusa a página permanente, aceita a temporária.
+
+    É a conta emprestada com as vagas todas ocupadas por páginas do
+    dono — as que o app não apaga por princípio.
+    """
     original = client.post
 
     def post(path, json=None):
-        if path == endpoints.PERK_PAGES and (json or {}).get("isTemporary"):
+        if path == endpoints.PERK_PAGES and not (json or {}).get("isTemporary"):
             client.calls.append(("POST", path))
-            raise LcuError("página temporária recusada")
+            raise LcuError("sem vaga para página permanente")
         return original(path, json)
 
     client.post = post
 
 
-def test_a_client_that_refuses_the_temporary_page_still_gets_one():
-    """A permanente segue sendo o segundo caminho, não o único."""
+def test_a_client_with_no_slot_left_still_gets_a_temporary_page():
+    """Entrar com uma runa que o cliente talvez troque ainda é melhor do
+    que entrar sem runa nenhuma — e agora há quem confira e a reponha."""
     loadout, client, _ = build(Config(auto_runes=True))
-    recusa_temporaria(client)
+    recusa_permanente(client)
 
     loadout.apply(session())
 
     corpo = page_body(client)
-    assert "isTemporary" not in corpo
+    assert corpo["isTemporary"] is True
     assert corpo["selectedPerkIds"] == PERK_IDS
     assert (endpoints.PERK_CURRENT_PAGE, 77) in client.payloads
 
 
-def test_the_permanent_fallback_still_frees_our_own_slot_first():
-    """Sem vaga, a conversa sobre abrir espaço continua onde sempre esteve."""
+def test_the_permanent_page_is_retried_after_freeing_our_own_slot():
+    """Sem vaga, a conversa sobre abrir espaço continua onde sempre esteve
+    — e a vaga aberta é a nossa, nunca a do usuário."""
     loadout, client, _ = build(
         Config(auto_runes=True),
         responses={
             endpoints.PERK_PAGES: [USER_PAGE, MY_PAGE],
             endpoints.PERK_INVENTORY: {"canAddCustomPage": False},
         },
+        failures={("POST", endpoints.PERK_PAGES)},
     )
-    recusa_temporaria(client)
+    # A primeira recusa é a que manda abrir espaço; depois dela o
+    # cliente volta a aceitar, que é o que o app espera ter conseguido.
+    original = client.post
+
+    def post(path, json=None):
+        if path == endpoints.PERK_PAGES:
+            client.failures.discard(("POST", endpoints.PERK_PAGES))
+        return original(path, json)
+
+    client.post = post
 
     loadout.apply(session())
 
     apagadas = client.paths("DELETE")
     assert endpoints.PERK_PAGE.format(page_id=1) in apagadas
     assert endpoints.PERK_PAGE.format(page_id=2) not in apagadas
+    assert "isTemporary" not in page_body(client)
 
 
 def test_it_makes_the_new_page_the_current_one():
@@ -476,6 +504,222 @@ def test_a_new_selection_hears_the_complaint_again():
     loadout.apply(session())
 
     assert len([m for m in messages if "espaço" in m]) == 2
+
+
+# ---------- a página continua de pé ----------
+
+
+#: A página que o cliente põe no lugar da nossa: temporária, com o nome
+#: da recomendação dele. Copiada do cliente real, onde apareceu com a
+#: nossa às 08:05:34 e esta às 08:07:18.
+LADRA = {
+    "id": 1322479888,
+    "name": "Ashe — Ritmo Fatal",
+    "isTemporary": True,
+    "selectedPerkIds": [8008, 8009, 9104, 8017, 8410, 8345, 5005, 5008, 5011],
+}
+
+
+def rouba(client, pagina=LADRA):
+    client.responses[endpoints.PERK_CURRENT_PAGE] = dict(pagina)
+
+
+def ativacoes(client):
+    return [alvo for alvo, _ in client.payloads if alvo == endpoints.PERK_CURRENT_PAGE]
+
+
+def leituras(client):
+    return client.paths("GET").count(endpoints.PERK_CURRENT_PAGE)
+
+
+def test_a_swap_the_client_swallowed_is_not_announced_as_done():
+    """`PUT /currentpage` responde 2xx e às vezes não troca nada.
+
+    Sem reler, o diário dizia “Runas aplicadas” enquanto a partida
+    carregava outra página — a falha calada mais cara do app, porque
+    ninguém tinha como saber dela antes do primeiro minuto de jogo.
+    """
+    loadout, client, messages = build(
+        Config(auto_runes=True), deaf={endpoints.PERK_CURRENT_PAGE}
+    )
+
+    loadout.apply(session())
+
+    assert not any("aplicadas" in message for message in messages)
+    assert any("não ficou com a página" in message for message in messages)
+
+
+def test_a_swap_the_client_swallowed_does_not_cost_the_old_page():
+    """Falhar em trocar é ruim; falhar e ainda apagar a página de antes
+    é entrar em partida sem runa nenhuma."""
+    loadout, client, _ = build(
+        Config(auto_runes=True),
+        responses={endpoints.PERK_PAGES: [USER_PAGE, MY_PAGE]},
+        deaf={endpoints.PERK_CURRENT_PAGE},
+    )
+
+    loadout.apply(session())
+
+    assert client.paths("DELETE") == []
+
+
+def test_a_page_that_came_back_different_is_not_the_page_we_wrote():
+    """O POST aceita um perk fora da árvore e o grava sem ele.
+
+    Id igual, conteúdo diferente: para o jogador é runa errada, e o
+    app precisa tratar como falha em vez de anunciar sucesso.
+    """
+    loadout, client, messages = build(Config(auto_runes=True))
+    original = client.put
+
+    def put(path, json=None):
+        original(path, json)
+        if path == endpoints.PERK_CURRENT_PAGE:
+            pagina = dict(client.responses[path])
+            pagina["selectedPerkIds"] = PERK_IDS[:-1]
+            client.responses[path] = pagina
+
+    client.put = put
+
+    loadout.apply(session())
+
+    assert not any("aplicadas" in message for message in messages)
+
+
+def test_it_puts_its_page_back_when_the_client_takes_over():
+    """Conferir na hora de gravar não prova nada sobre o que entra na
+    partida: o cliente trocou a página um minuto e quarenta e três
+    depois do app gravá-la, já com o campeão travado."""
+    relogio = Relogio()
+    loadout, client, messages = build(Config(auto_runes=True), now=relogio)
+
+    loadout.apply(session())
+    rouba(client)
+    relogio.adiante(PAGE_CHECK_SECONDS)
+    loadout.apply(session())
+
+    assert len(ativacoes(client)) == 2
+    assert any("de volta" in message for message in messages)
+
+
+def test_it_recreates_the_page_when_the_client_deleted_it():
+    """Nem sempre há o que ativar: o cliente apaga a nossa para pôr a dele."""
+    relogio = Relogio()
+    loadout, client, messages = build(Config(auto_runes=True), now=relogio)
+
+    loadout.apply(session())
+    rouba(client)
+    relogio.adiante(PAGE_CHECK_SECONDS)
+    # O 404 de quem tenta ativar uma página que não existe mais: uma
+    # recusa só, porque a página recriada depois dela é outra.
+    original = client.put
+    recusas = [True]
+
+    def put(path, json=None):
+        if path == endpoints.PERK_CURRENT_PAGE and recusas:
+            recusas.pop()
+            client.calls.append(("PUT", path))
+            raise LcuError("página inexistente")
+        return original(path, json)
+
+    client.put = put
+    loadout.apply(session())
+
+    assert client.paths("POST").count(endpoints.PERK_PAGES) == 2
+    assert any("de volta" in message for message in messages)
+
+
+def test_it_leaves_a_page_the_player_chose_by_hand_alone():
+    """Permanente com nome alheio é escolha à mão na tela de runas.
+
+    O app confere a própria página, não disputa a do jogador: quem
+    troca de propósito no meio da seleção manda mais.
+    """
+    relogio = Relogio()
+    loadout, client, messages = build(Config(auto_runes=True), now=relogio)
+
+    loadout.apply(session())
+    rouba(client, USER_PAGE)
+    for _ in range(3):
+        relogio.adiante(PAGE_CHECK_SECONDS)
+        loadout.apply(session())
+
+    assert len(ativacoes(client)) == 1
+    assert not any("de volta" in message for message in messages)
+
+
+def test_it_stops_fighting_a_client_that_insists():
+    """Três recolocações e o app conta o que houve em vez de brigar em laço."""
+    relogio = Relogio()
+    loadout, client, messages = build(Config(auto_runes=True), now=relogio)
+
+    loadout.apply(session())
+    for _ in range(MAX_PAGE_FIXES + 1):
+        rouba(client)
+        relogio.adiante(PAGE_CHECK_SECONDS)
+        loadout.apply(session())
+
+    assert len(ativacoes(client)) == 1 + MAX_PAGE_FIXES
+    assert any("insiste em trocar" in message for message in messages)
+
+
+def test_the_page_is_not_checked_on_every_single_tick():
+    """A seleção roda de fração em fração de segundo; conferir a cada
+    volta seria uma leitura por tick sem nada em troca."""
+    relogio = Relogio()
+    loadout, client, _ = build(Config(auto_runes=True), now=relogio)
+
+    loadout.apply(session())
+    antes = leituras(client)
+    for _ in range(5):
+        loadout.apply(session())
+
+    assert leituras(client) == antes
+
+
+def test_a_read_that_failed_is_not_evidence_of_a_swap():
+    """Regravar é caro — cria, ativa e apaga. Chutar “trocaram” numa
+    leitura que falhou faria o app pagar esse preço por engano."""
+    relogio = Relogio()
+    loadout, client, _ = build(Config(auto_runes=True), now=relogio)
+
+    loadout.apply(session())
+    client.failures.add(("GET", endpoints.PERK_CURRENT_PAGE))
+    relogio.adiante(PAGE_CHECK_SECONDS)
+    loadout.apply(session())
+
+    assert len(ativacoes(client)) == 1
+
+
+def test_the_guard_respects_the_switch_being_off():
+    """Desligar as runas automáticas desliga também quem as vigia."""
+    relogio = Relogio()
+    config = Config(auto_runes=True)
+    loadout, client, _ = build(config, now=relogio)
+
+    loadout.apply(session())
+    config.auto_runes = False
+    rouba(client)
+    relogio.adiante(PAGE_CHECK_SECONDS)
+    loadout.apply(session())
+
+    assert len(ativacoes(client)) == 1
+
+
+def test_a_new_selection_starts_the_page_watch_over():
+    """A página da seleção passada não é assunto da próxima."""
+    relogio = Relogio()
+    loadout, client, _ = build(Config(auto_runes=True), now=relogio)
+
+    loadout.apply(session())
+    loadout.reset()
+    rouba(client)
+    relogio.adiante(PAGE_CHECK_SECONDS)
+    loadout.apply(session(champion_id=96))
+
+    # A reposição da página velha não acontece; o que acontece é a
+    # instalação nova da seleção que começou.
+    assert client.paths("POST").count(endpoints.PERK_PAGES) == 2
 
 
 # ---------- quando agir ----------
@@ -1070,11 +1314,6 @@ def test_the_automatic_page_is_still_the_settings_tier():
             "primaryStyleId": 8100,
             "subStyleId": 8200,
             "selectedPerkIds": list(DESAFIANTE.perks),
-            # A página nasce temporária porque assim ela não ocupa vaga
-            # nenhuma — ver `_create_page`. Numa conta com as duas vagas
-            # cheias de páginas do dono, era este `isTemporary` que
-            # faltava para a runa entrar.
-            "isTemporary": True,
         }
     ]
 
