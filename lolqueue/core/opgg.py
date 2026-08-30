@@ -17,11 +17,11 @@ levantar exceção nenhuma para fora.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from . import mcp_format
-from .buildblocks import MAX_ALTERNATIVES, Block, slot
+from .buildblocks import MAX_ALTERNATIVES, Block, extras, slot
 
 ENDPOINT = "https://mcp-api.op.gg/mcp"
 TOOL = "lol_get_champion_analysis"
@@ -72,8 +72,24 @@ ITEM_BLOCKS = (
     ("fourth_items", "4º item"),
     ("fifth_items", "5º item"),
     ("sixth_items", "6º item"),
-    ("last_items", "Último item"),
 )
+
+#: O campo que a numeração da lista acima **não** inclui, e o rótulo
+#: com que ele entra na loja.
+#:
+#: `last_items` esteve nessa lista como "Último item", e era mentira
+#: medida: no Darius de Diamante+ o núcleo tem 1374 partidas e este
+#: campo tem 22438. Ninguém termina a build vinte vezes mais do que a
+#: começa — o campo é o ranking dos itens mais construídos do campeão,
+#: não a última compra. O estrago aparecia na loja: o Thresh fechava
+#: com o Trenó do Solstício e a Ahri com o Lacre Sombrio, de 350 de
+#: ouro. Agora ele é o que sempre foi, e o rótulo diz isso.
+EXTRA_FIELD = "last_items"
+EXTRA_LABEL = "Situacionais"
+
+#: O campo de onde sai a amostra que mede a build inteira. É o trio
+#: central: se ele não tem partidas, nenhum degrau depois dele tem.
+SAMPLE_FIELD = "core_items"
 
 #: Os campos que formam o build inteiro, iguais em toda página. Os
 #: outros são escolhas entre alternativas, e cada uma vira uma página.
@@ -105,10 +121,49 @@ ALTERNATIVES = {
     "core_items": 1,
 }
 
-#: Os degraus que não disputam espaço com nenhum outro: consumível se
-#: compra de novo a cada volta, e botas não ocupam a vaga de lendário.
-#: Ficam fora do controle de itens repetidos.
-FRESH_FIELDS = frozenset({"starter_items", "boots"})
+#: Amostra abaixo da qual o arsenal daquele elo não se sustenta, e o
+#: pedido escorrega para o elo de baixo (`TIER_WIDER`).
+#:
+#: É o mesmo `MIN_PLAYS` de `ranking`, e pelo mesmo motivo: abaixo de
+#: cinquenta partidas o intervalo de confiança da taxa fica mais largo
+#: que a faixa inteira onde as builds de verdade vivem. A diferença é
+#: o que se faz com isso — `ranking` desclassifica a alternativa, e
+#: aqui a resposta inteira é trocada por uma que tenha amostra.
+MIN_BUILD_SAMPLE = 50
+
+#: Para onde o pedido escorrega quando o elo escolhido não tem
+#: partidas suficientes. Cada passo abre a faixa sem trocar o patamar
+#: de jogo: Desafiante vira Mestre+, não Ouro.
+#:
+#: O problema é real e mede-se fácil: a Ashe de ADC no Desafiante tem
+#: 85 partidas no elo inteiro, e o 5º e o 6º item saíam de amostras de
+#: **duas**. Quem escolhe "Desafiante" nos Ajustes quer a build de quem
+#: joga melhor, não uma build sorteada — e o elo de baixo ainda é o
+#: mesmo grupo de jogadores, só que com amostra que aguenta uma
+#: recomendação.
+TIER_WIDER = {
+    "challenger": "master_plus",
+    "grandmaster": "master_plus",
+    "master": "master_plus",
+    "master_plus": "diamond_plus",
+    "diamond": "diamond_plus",
+    "diamond_plus": "emerald_plus",
+    "emerald": "emerald_plus",
+    "emerald_plus": "platinum_plus",
+    "platinum": "platinum_plus",
+    "platinum_plus": "gold_plus",
+    "gold": "gold_plus",
+    "gold_plus": "all",
+    "silver": "all",
+    "bronze": "all",
+    "iron": "all",
+}
+
+#: Quantas vezes o pedido pode escorregar. Dois passos levam do
+#: Desafiante ao Diamante+, que é onde qualquer campeão de qualquer
+#: rota já tem amostra de sobra; um terceiro só trocaria o patamar de
+#: jogo sem resolver nada que os dois primeiros não resolveram.
+MAX_TIER_SLIPS = 2
 
 #: Os dois modos com dados: fila ranqueada e Abismo. Normal e URF
 #: existem no servidor mas voltam vazios.
@@ -255,6 +310,13 @@ class Build:
     e feitiços continuam sendo tudo-ou-nada: perder a grade de counters
     não estraga uma partida, entrar com meia página de runas estraga.
 
+    `sample` é o tamanho da amostra que mediu o núcleo da build, e
+    existe para uma decisão só: saber se vale a pena repetir a pergunta
+    num elo mais amplo (`OpggSource.fetch`). `item_tier` guarda o elo de
+    onde o arsenal acabou vindo, e fica vazio quando é o mesmo que foi
+    pedido — quem lê não precisa comparar duas strings para saber se
+    houve troca.
+
     `rune_pages` são páginas de runa alternativas, cada uma com o
     critério que a elegeu no nome. Fica vazio nesta fonte — o
     `champion_analysis` devolve uma página só, e é justamente essa
@@ -276,6 +338,8 @@ class Build:
     synergies: tuple[Synergy, ...] = ()
     stats: Stats | None = None
     damage_type: str = ""
+    sample: int = 0
+    item_tier: str = ""
 
 
 def _letters(value: str) -> tuple[str, ...]:
@@ -440,6 +504,18 @@ def _pages(data: dict[str, str], schema: dict[str, list[str]]) -> tuple[Page, ..
     `bought` atravessa os degraus: o OP.GG mede cada profundidade por
     conta, e o mesmo lendário encabeça o 4º e o 6º item de vários
     campeões. Sem esse controle a loja mandaria comprá-lo duas vezes.
+    Ele atravessa **todos** os degraus, inclusive iniciais e botas: a
+    exceção que existia ali dizia respeito a consumível, e quem cuida
+    de consumível agora é `buildblocks.CONSUMABLES`, item a item. Com a
+    exceção antiga, a Lágrima da Deusa do Nautilus saía em "Iniciais" e
+    outra vez em "Principais".
+
+    O último bloco não é um degrau: `last_items` é o ranking dos itens
+    mais construídos do campeão, e entra como "Situacionais" com o que
+    a lista de compra ainda não cobriu. Ele filtra por **tudo o que já
+    está na tela**, não só pelas compras recomendadas: alternativa
+    repetida num bloco chamado "Situacionais" não oferece situação
+    nenhuma, só ocupa a linha que o item novo ocuparia.
     """
     blocks: list[Block] = []
     bought: set[int] = set()
@@ -450,16 +526,33 @@ def _pages(data: dict[str, str], schema: dict[str, list[str]]) -> tuple[Page, ..
         options = _field_options(mcp_format.entries(raw), label, schema)
         if not options:
             continue
-        block = slot(
-            options,
-            set() if field in FRESH_FIELDS else bought,
-            ALTERNATIVES.get(field, MAX_ALTERNATIVES),
-        )
+        block = slot(options, bought, ALTERNATIVES.get(field, MAX_ALTERNATIVES))
+        if block is not None:
+            blocks.append(block)
+    raw = data.get(EXTRA_FIELD)
+    if raw is not None:
+        options = _field_options(mcp_format.entries(raw), EXTRA_LABEL, schema)
+        na_tela = bought | {item for block in blocks for item in block.items}
+        block = extras(options, na_tela, EXTRA_LABEL)
         if block is not None:
             blocks.append(block)
     if not blocks:
         return ()
     return (Page(label="", blocks=tuple(blocks)),)
+
+
+def _sample(data: dict[str, str], schema: dict[str, list[str]]) -> int:
+    """Quantas partidas mediram o núcleo da build.
+
+    Zero quando o campo falta — e zero é a resposta certa, porque quem
+    pergunta (`OpggSource.fetch`) trata "não sei" e "quase nada" do
+    mesmo jeito: perguntando de novo num elo mais amplo.
+    """
+    raw = data.get(SAMPLE_FIELD)
+    if raw is None:
+        return 0
+    options = _field_options(mcp_format.entries(raw), "", schema)
+    return sum(option.games for option in options)
 
 
 def parse_build(text: str) -> Build | None:
@@ -514,12 +607,23 @@ def parse_build(text: str) -> Build | None:
         synergies=_synergies(data.get("synergies"), schema),
         stats=_stats(data.get("summary"), schema),
         damage_type=(data.get("damage_type") or "").strip().strip('"'),
+        sample=_sample(data, schema),
     )
 
 
 def _send(arguments: dict) -> str:
     """Chama a ferramenta de análise de campeão e devolve o texto da resposta."""
     return mcp_format.send_tool(ENDPOINT, TOOL, arguments)
+
+
+class _Offline(Exception):
+    """A rede falhou — não houve resposta.
+
+    Existe para não se confundir com a outra ausência, a que o
+    servidor devolve de propósito: elo sem partidas o bastante. As
+    duas chegavam como ``None`` e mereciam tratamentos opostos —
+    uma pede desistir, a outra pede perguntar num elo mais amplo.
+    """
 
 
 class OpggSource:
@@ -533,6 +637,10 @@ class OpggSource:
     def __init__(self, send: Callable[[dict], str] | None = None) -> None:
         self._send = send or _send
         self._cache: dict[tuple[str, str, str], Build] = {}
+        # As respostas cruas, antes do arsenal escorregar de elo. Ficam
+        # à parte porque a mesma chave guarda coisas diferentes nos dois
+        # lados: aqui o que o elo respondeu, lá o que o app entrega.
+        self._raw: dict[tuple[str, str, str], Build] = {}
 
     def fetch(
         self, champion: str, position: str | None, aram: bool, tier: str = TIER
@@ -563,6 +671,33 @@ class OpggSource:
             return self._cache[key]
 
         try:
+            build = self._widen(
+                self._ask(champion, lane, mode, tier),
+                champion,
+                lane,
+                mode,
+                tier,
+            )
+        except _Offline:
+            # Guardar a falha no cache condenaria a sessão inteira: a
+            # rede volta, e insistir na seleção seguinte faz sentido.
+            return None
+        if build is None:
+            return None
+        self._cache[key] = build
+        return build
+
+    def _ask(self, champion: str, lane: str, mode: str, tier: str) -> Build | None:
+        """Uma pergunta ao servidor, sem julgar a resposta.
+
+        Devolve ``None`` quando o servidor respondeu e não havia o que
+        ler — elo sem partidas o bastante para este campeão nesta rota.
+        Levanta `_Offline` quando não houve resposta nenhuma.
+        """
+        key = (champion, lane if mode != ARAM_MODE else ARAM_MODE, tier)
+        if key in self._raw:
+            return self._raw[key]
+        try:
             text = self._send(
                 {
                     "champion": champion,
@@ -573,13 +708,66 @@ class OpggSource:
                     "desired_output_fields": list(FIELDS),
                 }
             )
-        except Exception:
+        except Exception as erro:
             # A rede é o caminho normal de falha aqui, e falhar é
-            # aceitável: quem chama tem a Riot de reserva. Guardar o
-            # erro no cache seria condenar a sessão inteira.
-            return None
-
+            # aceitável: quem chama tem a Riot de reserva. O que não
+            # pode é passar por "elo sem dado" e disparar o
+            # alargamento: seriam três idas à rede caída pelo mesmo
+            # nada, e três vezes a espera antes de cair na Riot.
+            raise _Offline(str(erro)) from erro
         build = parse_build(text or "")
         if build is not None:
-            self._cache[key] = build
+            self._raw[key] = build
         return build
+
+    def _widen(
+        self, build: Build | None, champion: str, lane: str, mode: str, tier: str
+    ) -> Build | None:
+        """Troca o arsenal por um de elo mais amplo quando falta amostra.
+
+        **Só o arsenal.** As runas e os feitiços continuam sendo os do
+        elo pedido, e a diferença não é detalhe: quem escolhe
+        "Desafiante" nos Ajustes está pedindo a página de runa de quem
+        joga melhor, e página de runa é escolha estável — o campeão usa
+        a mesma com 80 partidas ou com 8000. Item não: o OP.GG mede
+        cada degrau da compra por conta, e no Desafiante o 5º e o 6º
+        item da Ashe saíam de amostras de duas partidas, com 0% de
+        vitória entrando na loja como recomendação.
+
+        Escorregar aqui e não na pergunta inteira também preserva o
+        comparador de elos da tela de runas (`loadout._start_options`),
+        que ficaria mostrando a mesma página três vezes se o elo
+        trocasse por baixo dele.
+
+        A exceção é o elo que não respondeu nada — acontece de verdade,
+        e o campeão fora do lugar habitual é justamente quem mais
+        precisa de conselho: a Sona no topo não existe no Desafiante,
+        nem a página de runa nem o arsenal. Aí o elo amplo entra
+        inteiro, porque a alternativa é o jogador não receber nada.
+
+        Devolve o `build` original, intacto, quando a amostra já basta
+        ou quando nenhum elo mais amplo respondeu melhor.
+        """
+        melhor, melhor_tier, atual = build, tier, tier
+        for _ in range(MAX_TIER_SLIPS):
+            if melhor is not None and melhor.sample >= MIN_BUILD_SAMPLE:
+                break
+            seguinte = TIER_WIDER.get(atual)
+            if seguinte is None or seguinte == atual:
+                break
+            atual = seguinte
+            largo = self._ask(champion, lane, mode, atual)
+            if largo is None:
+                continue
+            if melhor is None or largo.sample > melhor.sample:
+                melhor, melhor_tier = largo, atual
+        if melhor is None or melhor_tier == tier:
+            return build
+        if build is None:
+            return replace(melhor, item_tier=melhor_tier)
+        return replace(
+            build,
+            pages=melhor.pages,
+            sample=melhor.sample,
+            item_tier=melhor_tier,
+        )

@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import ranking
-from .buildblocks import Block, slot
+from .buildblocks import Block, extras, slot
 from .opgg import Build, Page, RunePage, Stats
 
 TOOL = "lol_get_lane_matchup_guide"
@@ -63,7 +63,13 @@ PLAY_STYLES = {
 #: Os blocos que abrem a lista de compra, antes dos lendários.
 STARTER_LABEL = "Iniciais"
 BOOTS_LABEL = "Botas"
-LAST_LABEL = "Último item"
+
+#: `last_items` não é a última compra: é o ranking dos itens mais
+#: construídos, e a amostra dele costuma ser maior que a do primeiro
+#: degrau. O rótulo antigo, "Último item", mandava fechar a build com
+#: item de começo de partida. Ver `opgg.EXTRA_LABEL`, que é o mesmo
+#: campo pelo mesmo motivo — o vocabulário da loja é um só.
+EXTRA_LABEL = "Situacionais"
 
 #: `single_items` vem aberto por `depth`: a profundidade da compra.
 #: Cada degrau é um bloco da loja, e é o que aparece lado a lado
@@ -156,10 +162,13 @@ def _item_page(data: dict) -> tuple[Page, ...]:
     blocks: list[Block] = []
     bought: set[int] = set()
 
-    # Iniciais e botas ficam fora do controle de repetidos: consumível
-    # se compra de novo, e botas não competem com lendário nenhum.
+    # Iniciais e botas entram na reserva como qualquer degrau: quem
+    # escapa dela é o consumível, item a item, por
+    # `buildblocks.CONSUMABLES`. Com a exceção antiga — o degrau
+    # inteiro de fora — o item inicial permanente reaparecia no meio
+    # dos lendários, mandando comprar dois.
     for field, label in (("starter_items", STARTER_LABEL), ("boots", BOOTS_LABEL)):
-        block = slot(_options(data.get(field), label), set())
+        block = slot(_options(data.get(field), label), bought)
         if block is not None:
             blocks.append(block)
 
@@ -176,9 +185,9 @@ def _item_page(data: dict) -> tuple[Page, ...]:
             if block is not None:
                 blocks.append(block)
 
-    last = slot(_options(data.get("last_items"), LAST_LABEL), bought)
-    if last is not None:
-        blocks.append(last)
+    extra = extras(_options(data.get("last_items"), EXTRA_LABEL), bought, EXTRA_LABEL)
+    if extra is not None:
+        blocks.append(extra)
 
     if not blocks:
         return ()

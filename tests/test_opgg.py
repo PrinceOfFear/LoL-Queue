@@ -209,7 +209,13 @@ def todos_os_itens(texto):
     }
 
 
-DEGRAUS = ["Iniciais", "Botas", "Principais", "4º item", "5º item", "6º item"]
+#: Os degraus que a `COMPLETA` produz. Não tem 6º item de propósito: o
+#: 6º slot dessa captura mede duas partidas, e amostra dessa altura não
+#: chega à loja (veja o teste do piso logo abaixo).
+DEGRAUS = ["Iniciais", "Botas", "Principais", "4º item", "5º item"]
+
+#: A lista inteira, para as capturas cujo 6º slot tem amostra.
+DEGRAUS_COM_SEXTO = DEGRAUS + ["6º item"]
 
 
 def test_each_step_of_the_purchase_gets_its_own_title():
@@ -217,6 +223,17 @@ def test_each_step_of_the_purchase_gets_its_own_title():
     primeira = parse_build(COMPLETA).pages[0].blocks
 
     assert [b.label for b in primeira] == DEGRAUS
+
+
+def test_a_slot_measured_on_a_handful_of_games_never_reaches_the_shop():
+    """O 6º slot da captura real mede 2, 2 e 1 partidas.
+
+    Era mostrado como qualquer outro degrau — mesma tipografia, mesma
+    cara de recomendação — e o jogador não tinha como saber que aquilo
+    era ruído. Agora o degrau some, e a lista de compra encurta.
+    """
+    assert "6º item" not in blocos(COMPLETA)
+    assert 4646 not in todos_os_itens(COMPLETA)  # Stormsurge, 2 partidas
 
 
 def test_a_step_shows_the_alternatives_side_by_side():
@@ -286,7 +303,7 @@ SEXTO_SEM_AMOSTRA = COMPLETA.replace(
     '[CoreItems([4646],["Stormsurge"],2,0,0.25),'
     'CoreItems([3157],["Zhonya\'s Hourglass"],2,1,0.25),'
     'CoreItems([3102],["Banshee\'s Veil"],1,1,0.13)]',
-    '[CoreItems([4646],["Stormsurge"],9,3,0.25),'
+    '[CoreItems([4646],["Stormsurge"],19,7,0.25),'
     'CoreItems([3102],["Banshee\'s Veil"],1,1,0.13)]',
 )
 
@@ -445,31 +462,75 @@ def test_an_empty_slot_just_drops_out_of_the_list():
     assert 3135 in itens  # Void Staff, que veio do 4º e do 5º
 
 
-#: `COMPLETA` mais o `last_items` que uma captura real também trouxe
-#: (Ahri, meio) — o único campo de item que o app ainda não pedia.
-COM_ULTIMO_ITEM = COMPLETA.replace(
-    "class Data: core_items,boots,starter_items,fourth_items,"
-    "fifth_items,sixth_items,summoner_spells,runes\n",
-    "class Data: core_items,boots,starter_items,fourth_items,"
-    "fifth_items,sixth_items,last_items,summoner_spells,runes\n",
-).replace(
-    "CoreItems([4,14],[4,14],6384,3240,0.7),",
-    "[CoreItems([3089],[\"Rabadon's Deathcap\"],669,435,0.19),"
-    "CoreItems([3135],[\"Void Staff\"],606,327,0.17)],"
-    "CoreItems([4,14],[4,14],6384,3240,0.7),",
+def _com_ultimos(itens: str) -> str:
+    """`COMPLETA` acrescida de um `last_items`, que ela não traz."""
+    return COMPLETA.replace(
+        "class Data: core_items,boots,starter_items,fourth_items,"
+        "fifth_items,sixth_items,summoner_spells,runes\n",
+        "class Data: core_items,boots,starter_items,fourth_items,"
+        "fifth_items,sixth_items,last_items,summoner_spells,runes\n",
+    ).replace(
+        "CoreItems([4,14],[4,14],6384,3240,0.7),",
+        itens + "CoreItems([4,14],[4,14],6384,3240,0.7),",
+    )
+
+
+#: O `last_items` de uma captura real (Ahri, meio) — o campo que o app
+#: leu por último. Rabadon's já encabeça outro degrau; Horizon Focus
+#: não aparece em lugar nenhum da lista de compra, e é o que sobra.
+COM_ULTIMO_ITEM = _com_ultimos(
+    '[CoreItems([4628],["Horizon Focus"],669,435,0.19),'
+    'CoreItems([3089],["Rabadon\'s Deathcap"],606,327,0.17)],'
 )
 
 
-def test_the_last_item_slot_is_read_too():
-    """`last_items` é o único campo de item que o app ainda não pedia.
+def test_the_most_built_items_become_the_situational_block():
+    """`last_items` não é "o último item", por mais que o nome diga.
 
-    Ele não traz item exclusivo aqui — Rabadon's e Void Staff também
-    encabeçam outros slots —, então a prova é o efeito: com o campo, a
-    lista de compra ganha um quarto slot e as páginas mudam.
+    É o ranking dos itens mais construídos do campeão inteiro — no
+    Darius de Diamante+ ele mede 22438 partidas contra 1374 do núcleo,
+    e um "último item" não pode ter dezesseis vezes mais amostra que o
+    começo da build. Lido como degrau, mandava fechar a build com item
+    de 350 de ouro. Lido como o que é, vira a lista de saídas que a
+    ordem de compra ainda não cobriu.
     """
-    assert "Último item" not in blocos(COMPLETA)
-    assert "Último item" in blocos(COM_ULTIMO_ITEM)
-    assert parse_build(COM_ULTIMO_ITEM).pages != parse_build(COMPLETA).pages
+    assert "Último item" not in blocos(COM_ULTIMO_ITEM)
+    assert degrau(COM_ULTIMO_ITEM, "Situacionais") == (4628,)
+
+
+def test_the_situational_block_skips_what_is_already_on_screen():
+    """Alternativa repetida não oferece situação nenhuma.
+
+    Rabadon's lidera o 5º item; repeti-la aqui só ocuparia a linha que
+    o item novo ocuparia. O filtro é contra **tudo o que está na
+    tela**, não só contra as compras recomendadas — as alternativas dos
+    degraus anteriores também já estão à vista.
+    """
+    assert 3089 in todos_os_itens(COMPLETA)  # Rabadon's, no 4º e no 5º
+    assert 3089 not in degrau(COM_ULTIMO_ITEM, "Situacionais")
+
+
+def test_a_situational_block_with_nothing_new_just_drops():
+    """Sobrando só o que a build já comprou, o bloco não aparece."""
+    texto = _com_ultimos(
+        '[CoreItems([3089],["Rabadon\'s Deathcap"],669,435,0.19),'
+        'CoreItems([3135],["Void Staff"],606,327,0.17)],'
+    )
+
+    assert "Situacionais" not in blocos(texto)
+
+
+def test_a_starting_item_is_never_advice_for_the_late_game():
+    """O ranking dos mais construídos é liderado pelo que se compra aos
+    quatro minutos: na Ahri de Mestre+ o bloco saía `(Bastão Rúnico,
+    Lacre Sombrio)` — 350 de ouro oferecidos como saída de fim de
+    partida, quando o jogador já vendeu o dele há vinte minutos."""
+    texto = _com_ultimos(
+        '[CoreItems([1082],["Dark Seal"],669,435,0.19),'
+        'CoreItems([4628],["Horizon Focus"],606,327,0.17)],'
+    )
+
+    assert degrau(texto, "Situacionais") == (4628,)
 
 
 #: `COMPLETA` com o 6º item trazendo uma alternativa só. Acontece de
@@ -479,7 +540,7 @@ UM_SEXTO_ITEM = COMPLETA.replace(
     '[CoreItems([4646],["Stormsurge"],2,0,0.25),'
     'CoreItems([3157],["Zhonya\'s Hourglass"],2,1,0.25),'
     'CoreItems([3102],["Banshee\'s Veil"],1,1,0.13)]',
-    '[CoreItems([4646],["Stormsurge"],2,1,0.25)]',
+    '[CoreItems([4646],["Stormsurge"],19,10,0.25)]',
 )
 
 
@@ -487,7 +548,7 @@ def test_a_step_with_a_single_alternative_keeps_its_place_in_the_order():
     """O que decide a posição na lista de compra é o campo, não quantas
     alternativas voltaram. Contando alternativas, um 6º item sozinho
     virava “núcleo” e era comprado antes do 4º."""
-    assert list(blocos(UM_SEXTO_ITEM)) == DEGRAUS
+    assert list(blocos(UM_SEXTO_ITEM)) == DEGRAUS_COM_SEXTO
     # Stormsurge é o 6º slot: entra por último, mesmo sozinho.
     assert degrau(UM_SEXTO_ITEM, "6º item") == (4646,)
 
@@ -681,10 +742,59 @@ def test_a_broken_report_card_does_not_sink_the_build():
 # --- a fonte -------------------------------------------------------------
 
 
+#: `RESPOSTA` com um núcleo de amostra folgada enxertado.
+#:
+#: A captura crua não traz campo de item nenhum, e desde que o arsenal
+#: passou a escorregar de elo quando falta amostra isso significa "elo
+#: seco": qualquer `fetch` sobre ela dispararia duas perguntas extras,
+#: e os testes que contam idas à rede contariam o alargamento junto.
+#: Aqui o núcleo tem 816 partidas — o elo pedido basta, e a pergunta é
+#: uma só, que é o que esses testes querem medir.
+RESPOSTA_FIRME = RESPOSTA.replace(
+    "class Data: summoner_spells,runes\n",
+    "class Data: core_items,summoner_spells,runes\n"
+    "class CoreItems: ids,ids_names,play,win,pick_rate\n",
+).replace(
+    "LolGetChampionAnalysis(Data(SummonerSpells(",
+    "LolGetChampionAnalysis(Data(CoreItems([3118,3152,4645],"
+    '["Malignance","Hextech Rocketbelt","Shadowflame"],816,429,0.16),'
+    "SummonerSpells(",
+)
+
+
+def com_amostra(partidas: int) -> str:
+    """`RESPOSTA_FIRME` com o núcleo medido em tantas partidas."""
+    return RESPOSTA_FIRME.replace(
+        "816,429,0.16", f"{partidas},{partidas // 2},0.16"
+    )
+
+
+class TierSend:
+    """Uma resposta por elo, para acompanhar o escorregão do arsenal.
+
+    Elo ausente do mapa responde vazio — que é como o servidor de
+    verdade avisa que não tem partidas o bastante para este campeão
+    nesta rota. Vazio não é falha de rede: uma pede perguntar mais
+    largo, a outra pede desistir.
+    """
+
+    def __init__(self, answers):
+        self.answers = dict(answers)
+        self.calls = []
+
+    def __call__(self, arguments):
+        self.calls.append(arguments)
+        return self.answers.get(arguments["tier"], "")
+
+    @property
+    def tiers(self):
+        return [c["tier"] for c in self.calls]
+
+
 class FakeSend:
     """Substitui a ida à rede, guardando o que foi pedido."""
 
-    def __init__(self, answer=RESPOSTA, fail=False):
+    def __init__(self, answer=RESPOSTA_FIRME, fail=False):
         self.answer = answer
         self.fail = fail
         self.calls = []
@@ -795,7 +905,7 @@ def test_the_abyss_asks_once_no_matter_the_lane():
 
 
 def test_the_answer_becomes_a_build():
-    build = OpggSource(send=FakeSend()).fetch("Annie", "middle", aram=False)
+    build = OpggSource(send=FakeSend(RESPOSTA)).fetch("Annie", "middle", aram=False)
 
     assert build == Build(
         style=8100,
@@ -839,3 +949,110 @@ def test_a_failure_is_not_cached():
     source.fetch("Annie", "middle", aram=False)
 
     assert len(send.calls) == 2
+
+
+# --- o elo do arsenal ----------------------------------------------------
+
+
+def test_a_thin_elo_gets_its_arsenal_from_a_wider_one():
+    """Elo alto mede poucas partidas, e degrau de item é medido por
+    conta: no Desafiante o 5º e o 6º item da Ashe saíam de amostras de
+    duas partidas — com 0% de vitória entrando na loja com a mesma cara
+    de recomendação que o item de mil partidas.
+
+    Os números são os do servidor: 17 partidas no Desafiante contra
+    1125 em Mestre+, no mesmo campeão e na mesma rota.
+    """
+    send = TierSend(
+        {"challenger": com_amostra(17), "master_plus": com_amostra(1125)}
+    )
+
+    build = OpggSource(send=send).fetch(
+        "Ashe", "bottom", aram=False, tier="challenger"
+    )
+
+    assert send.tiers == ["challenger", "master_plus"]
+    assert build.sample == 1125
+    assert build.item_tier == "master_plus"
+
+
+def test_only_the_arsenal_slips_elo():
+    """Quem escolhe "Desafiante" nos Ajustes está pedindo a página de
+    runa de quem joga melhor, e página de runa é escolha estável — o
+    campeão usa a mesma com 80 partidas ou com 8000.
+
+    Escorregar só o arsenal também preserva o comparador de elos da
+    tela de runas, que ficaria mostrando a mesma página três vezes se o
+    elo trocasse por baixo dele.
+    """
+    largo = com_amostra(1125).replace(
+        "SummonerSpells([4,14],[4,14]", "SummonerSpells([4,12],[4,12]"
+    )
+    send = TierSend({"challenger": com_amostra(17), "master_plus": largo})
+
+    build = OpggSource(send=send).fetch(
+        "Ashe", "bottom", aram=False, tier="challenger"
+    )
+
+    assert build.spells == (4, 14)  # os do elo pedido
+    assert build.sample == 1125  # o arsenal veio do largo
+
+
+def test_an_elo_that_holds_its_sample_is_never_asked_twice():
+    """O alargamento custa segundos de rede por pergunta. Amostra que
+    já basta não paga esse preço — e é o caso comum."""
+    send = TierSend({"challenger": com_amostra(816)})
+
+    build = OpggSource(send=send).fetch(
+        "LeeSin", "jungle", aram=False, tier="challenger"
+    )
+
+    assert send.tiers == ["challenger"]
+    assert build.item_tier == ""
+
+
+def test_a_silent_elo_gives_way_to_the_wider_one_whole():
+    """O campeão fora do lugar habitual é quem mais precisa de conselho,
+    e é justamente quem o elo alto não mede: a Sona no topo não existe
+    no Desafiante — nem a página de runa, nem o arsenal.
+
+    Aí o elo amplo entra inteiro, porque a alternativa é o jogador não
+    receber nada. Antes disso o `fetch` devolvia ``None``.
+    """
+    send = TierSend({"master_plus": com_amostra(1125)})
+
+    build = OpggSource(send=send).fetch(
+        "Sona", "top", aram=False, tier="challenger"
+    )
+
+    assert build is not None
+    assert build.perks[0] == 8112
+    assert build.item_tier == "master_plus"
+
+
+def test_the_widening_gives_up_after_two_tries():
+    """Cada pergunta custa uns quatro segundos, e a seleção de campeão
+    não espera. Dois degraus cobrem o que o servidor tinha a oferecer:
+    medido no Teemo suporte, que sai de nada para 71 partidas em
+    Diamante+. Quem precisa de mais que isso — a Sona do topo — não
+    chega a uma amostra que valha a espera nem em `all`.
+    """
+    send = TierSend({})
+
+    build = OpggSource(send=send).fetch(
+        "Sona", "top", aram=False, tier="challenger"
+    )
+
+    assert build is None
+    assert send.tiers == ["challenger", "master_plus", "diamond_plus"]
+
+
+def test_a_network_failure_never_triggers_the_widening():
+    """Rede caída e elo seco chegavam os dois como ausência, e mereciam
+    tratamentos opostos. Confundi-los custava três idas à rede morta
+    pelo mesmo nada — e três vezes a espera antes de cair na Riot.
+    """
+    send = FakeSend(fail=True)
+
+    assert OpggSource(send=send).fetch("Annie", "middle", aram=False) is None
+    assert len(send.calls) == 1

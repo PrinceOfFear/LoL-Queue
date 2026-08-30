@@ -80,7 +80,7 @@ def test_the_shopping_list_comes_in_purchase_order():
         "2º item",
         "3º item",
         "4º item",
-        "Último item",
+        "Situacionais",
     ]
 
 
