@@ -41,7 +41,7 @@ PRIVADA_PADRAO = (
 
 #: Dez anos. Uma licença emitida na mão é para durar; quem controla o
 #: prazo de verdade é a renovação contra o servidor, quando ele existe.
-DIAS_PADRAO = 3650
+DIAS_PADRAO = 30
 
 #: Alfabeto sem 0/O e 1/I, para o cliente conseguir ditar a chave no telefone.
 ALFABETO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -184,11 +184,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dias <= 0:
         raise SystemExit("ERRO: --dias tem que ser maior que zero.")
+    if args.dias > 31 and os.environ.get("LOLQUEUE_ALLOW_LONG_LICENSE") != "1":
+        raise SystemExit(
+            "ERRO: licencas manuais acima de 31 dias exigem "
+            "LOLQUEUE_ALLOW_LONG_LICENSE=1 no host do operador."
+        )
     if args.qualquer and args.maquina:
         raise SystemExit("ERRO: --qualquer e --maquina são mutuamente exclusivos.")
 
     privada = ler_privada(Path(args.privada).expanduser())
     publica = chave_mod.publica_de(privada)
+
+    if args.qualquer and os.environ.get("LOLQUEUE_ALLOW_UNBOUND_LICENSE") != "1":
+        raise SystemExit(
+            "ERRO: uma licenca sem computador e proibida por padrao; "
+            "habilite LOLQUEUE_ALLOW_UNBOUND_LICENSE=1 somente em desenvolvimento."
+        )
+    if args.qualquer and args.dias > 7:
+        raise SystemExit("ERRO: licenca universal de desenvolvimento pode durar no maximo 7 dias.")
 
     if args.qualquer:
         alvo = ""

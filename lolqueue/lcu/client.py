@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import warnings
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 import urllib3
@@ -40,6 +41,11 @@ class LcuClient:
         self._credentials = credentials
         self._timeout = timeout
         self._session = session if session is not None else requests.Session()
+        # A LCU mora no loopback e usa um token temporario. `requests` confia
+        # por padrao em HTTP(S)_PROXY e em `.netrc`; em uma maquina que tenha
+        # proxy configurado, isso poderia tirar uma chamada autenticada do
+        # computador. A sessao da LCU nunca pode usar essas configuracoes.
+        self._session.trust_env = False
         self._session.auth = ("riot", credentials.token)
         self._session.verify = False
 
@@ -82,6 +88,18 @@ class LcuClient:
             raise LcuError(f"{method} {path} devolveu JSON inválido") from exc
 
     def _send(self, method: str, path: str, **kwargs: Any) -> Any:
+        if not isinstance(path, str):
+            raise LcuError("caminho da LCU invalido")
+        parsed = urlsplit(path)
+        if (
+            not path.startswith("/")
+            or path.startswith("//")
+            or parsed.scheme
+            or parsed.netloc
+            or "\\" in path
+            or any(char in path for char in ("\r", "\n", "\x00"))
+        ):
+            raise LcuError("caminho da LCU invalido")
         url = f"{self._credentials.base_url}{path}"
         try:
             with warnings.catch_warnings():
@@ -89,13 +107,22 @@ class LcuClient:
                     "ignore", urllib3.exceptions.InsecureRequestWarning
                 )
                 response = self._session.request(
-                    method, url, timeout=self._timeout, **kwargs
+                    method,
+                    url,
+                    timeout=self._timeout,
+                    # Um redirecionamento nunca faz parte da API local. Nao
+                    # segui-lo evita que o Basic Auth do cliente seja enviado
+                    # para outro destino caso algo local responda errado.
+                    allow_redirects=False,
+                    **kwargs,
                 )
         except requests.exceptions.ConnectionError as exc:
             raise ClientClosed("cliente do LoL fechado") from exc
         except requests.exceptions.RequestException as exc:
             raise LcuError(f"{method} {path} falhou: {exc}") from exc
 
+        if 300 <= response.status_code < 400:
+            raise LcuError(f"{method} {path} tentou redirecionar a conexao local")
         if response.status_code >= 400:
             raise LcuError(f"{method} {path} respondeu {response.status_code}")
         return response

@@ -93,6 +93,19 @@ Python recebe somente o pacote compatível por Python; ela nunca é trocada pelo
 executável compilado. A primeira instalação da 0.1.2 ainda precisa ser enviada
 manualmente, pois versões anteriores não tinham o atualizador embutido.
 
+### Verificação de segurança
+
+Em **Ajustes**, use **Verificar segurança** para conferir localmente a âncora
+das atualizações assinadas, a proteção da conexão com o cliente do LoL e a
+integridade dos arquivos instalados. A distribuição oficial inclui um
+manifesto Ed25519 com os hashes SHA-256 da pasta inteira: arquivos alterados,
+ausentes ou adicionados são avisados na tela. A verificação não envia token,
+configurações ou dados da conta para fora do computador.
+
+O `tools\build.ps1` exige a chave privada local de atualização para assinar os
+dois pacotes. `-AllowUnsignedIntegrity` existe apenas para testes locais; um
+pacote criado nesse modo não deve ser enviado a outras pessoas.
+
 **Numa máquina com o Smart App Control ligado, esse `.exe` não abre** —
 e não há conserto pelo lado do código. O Smart App Control recusa
 binário sem assinatura e sem reputação, e todo build novo nasce sem as
@@ -111,6 +124,30 @@ em vez de `--onefile`, porque no modo onefile o programa vive numa
 assinatura (o app abria e morria com "Imagem Incorreta", status
 `0xc0e90002`); e desligar o Smart App Control resolveria tudo isso, mas
 é permanente — uma vez desligado, só volta reinstalando o Windows.
+
+### Licenciamento mensal
+
+O código do servidor fica em `servidor/` e não é copiado para a instalação do
+jogador. Ele mantém a chave de ativação presa ao resumo do computador, emite
+bilhetes Ed25519 com validade curta e renova o acesso somente enquanto a
+assinatura mensal estiver ativa. O webhook autenticado do PicPay atualiza o
+vencimento; o aplicativo nunca recebe cartão ou segredo do provedor.
+
+Antes de gerar uma versão para venda, configure o servidor HTTPS, o plano do
+PicPay e a chave pública no build com `tools/preparar_build.py`. O
+`tools/build.ps1` recusa, por padrão, qualquer build sem licença embutida.
+`-AllowUnlicensed` existe apenas para teste local e a pasta resultante não deve
+ser distribuída.
+
+O checkout externo fica em `GET /checkout`. Ele usa o SDK oficial do PicPay no
+navegador e envia ao servidor apenas o `temporaryCardToken`; a ativação só
+ocorre quando o webhook autenticado confirma os R$ 20,00. Em produção, defina
+`CHECKOUT_API_BASE_URL` e uma lista exata em `CHECKOUT_ALLOWED_ORIGINS`.
+
+Para repetir a checagem local (compilação, padrões perigosos, segredos e
+testes), use `py -3.14 tools/auditar_seguranca.py --tests --release`. A revisão
+profunda do plugin `codex-security` deve ser executada no Codex após recarregar
+o plugin; ela não é substituída por este script local.
 
 ## O que ele faz
 
@@ -157,17 +194,19 @@ assinatura (o app abria e morria com "Imagem Incorreta", status
   elos que devolvem a mesma página virando um botão só e elo sem
   resposta simplesmente não aparecendo. Um clique troca a página
   aplicada durante a seleção; sem clique nenhum, a do elo escolhido
-  nos Ajustes já entrou sozinha.
+  nos Ajustes já entrou sozinha. Ao consultar um adversário na Análise,
+  o mesmo painel oferece as páginas de runa medidas para aquele confronto
+  — incluindo a de maior taxa quando ela passa os pisos de amostra — sem
+  trocar a runa ativa automaticamente.
 - **Monta o arsenal na loja**, se você ligar. Vira um ou mais
-  conjuntos de itens do campeão — uma aba por página — sempre com
-  iniciais, botas e principais, mais um bloco por quarto, quinto,
-  sexto e último item, cada um com um único item: o mais vitorioso
-  daquele slot na primeira página, o segundo mais vitorioso na
-  segunda, e assim por diante, com a taxa de vitória no título de
-  cada bloco. Sem dados do OP.GG nenhum conjunto é criado: aqui não
-  há reserva da Riot, porque a recomendação do cliente não traz
-  itens. Os conjuntos se chamam "LoL Queue" e são os únicos que o
-  app mexe; os do Porofessor, do U.GG e os seus ficam onde estão.
+  conjuntos de itens do campeão — uma aba por caminho — com iniciais,
+  botas, núcleo e compras situacionais na ordem correta. A aba principal
+  mantém as alternativas medidas lado a lado; quando há amostra suficiente,
+  o app também publica os caminhos "Mais jogada", "Maior taxa" e
+  "Alternativa validada", no mesmo estilo de um overlay de pré-jogo. Sem
+  dados do OP.GG nenhum conjunto é criado: não há itens inventados nem
+  reserva da Riot. Os conjuntos se chamam "LoL Queue" e são os únicos que
+  o app mexe; os do Porofessor, do U.GG e os seus ficam onde estão.
 - **Respeita a sala de quem convidou**: com "só mexer na fila quando eu
   for o dono da sala" ligado, na sala de um amigo ele não inicia a busca
   nem abre sala própria, mas continua aceitando, banindo e escolhendo.

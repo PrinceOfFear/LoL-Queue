@@ -1,5 +1,6 @@
 from lolqueue.lcu import credentials
 from lolqueue.lcu.credentials import Credentials, parse_lockfile
+import pytest
 
 
 def test_parses_well_formed_lockfile():
@@ -22,6 +23,17 @@ def test_rejects_malformed_lockfile():
     assert parse_lockfile("") is None
     assert parse_lockfile("LeagueClient:26536:notaport:tok:https") is None
     assert parse_lockfile("LeagueClient:26536:52847") is None
+
+
+@pytest.mark.parametrize("port", (0, -1, 65_536, True))
+def test_credentials_reject_invalid_lcu_ports(port):
+    with pytest.raises(ValueError):
+        Credentials(port=port, token="token")
+
+
+def test_lockfile_with_invalid_port_or_token_is_ignored():
+    assert parse_lockfile("LeagueClient:1:70000:token:https") is None
+    assert parse_lockfile("LeagueClient:1:443::https") is None
 
 
 class FakeProcess:

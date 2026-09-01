@@ -37,6 +37,7 @@ def test_sends_basic_auth_as_user_riot():
     LcuClient(CREDS, session=session)
     assert session.auth == ("riot", "tok")
     assert session.verify is False
+    assert session.trust_env is False
 
 
 def test_get_returns_parsed_json():
@@ -51,6 +52,18 @@ def test_builds_loopback_url():
     method, url, _ = session.calls[0]
     assert method == "GET"
     assert url == "https://127.0.0.1:52847/lol-gameflow/v1/gameflow-phase"
+    assert session.calls[0][2]["allow_redirects"] is False
+
+
+def test_rejects_redirects_and_non_local_paths():
+    redirect = FakeSession(FakeResponse(status_code=302))
+    with pytest.raises(LcuError, match="redirecionar"):
+        LcuClient(CREDS, session=redirect).get("/x")
+
+    session = FakeSession(FakeResponse())
+    with pytest.raises(LcuError, match="caminho"):
+        LcuClient(CREDS, session=session).get("https://example.invalid/")
+    assert session.calls == []
 
 
 def test_empty_body_returns_none():

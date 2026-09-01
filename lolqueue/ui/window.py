@@ -49,6 +49,7 @@ from .history_loader import HistoryLoader
 from .icon_loader import IconLoader
 from .lp_import_loader import LpImportLoader
 from .matchup_loader import MatchupLoader
+from .security_loader import SecurityCheckLoader
 from .update_loader import UpdateCheckLoader, UpdateDownloadLoader
 from .pages.analysis import AnalysisPage
 from .pages.champions import ChampionsPage
@@ -61,6 +62,7 @@ from .widgets.backdrop import Backdrop
 from .widgets.manual_lp_import import ManualLpImportDialog
 from .widgets.sidebar import Sidebar
 from .widgets.titlebar import TITLEBAR_HEIGHT, TitleBar
+from .widgets.update_notification import UpdateNotification
 
 #: O menor tamanho em que a janela ainda mostra tudo. A largura vem do
 #: painel de campeões, que é o mais largo. A altura é medida, não
@@ -178,6 +180,7 @@ class MainWindow(QWidget):
         self._update_installation = current_installation()
         self._update_check_loader: UpdateCheckLoader | None = None
         self._update_download_loader: UpdateDownloadLoader | None = None
+        self._security_check_loader: SecurityCheckLoader | None = None
         # O perfil e as partidas consultados, pelo mesmo motivo do
         # `_opgg` e do `_matchups`: sobrevivem a uma reconexão.
         self._history_source = SummonerHistorySource()
@@ -248,6 +251,14 @@ class MainWindow(QWidget):
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._refresh_ring)
         self._clock.start(200)
+        # A integridade do pacote pode envolver centenas de DLLs. Comeca logo
+        # depois de a janela aparecer, mas em uma thread propria: a protecao
+        # roda em toda abertura sem atrasar a fila nem deixar a tela vazia.
+        QTimer.singleShot(450, self._check_security)
+        # Em uma distribuicao instalada a verificacao inicial e automatica;
+        # em um clone de desenvolvimento `_check_for_update` retorna cedo.
+        # Assim o aviso aparece sem exigir que o usuario encontre Ajustes.
+        QTimer.singleShot(1800, self._check_for_update)
 
     # ---------- construção ----------
 
@@ -514,6 +525,9 @@ class MainWindow(QWidget):
             self.close,
         )
         right.addWidget(self._titlebar)
+        self._update_notification = UpdateNotification()
+        self._update_notification.update_requested.connect(self._download_update)
+        right.addWidget(self._update_notification)
 
         self._dashboard = DashboardPage(binder=self._binder)
         self._dashboard.toggled.connect(self.toggle_engine)
@@ -542,6 +556,7 @@ class MainWindow(QWidget):
         self._settings.accounts.capture_requested.connect(self._on_capture_game)
         self._settings.accounts.clear_requested.connect(self._on_clear_game)
         self._settings.accounts.apply_requested.connect(self._on_apply_game)
+        self._settings.security.check_requested.connect(self._check_security)
         self._settings.updates.check_requested.connect(self._check_for_update)
         self._settings.updates.download_requested.connect(self._download_update)
         if self._update_installation.is_development_checkout:
@@ -887,6 +902,32 @@ class MainWindow(QWidget):
             self._matchup_loader = None
         loader.deleteLater()
 
+    # ---------- verificacao de seguranca ----------
+
+    def _check_security(self) -> None:
+        if self._security_check_loader is not None:
+            return
+        self._settings.security.checking()
+        loader = SecurityCheckLoader(self._update_installation, self)
+        loader.ready.connect(self._on_security_check_ready)
+        loader.finished.connect(lambda: self._retire_security_check_loader(loader))
+        self._security_check_loader = loader
+        loader.start()
+
+    def _on_security_check_ready(self, report, error) -> None:
+        if error is not None or report is None:
+            self._settings.security.show_error()
+            self._log_message("A verificacao local de seguranca nao terminou; tente novamente.")
+            return
+        self._settings.security.show_report(report)
+        if report.has_failures:
+            self._log_message("A verificacao de seguranca encontrou um problema na instalacao.")
+
+    def _retire_security_check_loader(self, loader) -> None:
+        if self._security_check_loader is loader:
+            self._security_check_loader = None
+        loader.deleteLater()
+
     # ---------- atualizacao remota ----------
 
     @staticmethod
@@ -903,6 +944,7 @@ class MainWindow(QWidget):
         if self._update_check_loader is not None or self._update_download_loader is not None:
             return
         self._settings.updates.checking()
+        self._update_notification.checking()
         loader = UpdateCheckLoader(self._update_client, self._update_installation, self)
         loader.ready.connect(self._on_update_check_ready)
         loader.finished.connect(lambda: self._retire_update_check_loader(loader))
@@ -912,14 +954,18 @@ class MainWindow(QWidget):
     def _on_update_check_ready(self, offer, error) -> None:
         if isinstance(error, UpdateNotAvailable):
             self._settings.updates.show_current()
+            self._update_notification.hide_notification()
             return
         if error is not None:
             self._settings.updates.show_error(self._update_error_message(error))
+            self._update_notification.hide_notification()
             return
         if offer is None:
             self._settings.updates.show_error("A release oficial nao trouxe um pacote compativel.")
+            self._update_notification.hide_notification()
             return
         self._settings.updates.show_offer(offer)
+        self._update_notification.show_offer(offer)
 
     def _retire_update_check_loader(self, loader) -> None:
         if self._update_check_loader is loader:
@@ -936,8 +982,10 @@ class MainWindow(QWidget):
             self._check_for_update()
             return
         self._settings.updates.downloading(0, offer.artifact.size)
+        self._update_notification.downloading(0, offer.artifact.size)
         loader = UpdateDownloadLoader(self._update_client, offer, self)
         loader.progress.connect(self._settings.updates.downloading)
+        loader.progress.connect(self._update_notification.downloading)
         loader.ready.connect(self._on_update_download_ready)
         loader.finished.connect(lambda: self._retire_update_download_loader(loader))
         self._update_download_loader = loader
@@ -946,15 +994,19 @@ class MainWindow(QWidget):
     def _on_update_download_ready(self, prepared, error) -> None:
         if error is not None:
             self._settings.updates.show_error(self._update_error_message(error))
+            self._update_notification.hide_notification()
             return
         if prepared is None:
             self._settings.updates.show_error("A atualizacao nao foi preparada corretamente.")
+            self._update_notification.hide_notification()
             return
         self._settings.updates.preparing_restart()
+        self._update_notification.preparing_restart()
         try:
             launch_prepared_update(prepared, self._update_installation)
         except Exception as exc:
             self._settings.updates.show_error(self._update_error_message(exc))
+            self._update_notification.hide_notification()
             return
         self._log_message(f"Atualizacao {prepared.offer.version} conferida; reiniciando o LoL Queue.")
         # O instalador externo espera este processo sair para trocar a pasta.
@@ -1422,6 +1474,8 @@ class MainWindow(QWidget):
             self._game_detail_loader.wait(3000)
         if self._lp_import_loader is not None:
             self._lp_import_loader.wait(3000)
+        if self._security_check_loader is not None:
+            self._security_check_loader.wait(3000)
         if self._update_check_loader is not None:
             self._update_check_loader.wait(3000)
         if self._update_download_loader is not None:

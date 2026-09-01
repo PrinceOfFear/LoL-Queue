@@ -27,3 +27,4 @@ chaves-atualizacao/
 *.chave-privada
 servidor/.env
 servidor/licencas.db*
+servidor/*.db*

@@ -1,6 +1,6 @@
 [project]
 name = "lolqueue"
-version = "0.2.0"
+version = "0.2.2"
 description = "Automação de fila do League of Legends via LCU API"
 requires-python = ">=3.13"
 dependencies = [
@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+security = ["bandit>=1.7", "pip-audit>=2.7"]
 # O servidor de licenças não roda na máquina do usuário — ele mora no
 # host. Se estas entrassem na lista de cima, `ambiente.py` passaria a
 # cobrar fastapi de quem só quer jogar, e o app recusaria abrir por
@@ -29,3 +30,6 @@ servidor = ["fastapi>=0.115", "uvicorn>=0.30", "cryptography>=43.0", "requests>=
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["lolqueue*", "servidor*"]

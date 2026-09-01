@@ -22,6 +22,7 @@ from ..widgets.loadout_studio import (
     SpellKeyPreview,
     decorate_rank_combo,
 )
+from ..widgets.security_card import SecurityCard
 from ..widgets.update_card import UpdateCard
 
 
@@ -250,6 +251,16 @@ class SettingsPage(QWidget):
 
         self.accounts = AccountsCard()
         layout.addWidget(self.accounts)
+
+        # A conferencia e local e sob demanda: hash de uma distribuicao grande
+        # nao deve atrasar a abertura do app nem a entrada em uma partida.
+        #
+        # O resultado continua disponivel para a janela e para diagnosticos,
+        # mas nao ocupa mais espaco na tela principal de Ajustes. A protecao
+        # deve trabalhar em silencio; quando houver um problema, o registro
+        # local e o log do app continuam sendo a fonte de detalhes.
+        self.security = SecurityCard(self)
+        self.security.hide()
 
         # A troca de arquivos e feita pela janela, em threads separadas; a
         # pagina so abriga o cartao para manter Ajustes como a casa de tudo

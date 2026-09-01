@@ -18,6 +18,7 @@ coisa mais importante deste arquivo:
 from __future__ import annotations
 
 import requests
+from urllib.parse import urlsplit, urlunsplit
 
 from . import embutido
 
@@ -36,15 +37,51 @@ class ErroDoServidor(Exception):
 
 
 def _url(caminho: str) -> str:
-    base = embutido.servidor()
+    base = embutido.servidor().strip()
     if not base:
         raise ErroDeRede("nenhum servidor de licença configurado")
-    return f"{base}{caminho}"
+    parsed = urlsplit(base)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ErroDeRede("servidor de licença configurado de forma insegura")
+    if (
+        not isinstance(caminho, str)
+        or not caminho.startswith("/")
+        or caminho.startswith("//")
+        or "\\" in caminho
+        or any(char in caminho for char in ("\r", "\n", "\x00"))
+    ):
+        raise ErroDeRede("caminho do servidor de licença inválido")
+    prefix = parsed.path.rstrip("/")
+    return urlunsplit(("https", parsed.netloc, prefix + caminho, "", ""))
+
+
+def _session() -> requests.Session:
+    """Sessão sem proxy, `.netrc` ou cookies herdados do computador.
+
+    A chave de ativação e o bilhete não devem passar por uma configuração de
+    proxy que outro programa tenha deixado nas variáveis de ambiente.
+    """
+
+    session = requests.Session()
+    session.trust_env = False
+    return session
 
 
 def _falar(caminho: str, corpo: dict) -> dict:
     try:
-        resposta = requests.post(_url(caminho), json=corpo, timeout=ESPERA)
+        resposta = _session().post(
+            _url(caminho),
+            json=corpo,
+            timeout=ESPERA,
+            allow_redirects=False,
+        )
     except requests.RequestException as erro:
         raise ErroDeRede(str(erro)) from erro
 
@@ -55,6 +92,8 @@ def _falar(caminho: str, corpo: dict) -> dict:
     if not isinstance(dados, dict):
         dados = {}
 
+    if 300 <= resposta.status_code < 400:
+        raise ErroDeRede("o servidor de licença tentou redirecionar a conexão")
     if resposta.status_code >= 500:
         # Erro do lado deles é problema de rede para os nossos fins: não
         # é uma recusa, é uma resposta que não vale nada.
@@ -100,7 +139,14 @@ def liberar(chave: str, maquina: str) -> dict:
 
 def saude() -> dict:
     try:
-        resposta = requests.get(_url("/api/saude"), timeout=ESPERA)
+        resposta = _session().get(
+            _url("/api/saude"), timeout=ESPERA, allow_redirects=False
+        )
         return resposta.json() if resposta.ok else {}
     except (requests.RequestException, ValueError) as erro:
         raise ErroDeRede(str(erro)) from erro
+
+
+def checkout_url() -> str:
+    """URL HTTPS da pagina externa de assinatura."""
+    return _url("/checkout")

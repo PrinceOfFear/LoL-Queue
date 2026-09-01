@@ -164,6 +164,27 @@ STYLESHEET = f"""
 }}
 #connectionDot[state="online"] {{ color: #6EE9DF; border-color: rgba(10, 200, 185, 100); }}
 #connectionDot[state="offline"] {{ color: #9AA6B5; }}
+#contactButton {{
+    background: rgba(10, 200, 185, 18);
+    border: 1px solid rgba(10, 200, 185, 92);
+    border-radius: 9px;
+    color: #9AF1E7;
+    font-size: 11px;
+    font-weight: 750;
+    padding: 10px 11px;
+    text-align: left;
+}}
+#contactButton:hover {{
+    background: rgba(10, 200, 185, 48);
+    border-color: rgba(114, 247, 230, 190);
+    color: #E9FFFC;
+}}
+#contactButton:pressed {{
+    background: rgba(10, 200, 185, 70);
+    padding-top: 11px;
+    padding-bottom: 9px;
+}}
+#contactButton:focus {{ border-color: #A1FFF4; }}
 
 /* Cabeçalhos e superfícies ------------------------------------------ */
 #pageTitle {{
@@ -199,6 +220,76 @@ STYLESHEET = f"""
     border: 1px solid rgba(10, 200, 185, 118);
     border-radius: 15px;
 }}
+#updateNotification {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(51, 48, 30, 244), stop:.45 rgba(39, 50, 43, 242),
+        stop:1 rgba(10, 47, 62, 246));
+    border: 1px solid rgba(240, 204, 125, 190);
+    border-left: 4px solid #F0CC7D;
+    border-radius: 12px;
+    margin: 8px 14px 7px;
+}}
+#updateNotificationIcon {{
+    background: rgba(240, 204, 125, 40);
+    border: 1px solid rgba(240, 204, 125, 160);
+    border-radius: 18px;
+    color: #F7DF9D;
+    font-size: 22px;
+    font-weight: 800;
+    min-width: 36px;
+    min-height: 36px;
+}}
+#updateNotificationEyebrow {{
+    color: #F7DF9D;
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: 1.5px;
+}}
+#updateNotificationTitle {{
+    color: #FFF8E9;
+    font-size: 13px;
+    font-weight: 800;
+}}
+#updateNotificationDetail {{
+    color: #D6DDDA;
+    font-size: 10px;
+}}
+#updateNotificationAction {{
+    background: #F0CC7D;
+    border: 1px solid #FFEAB0;
+    border-radius: 9px;
+    color: #182333;
+    font-size: 10px;
+    font-weight: 850;
+    padding: 10px 14px;
+}}
+#updateNotificationAction:hover {{
+    background: #FFE3A2;
+    border-color: #FFF5D5;
+}}
+#updateNotificationAction:pressed {{
+    background: #DDB463;
+    padding-top: 11px;
+    padding-bottom: 9px;
+}}
+#updateNotificationAction:disabled {{
+    background: rgba(120, 111, 81, 150);
+    border-color: rgba(231, 215, 170, 90);
+    color: rgba(255, 248, 233, 140);
+}}
+#updateNotificationDismiss {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: #D7D0B9;
+    font-size: 18px;
+    padding: 2px 7px 4px;
+}}
+#updateNotificationDismiss:hover {{
+    background: rgba(255, 255, 255, 22);
+    border-color: rgba(255, 255, 255, 70);
+    color: #FFFFFF;
+}}
 #updateVersion {{
     background: rgba(10, 200, 185, 22);
     border: 1px solid rgba(10, 200, 185, 104);
@@ -229,6 +320,87 @@ STYLESHEET = f"""
     border-color: #A1FFF4;
 }}
 #updateAction:disabled {{
+    background: rgba(25, 48, 65, 150);
+    border-color: rgba(104, 139, 163, 92);
+    color: #71889B;
+}}
+#securityCard {{
+    background: rgba(8, 34, 48, 236);
+    border: 1px solid rgba(70, 178, 181, 126);
+    border-radius: 15px;
+}}
+#securityBadge {{
+    border-radius: 8px;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 1.05px;
+    padding: 5px 8px;
+}}
+#securityBadge[state="passed"] {{
+    background: rgba(10, 200, 185, 22);
+    border: 1px solid rgba(10, 200, 185, 106);
+    color: #8AF1E6;
+}}
+#securityBadge[state="info"] {{
+    background: rgba(91, 161, 207, 22);
+    border: 1px solid rgba(110, 178, 221, 104);
+    color: #B8E4FF;
+}}
+#securityBadge[state="warning"] {{
+    background: rgba(200, 170, 110, 25);
+    border: 1px solid rgba(226, 197, 130, 126);
+    color: #F3DDA2;
+}}
+#securityBadge[state="failed"] {{
+    background: rgba(187, 68, 83, 26);
+    border: 1px solid rgba(235, 115, 132, 138);
+    color: #FFC1C9;
+}}
+#securityStatus {{
+    color: #E8F4F5;
+    font-size: 12px;
+    font-weight: 700;
+}}
+#securityCheck {{
+    background: rgba(5, 20, 34, 132);
+    border: 1px solid rgba(109, 154, 182, 72);
+    border-radius: 9px;
+}}
+#securityCheck[state="warning"] {{ border-color: rgba(224, 189, 117, 112); }}
+#securityCheck[state="failed"] {{ border-color: rgba(231, 105, 124, 142); }}
+#securityCheckMark {{
+    font-size: 16px;
+    font-weight: 900;
+    min-width: 16px;
+}}
+#securityCheckMark[state="passed"] {{ color: #55DCCB; }}
+#securityCheckMark[state="info"] {{ color: #84C5ED; }}
+#securityCheckMark[state="warning"] {{ color: #F0CC7D; }}
+#securityCheckMark[state="failed"] {{ color: #FF9EAA; }}
+#securityCheckTitle {{
+    color: #DCEEF4;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}}
+#securityCheckDetail {{
+    color: #ABC5D2;
+    font-size: 10px;
+}}
+#securityAction {{
+    background: rgba(8, 113, 123, 144);
+    border: 1px solid rgba(83, 211, 204, 164);
+    border-radius: 9px;
+    color: #E9FFFC;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 9px 15px;
+}}
+#securityAction:hover {{
+    background: rgba(12, 151, 150, 176);
+    border-color: #A1FFF4;
+}}
+#securityAction:disabled {{
     background: rgba(25, 48, 65, 150);
     border-color: rgba(104, 139, 163, 92);
     color: #71889B;

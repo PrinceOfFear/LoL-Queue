@@ -45,3 +45,5 @@ def test_scoreboard_has_badge_and_icon_selectors():
 def test_updater_has_a_dedicated_safe_action_style():
     assert "#updateCard" in STYLESHEET
     assert "#updateAction:disabled" in STYLESHEET
+    assert "#updateNotification" in STYLESHEET
+    assert "#contactButton" in STYLESHEET

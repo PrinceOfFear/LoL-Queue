@@ -12,6 +12,7 @@ release e deve continuar fora do repositorio, em chaves-atualizacao/.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -45,6 +46,32 @@ def _write(path: Path, repository: str, public_key: str) -> None:
     path.write_text(raw, encoding="utf-8")
 
 
+def _read_constants(path: Path) -> dict[str, str]:
+    """Lê somente literais das duas constantes, sem executar o arquivo."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError) as exc:
+        raise SystemExit(f"Nao consegui ler a configuracao: {exc}") from exc
+    values: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        try:
+            literal = ast.literal_eval(value)
+        except (ValueError, TypeError, SyntaxError):
+            continue
+        if not isinstance(literal, str):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in CONSTANTES:
+                values[target.id] = literal
+    missing = [name for name in CONSTANTES if name not in values]
+    if missing:
+        raise SystemExit(f"Configuracao sem literais validas: {', '.join(missing)}")
+    return values
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Configura o atualizador GitHub no proximo build.")
     parser.add_argument("--repositorio", help="dono/repositorio publico no GitHub")
@@ -57,10 +84,9 @@ def main(argv: list[str] | None = None) -> int:
     if not target.is_file():
         raise SystemExit(f"Nao achei {target}")
     if args.ver:
-        namespace: dict[str, object] = {}
-        exec(compile(target.read_text(encoding="utf-8"), str(target), "exec"), namespace)
-        repo = namespace["REPOSITORIO"]
-        key = namespace["CHAVE_PUBLICA"]
+        values = _read_constants(target)
+        repo = values["REPOSITORIO"]
+        key = values["CHAVE_PUBLICA"]
         print(f"repositorio: {repo or '(vazio)'}")
         print(f"chave publica: {'configurada' if key else '(vazia)'}")
         return 0

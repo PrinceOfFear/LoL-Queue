@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QSize, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -25,6 +25,12 @@ SECTIONS = (
     ("Campeões", "nav-champions.svg"),
     ("Fila", "nav-queue.svg"),
     ("Ajustes", "nav-settings.svg"),
+)
+
+# Link publico; nenhum dado da conta ou token do cliente e enviado ao abrir
+# a conversa. O formato internacional e o que o WhatsApp exige no wa.me.
+WHATSAPP_CONTACT_URL = (
+    "https://wa.me/5564992961405?text=Ol%C3%A1%20LoL%20Queue%2C%20preciso%20de%20ajuda."
 )
 
 
@@ -80,6 +86,12 @@ class Sidebar(QWidget):
         self._group.idClicked.connect(self.navigated.emit)
 
         layout.addStretch(1)
+        self._contact_button = QPushButton("Fale conosco")
+        self._contact_button.setObjectName("contactButton")
+        self._contact_button.setAccessibleName("Fale conosco pelo WhatsApp")
+        self._contact_button.setToolTip("Abrir WhatsApp · (64) 99296-1405")
+        self._contact_button.clicked.connect(self._open_contact)
+        layout.addWidget(self._contact_button)
         self._connection = QLabel()
         self._connection.setObjectName("connectionDot")
         layout.addWidget(self._connection)
@@ -92,6 +104,11 @@ class Sidebar(QWidget):
         self._connection.setText(f"●  CLIENTE {label.upper()}")
         self._connection.style().unpolish(self._connection)
         self._connection.style().polish(self._connection)
+
+    def _open_contact(self) -> None:
+        """Abre apenas a conversa publica de suporte no WhatsApp."""
+
+        QDesktopServices.openUrl(QUrl(WHATSAPP_CONTACT_URL))
 
     def set_current(self, index: int) -> None:
         """Mantém o destaque em acordo com navegação feita por código."""

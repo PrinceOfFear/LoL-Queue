@@ -26,12 +26,15 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import importlib.util
 import json
 import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
@@ -42,6 +45,30 @@ ALVO = RAIZ / "lolqueue" / "licenca" / "embutido.py"
 #: Nomes das duas constantes. `^` com re.M garante que `VAR_SERVIDOR`,
 #: que também termina em SERVIDOR, não seja confundido com `SERVIDOR`.
 CONSTANTES = ("SERVIDOR", "CHAVE_PUBLICA")
+
+
+def validar_producao(servidor: str, publica: str) -> None:
+    """Recusa configuracao que faria o build falhar fechado ou sem assinatura."""
+    parsed = urlsplit(servidor)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SystemExit(
+            "ERRO: --servidor precisa ser uma URL HTTPS sem credenciais, query ou fragmento."
+        )
+    try:
+        raw = publica.encode("ascii")
+        padding = b"=" * ((4 - len(raw) % 4) % 4)
+        decoded = base64.urlsafe_b64decode(raw + padding)
+    except (UnicodeEncodeError, ValueError, binascii.Error) as exc:
+        raise SystemExit("ERRO: --publica nao e uma chave base64url valida.") from exc
+    if len(decoded) != 32:
+        raise SystemExit("ERRO: --publica precisa codificar exatamente 32 bytes Ed25519.")
 
 
 def _padrao(nome: str) -> re.Pattern[bytes]:
@@ -178,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         alvo_servidor = args.servidor.strip().rstrip("/")
         alvo_publica = args.publica.strip()
+        validar_producao(alvo_servidor, alvo_publica)
 
     escrever(alvo, servidor=alvo_servidor, publica=alvo_publica)
 

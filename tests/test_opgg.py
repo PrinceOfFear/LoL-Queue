@@ -261,6 +261,41 @@ def test_the_arsenal_is_a_single_page():
     assert pages[0].label == ""
 
 
+def test_the_client_also_gets_statistical_build_paths():
+    """As medições viram abas separadas além da recomendação principal.
+
+    O OP.GG não publica uma etiqueta proprietária de ``AP``/``AD`` por
+    caminho; as abas usam somente critérios que a resposta realmente traz.
+    """
+    build = parse_build(COMPLETA)
+
+    assert [page.label for page in build.variant_pages] == [
+        "Mais jogada",
+        "Maior taxa",
+        "Alternativa validada",
+    ]
+    for page in build.variant_pages:
+        assert {block.label for block in page.blocks} >= {
+            "Iniciais",
+            "Botas",
+            "Principais",
+        }
+
+
+def test_alternative_path_changes_only_measured_steps():
+    build = parse_build(COMPLETA)
+    alternative = next(
+        page for page in build.variant_pages if page.label == "Alternativa validada"
+    )
+
+    assert dict((block.label, block.items) for block in alternative.blocks)["4º item"] == (
+        3089,
+    )
+    assert dict((block.label, block.items) for block in alternative.blocks)["5º item"] == (
+        3157,
+    )
+
+
 def test_the_two_readings_share_the_same_step():
     """Void Staff venceu 60% em 68 partidas; Rabadon's, 54% em 98.
 

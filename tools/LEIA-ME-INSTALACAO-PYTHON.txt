@@ -18,9 +18,16 @@ Como instalar
 5. Ao terminar, abra o atalho "LoL Queue" criado na Área de Trabalho.
 
 Antes de instalar
+- Na primeira abertura, informe a chave recebida na assinatura mensal do
+  LoL Queue. Ela fica vinculada a este computador e não deve ser copiada para
+  outro PC.
 - Confira o arquivo .sha256 entregue junto com o ZIP, se disponível.
 - Para recursos do League (fila, seleção, histórico e PDL), abra o cliente do
   League of Legends e entre em uma conta normalmente.
+
+Depois de instalar, abra Ajustes > Verificar segurança no LoL Queue. A
+verificação usa o selo assinado que acompanha a pasta para detectar arquivos
+alterados, removidos ou adicionados, sem enviar dados da sua conta.
 
 Esta alternativa existe para não incentivar a desativação das proteções do
 Windows. Para uma distribuição por .exe que funcione em larga escala sem esse

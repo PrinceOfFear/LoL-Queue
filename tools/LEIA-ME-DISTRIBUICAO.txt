@@ -8,6 +8,12 @@ Como abrir
 4. Para recursos ligados ao League (fila, seleção, histórico e PDL), abra o
    cliente do League of Legends e entre em uma conta normalmente.
 
+Licença
+Na primeira abertura, informe a chave recebida na assinatura mensal do LoL
+Queue. A chave fica vinculada a este computador; não copie o arquivo de
+licença para outro PC. Se esta tela não aparecer, a pasta foi criada com
+`-AllowUnlicensed` e não é uma versão comercial.
+
 O que esta pasta contém
 - O executável e todas as bibliotecas necessárias. Não é preciso instalar
   Python para usar esta versão.
@@ -31,3 +37,7 @@ ampla é assinar a versão final com um certificado de code signing confiável.
 Integridade do download
 Ao lado do ZIP há um arquivo .sha256. Ele permite conferir se a cópia recebida
 é exatamente a que foi enviada antes de abrir o programa.
+
+Esta pasta também traz lolqueue-integrity.json e sua assinatura. Em Ajustes >
+Verificar segurança, o LoL Queue confere localmente esse selo para avisar se
+algum arquivo da distribuição foi alterado, removido ou adicionado.

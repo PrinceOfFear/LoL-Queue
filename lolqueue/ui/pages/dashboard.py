@@ -59,6 +59,17 @@ FEATURE_CONFIG_FIELDS = frozenset(
 )
 
 
+def _rune_option_text(key: str) -> str:
+    """Rótulo curto para uma página de elo ou de confronto."""
+    if key.startswith("vs "):
+        confronto = key[3:]
+        if " — " in confronto:
+            opponent, criterion = confronto.split(" — ", 1)
+            return f"vs {opponent} · {criterion}"
+        return f"vs {confronto}"
+    return OPGG_TIERS.get(key, key)
+
+
 class _FeatureTile(QFrame):
     """Cartão pequeno cujo ícone e texto acompanham a conta ativa."""
 
@@ -271,7 +282,7 @@ class DashboardPage(QWidget):
         runes_header = QHBoxLayout()
         runes_header.setContentsMargins(0, 0, 0, 0)
         runes_header.setSpacing(10)
-        runes_eyebrow = QLabel("RUNAS POR ELO")
+        runes_eyebrow = QLabel("RUNAS POR ELO / CONFRONTO")
         runes_eyebrow.setObjectName("predictionEyebrow")
         runes_header.addWidget(runes_eyebrow, 0, Qt.AlignmentFlag.AlignVCenter)
         self._rune_options = QHBoxLayout()
@@ -498,7 +509,18 @@ class DashboardPage(QWidget):
             return
         for tier in tiers:
             atual = tier == active
-            button = QPushButton(OPGG_TIERS.get(tier, tier))
+            build = self._builds.get(tier)
+            rune_pages = getattr(build, "rune_pages", ()) if build is not None else ()
+            matchup_page = rune_pages[0] if rune_pages else None
+            text = _rune_option_text(tier)
+            if (
+                tier.startswith("vs ")
+                and " — " not in tier
+                and matchup_page is not None
+                and matchup_page.label
+            ):
+                text = f"{text} · {matchup_page.label}"
+            button = QPushButton(text)
             button.setObjectName("runeOption")
             crest = rank_icon(tier, QSize(24, 24))
             if not crest.isNull():
@@ -507,7 +529,14 @@ class DashboardPage(QWidget):
             # A dica virou balão: como linha de texto ela custava altura
             # que a janela pequena não tem, e o botão desligado já diz
             # sozinho qual elo está no cliente.
-            button.setToolTip("Troca a página de runas aplicada no cliente.")
+            hint = "Troca a página de runas aplicada no cliente."
+            if matchup_page is not None and matchup_page.games:
+                hint = (
+                    f"{round(matchup_page.win_rate * 100)}% de vitórias em "
+                    f"{matchup_page.games} partidas contra este campeão. "
+                    "Clique para aplicar."
+                )
+            button.setToolTip(hint)
             button.setProperty("active", "true" if atual else "false")
             button.setEnabled(not atual)
             button.clicked.connect(partial(self.rune_option_chosen.emit, tier))

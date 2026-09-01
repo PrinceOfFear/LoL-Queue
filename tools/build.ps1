@@ -20,6 +20,16 @@
 # versão que está em Distribuicao. Assim uma compilação que falhar não apaga o
 # último pacote que já funcionava.
 
+param(
+    # Excecao deliberada para testes locais sem a chave de release. Um pacote
+    # criado assim continua funcionando, mas o app avisa que ele nao tem selo
+    # de integridade e nao deve ser enviado a outras pessoas.
+    [switch]$AllowUnsignedIntegrity,
+    # Somente para desenvolvimento local. Uma distribuicao sem URL e chave
+    # publica aceita qualquer pessoa e nunca deve ser enviada como produto.
+    [switch]$AllowUnlicensed
+)
+
 $ErrorActionPreference = "Stop"
 
 $raiz = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -33,6 +43,27 @@ $stagingDir = Join-Path $releaseRoot "_em-preparo"
 $pythonPayloadName = "LoL Queue - instalar com Python"
 $pythonPayloadDir = Join-Path $releaseRoot $pythonPayloadName
 $pythonStagingDir = Join-Path $releaseRoot "_em-preparo-python"
+$integrityPrivateKey = Join-Path $raiz "chaves-atualizacao\release.chave-privada"
+
+if (-not (Test-Path -LiteralPath $integrityPrivateKey) -and -not $AllowUnsignedIntegrity) {
+    throw "Falta a chave privada para assinar a integridade da distribuicao: $integrityPrivateKey. Para um teste local explicito, use -AllowUnsignedIntegrity."
+}
+
+function Add-IntegritySeal {
+    param([Parameter(Mandatory = $true)][string]$Folder)
+
+    if (-not (Test-Path -LiteralPath $integrityPrivateKey)) {
+        Write-Warning "Pacote local sem selo de integridade (modo -AllowUnsignedIntegrity)."
+        return
+    }
+    & py -3 (Join-Path $PSScriptRoot "gerar_manifesto_integridade.py") `
+        --pasta $Folder `
+        --version $version `
+        --chave-privada $integrityPrivateKey
+    if ($LASTEXITCODE -ne 0) {
+        throw "Nao consegui assinar a integridade da distribuicao."
+    }
+}
 
 New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
 
@@ -70,6 +101,17 @@ $version = $versionMatch.Matches[0].Groups[1].Value
 $runtimeVersion = ((& py -3 -c "from lolqueue.version import VERSION; print(VERSION)" | Select-Object -Last 1).ToString()).Trim()
 if ($LASTEXITCODE -ne 0 -or $runtimeVersion -ne $version) {
     throw "A versao de lolqueue/version.py ('$runtimeVersion') nao confere com pyproject.toml ('$version'). Atualize as duas antes de empacotar."
+}
+
+$licenseConfigured = ((& py -3 -c "from lolqueue.licenca import embutido; print('1' if embutido.configurado() else '0')" | Select-Object -Last 1).ToString()).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Nao consegui conferir a configuracao de licenca antes do build."
+}
+if ($licenseConfigured -ne "1" -and -not $AllowUnlicensed) {
+    throw "Build de distribuicao recusado: a licenca esta desligada. Rode tools/preparar_build.py com a URL HTTPS e a chave publica, ou use -AllowUnlicensed apenas em teste local."
+}
+if ($licenseConfigured -ne "1") {
+    Write-Warning "Build sem licenca: permitido apenas por -AllowUnlicensed; nao distribuir."
 }
 $zipPath = Join-Path $releaseRoot ("LoL Queue-" + $version + "-win64.zip")
 $hashPath = $zipPath + ".sha256"
@@ -158,6 +200,15 @@ if (-not (Test-Path -LiteralPath $stagedExe)) {
     throw "A cópia para distribuição não contém LoL Queue.exe; a versão anterior foi preservada."
 }
 
+Add-IntegritySeal -Folder $stagingDir
+if (-not $AllowUnsignedIntegrity) {
+    foreach ($seal in @("lolqueue-integrity.json", "lolqueue-integrity.json.sig")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $stagingDir $seal))) {
+            throw "A distribuicao nao recebeu o selo de integridade: $seal"
+        }
+    }
+}
+
 Remove-OnlyInside -Path $payloadDir -AllowedRoot $releaseRoot
 Move-Item -LiteralPath $stagingDir -Destination $payloadDir
 
@@ -207,6 +258,15 @@ $pythonRequired = @(
 $pythonMissing = @($pythonRequired | Where-Object { -not (Test-Path -LiteralPath $_) })
 if ($pythonMissing.Count -gt 0) {
     throw "A distribuição compatível está incompleta:`n$($pythonMissing -join "`n")"
+}
+
+Add-IntegritySeal -Folder $pythonStagingDir
+if (-not $AllowUnsignedIntegrity) {
+    foreach ($seal in @("lolqueue-integrity.json", "lolqueue-integrity.json.sig")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $pythonStagingDir $seal))) {
+            throw "A distribuicao compativel nao recebeu o selo de integridade: $seal"
+        }
+    }
 }
 
 Remove-OnlyInside -Path $pythonPayloadDir -AllowedRoot $releaseRoot

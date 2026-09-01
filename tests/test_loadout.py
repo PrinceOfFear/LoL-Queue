@@ -26,7 +26,7 @@ from lolqueue.core.loadout import (
     Loadout,
     align_spells,
 )
-from lolqueue.core.opgg import Block, Build as OpggBuild, Page
+from lolqueue.core.opgg import Block, Build as OpggBuild, Page, RunePage
 from lolqueue.lcu import endpoints
 from lolqueue.lcu.client import ClientClosed, LcuError
 from tests.fakes import FakeLcuClient
@@ -1745,6 +1745,32 @@ DO_CONFRONTO = OpggBuild(
     ),
 )
 
+DO_CONFRONTO_VARIADO = OpggBuild(
+    style=DO_CONFRONTO.style,
+    sub_style=DO_CONFRONTO.sub_style,
+    perks=DO_CONFRONTO.perks,
+    spells=DO_CONFRONTO.spells,
+    pages=DO_CONFRONTO.pages,
+    rune_pages=(
+        RunePage(
+            label="Mais jogada",
+            style=DO_CONFRONTO.style,
+            sub_style=DO_CONFRONTO.sub_style,
+            perks=DO_CONFRONTO.perks,
+            win_rate=0.51,
+            games=400,
+        ),
+        RunePage(
+            label="Maior taxa",
+            style=8100,
+            sub_style=8200,
+            perks=(8124, 8126, 8140, 8105, 8224, 8233, 5008, 5008, 5001),
+            win_rate=0.61,
+            games=180,
+        ),
+    ),
+)
+
 
 def com_arsenal(**extra):
     """Um `Loadout` com o campeão já equipado e o arsenal na loja."""
@@ -1812,6 +1838,58 @@ def test_the_matchup_rune_becomes_one_more_option():
     loadout.apply(session())
 
     assert "vs Ezreal" in vistos[-1]
+
+
+def test_each_measured_matchup_rune_page_becomes_an_option():
+    vistos = []
+    config = Config(auto_runes=True, auto_items=True, auto_runes_options=True)
+    loadout, client, _ = build(
+        config=config,
+        source=SlowSource(COM_ARSENAL),
+        on_options=lambda tiers, active, builds: vistos.append((tiers, builds)),
+    )
+    settle(loadout, session())
+
+    loadout.request_matchup("Ezreal", Guia(DO_CONFRONTO_VARIADO))
+    loadout.apply(session())
+
+    assert vistos[-1][0][-2:] == ["vs Ezreal", "vs Ezreal — Maior taxa"]
+    assert vistos[-1][1]["vs Ezreal — Maior taxa"].perks == (
+        8124,
+        8126,
+        8140,
+        8105,
+        8224,
+        8233,
+        5008,
+        5008,
+        5001,
+    )
+
+
+def test_clicking_the_highest_rate_matchup_rune_applies_that_page():
+    config = Config(auto_runes=True, auto_items=True, auto_runes_options=True)
+    loadout, client, messages = build(config=config, source=SlowSource(COM_ARSENAL))
+    settle(loadout, session())
+
+    loadout.request_matchup("Ezreal", Guia(DO_CONFRONTO_VARIADO))
+    loadout.apply(session())
+    loadout.request_rune_option("vs Ezreal — Maior taxa")
+    loadout.apply(session())
+
+    criada = [b for p, b in client.payloads if p == endpoints.PERK_PAGES][-1]
+    assert criada["selectedPerkIds"] == [
+        8124,
+        8126,
+        8140,
+        8105,
+        8224,
+        8233,
+        5008,
+        5008,
+        5001,
+    ]
+    assert any("Maior taxa" in linha for linha in messages)
 
 
 def test_the_matchup_rune_waits_for_the_click():

@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from . import mcp_format
+from . import mcp_format, ranking
 from .buildblocks import MAX_ALTERNATIVES, Block, extras, slot
 
 ENDPOINT = "https://mcp-api.op.gg/mcp"
@@ -296,12 +296,15 @@ class RunePage:
 class Build:
     """O que o cliente precisa para montar página, feitiços e arsenal.
 
-    `pages` é o arsenal da loja: uma página só, sem etiqueta, com um
-    bloco por degrau da compra (iniciais, botas, principais, cada slot
-    situacional) e até três alternativas medidas dentro de cada um, na
-    ordem em que o ranking do OP.GG as sustenta. Nunca uma combinação
-    que ele não tenha medido — e nunca um item só por degrau, que era
-    justamente o que escondia a variação do jogador.
+    `pages` é o arsenal principal da loja: uma página só, sem etiqueta,
+    com um bloco por degrau da compra (iniciais, botas, principais, cada
+    slot situacional) e até três alternativas medidas dentro de cada um,
+    na ordem em que o ranking do OP.GG as sustenta. `variant_pages` são
+    caminhos completos adicionais, cada um com uma compra por degrau,
+    derivados da mesma resposta para as abas "Mais jogada", "Maior taxa"
+    e "Alternativa validada". Cada compra vem de uma opção que o servidor
+    mediu; quando a fonte não sustenta uma variação, a aba simplesmente
+    não é criada.
 
     Do `skill_order` para baixo é tudo material de leitura: nada disso
     o cliente sabe aplicar sozinho. A ordem de habilidade, em especial,
@@ -340,6 +343,12 @@ class Build:
     damage_type: str = ""
     sample: int = 0
     item_tier: str = ""
+    # Caminhos alternativos separados para a loja. `pages` continua sendo
+    # a recomendação principal, compatível com builds antigas; a ponte com
+    # o cliente concatena este campo quando houver dados suficientes para
+    # uma segunda leitura estatística. Mantido no fim para não alterar a
+    # posição dos campos legados em construções posicionais.
+    variant_pages: tuple[Page, ...] = ()
 
 
 def _letters(value: str) -> tuple[str, ...]:
@@ -541,6 +550,165 @@ def _pages(data: dict[str, str], schema: dict[str, list[str]]) -> tuple[Page, ..
     return (Page(label="", blocks=tuple(blocks)),)
 
 
+def _block_sample(block: Block) -> tuple[float, int, float]:
+    """A amostra de um caminho de item no vocabulário do ranking."""
+    return block.win_rate, block.games, block.pick_rate
+
+
+def _variant_order(options: list[Block], criterion: str) -> list[Block]:
+    """Ordena opções para uma página alternativa sem inventar dados.
+
+    A resposta do OP.GG não traz uma coluna ``AP``, ``AD`` ou ``Bruiser``.
+    Portanto as páginas são nomeadas pelo critério que os dados realmente
+    medem: popularidade, taxa de vitória e uma alternativa que não repete
+    nenhum desses caminhos.
+    """
+    if criterion == "popular":
+        return sorted(
+            options,
+            key=lambda block: (block.games, block.pick_rate, block.win_rate),
+            reverse=True,
+        )
+    ordered = ranking.ranked(options, _block_sample)
+    if ordered:
+        return ordered
+    return sorted(
+        options,
+        key=lambda block: (block.games, block.pick_rate, block.win_rate),
+        reverse=True,
+    )
+
+
+def _choose_variant(
+    options: list[Block], bought: set[int], criterion: str,
+    forbidden: set[tuple[int, ...]] | None = None,
+) -> Block | None:
+    """Escolhe um único caminho de um degrau, respeitando itens já comprados."""
+    blocked = forbidden or set()
+    for option in _variant_order(options, criterion):
+        if tuple(option.items) in blocked:
+            continue
+        chosen = slot([option], bought, limit=1)
+        if chosen is not None:
+            return chosen
+    return None
+
+
+def _variant_page(
+    options_by_field: dict[str, list[Block]],
+    schema: dict[str, list[str]],
+    data: dict[str, str],
+    criterion: str,
+    forbidden_by_field: dict[str, set[tuple[int, ...]]] | None = None,
+    forbidden_items: set[int] | None = None,
+) -> Page | None:
+    """Monta uma página com um caminho por degrau.
+
+    A página principal mostra alternativas lado a lado. Estas páginas
+    complementares transformam as mesmas medições em caminhos completos,
+    como as abas de arsenal dos overlays, sem inventar itens fora das
+    opções medidas pelo OP.GG.
+    """
+    blocks: list[Block] = []
+    bought: set[int] = set()
+    for field, label in ITEM_BLOCKS:
+        options = options_by_field.get(field, [])
+        if not options:
+            continue
+        blocked = (forbidden_by_field or {}).get(field, set())
+        block = _choose_variant(options, bought, criterion, blocked)
+        # Uma alternativa de caminho continua precisando de iniciais,
+        # botas e núcleo. Quando esses slots não têm uma segunda opção,
+        # repetimos a escolha medida e variamos apenas os degraus que de
+        # fato possuem outra compra sustentada.
+        if block is None and criterion == "alternative":
+            block = _choose_variant(options, bought, "best")
+        if block is not None:
+            blocks.append(block)
+
+    raw = data.get(EXTRA_FIELD)
+    if raw is not None:
+        options = _field_options(mcp_format.entries(raw), EXTRA_LABEL, schema)
+        if forbidden_items:
+            options = [
+                option
+                for option in options
+                if not (set(option.items) & forbidden_items)
+            ]
+        extra = extras(options, bought, EXTRA_LABEL)
+        if extra is not None:
+            blocks.append(extra)
+    if not blocks:
+        return None
+    return Page(label="", blocks=tuple(blocks))
+
+
+def _page_signature(page: Page) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    """Assinatura estável para não publicar duas abas idênticas."""
+    return tuple((block.label, tuple(block.items)) for block in page.blocks)
+
+
+def _variant_pages(
+    data: dict[str, str], schema: dict[str, list[str]], base: tuple[Page, ...]
+) -> tuple[Page, ...]:
+    """Cria as abas estatísticas extras do arsenal, quando houver variação."""
+    if not base or not base[0].blocks:
+        return ()
+    options_by_field: dict[str, list[Block]] = {}
+    for field, label in ITEM_BLOCKS:
+        raw = data.get(field)
+        if raw is not None:
+            options_by_field[field] = _field_options(
+                mcp_format.entries(raw), label, schema
+            )
+
+    popular = _variant_page(options_by_field, schema, data, "popular")
+    best_rate = _variant_page(options_by_field, schema, data, "best")
+    if popular is None and best_rate is None:
+        return ()
+
+    # A terceira aba usa uma opção diferente das duas leituras principais
+    # por degrau. Isso evita chamar uma cópia de "alternativa".
+    forbidden_by_field: dict[str, set[tuple[int, ...]]] = {
+        field: set() for field, _ in ITEM_BLOCKS
+    }
+    forbidden_items: set[int] = set()
+    for page in (popular, best_rate):
+        if page is None:
+            continue
+        forbidden_items.update(item for block in page.blocks for item in block.items)
+        for block in page.blocks:
+            for field, label in ITEM_BLOCKS:
+                if block.label == label:
+                    forbidden_by_field[field].add(tuple(block.items))
+                    break
+    alternative = _variant_page(
+        options_by_field,
+        schema,
+        data,
+        "alternative",
+        forbidden_by_field,
+        forbidden_items,
+    )
+
+    candidates = (
+        ("Mais jogada", popular),
+        ("Maior taxa", best_rate),
+        ("Alternativa validada", alternative),
+    )
+    seen = {_page_signature(base[0])}
+    result: list[Page] = []
+    for label, page in candidates:
+        if page is None:
+            continue
+        signature = _page_signature(page)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        result.append(replace(page, label=label))
+    return tuple(result)
+
+
 def _sample(data: dict[str, str], schema: dict[str, list[str]]) -> int:
     """Quantas partidas mediram o núcleo da build.
 
@@ -594,12 +762,14 @@ def parse_build(text: str) -> Build | None:
     skills = mcp_format.unpack(mcp_format.first(data.get("skills")), schema)
     masteries = mcp_format.unpack(mcp_format.first(data.get("skill_masteries")), schema)
 
+    pages = _pages(data, schema)
     return Build(
         style=style,
         sub_style=sub_style,
         perks=perks,
         spells=(chosen[0], chosen[1]),
-        pages=_pages(data, schema),
+        pages=pages,
+        variant_pages=_variant_pages(data, schema, pages),
         skill_order=_letters(skills.get("order", "")) if skills else (),
         skill_max=_letters(masteries.get("ids", "")) if masteries else (),
         strong_against=_counters(data.get("strong_counters"), schema),
@@ -768,6 +938,7 @@ class OpggSource:
         return replace(
             build,
             pages=melhor.pages,
+            variant_pages=melhor.variant_pages,
             sample=melhor.sample,
             item_tier=melhor_tier,
         )

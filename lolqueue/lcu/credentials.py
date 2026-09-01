@@ -21,6 +21,28 @@ class Credentials:
     port: int
     token: str
 
+    def __post_init__(self) -> None:
+        """Recusa credenciais que nunca poderiam apontar para a LCU local.
+
+        A porta e o token chegam de um arquivo e da linha de comando de outro
+        processo. Validar aqui, no ponto comum, impede que uma leitura
+        corrompida vire URL inesperada ou carregue quebra de linha para um
+        cabecalho de autenticacao.
+        """
+
+        if (
+            not isinstance(self.port, int)
+            or isinstance(self.port, bool)
+            or not 1 <= self.port <= 65_535
+        ):
+            raise ValueError("porta da LCU invalida")
+        if (
+            not isinstance(self.token, str)
+            or not self.token
+            or any(char in self.token for char in ("\r", "\n", "\x00"))
+        ):
+            raise ValueError("token da LCU invalido")
+
     @property
     def base_url(self) -> str:
         return f"https://127.0.0.1:{self.port}"
@@ -30,7 +52,10 @@ def parse_lockfile(content: str) -> Credentials | None:
     match = LOCKFILE_RE.match(content.strip())
     if match is None:
         return None
-    return Credentials(port=int(match.group(1)), token=match.group(2))
+    try:
+        return Credentials(port=int(match.group(1)), token=match.group(2))
+    except ValueError:
+        return None
 
 
 def _client_process() -> psutil.Process | None:
@@ -99,7 +124,10 @@ def credentials_from_process() -> Credentials | None:
             token = arg.split("=", 1)[1]
     if port is None or token is None:
         return None
-    return Credentials(port=port, token=token)
+    try:
+        return Credentials(port=port, token=token)
+    except ValueError:
+        return None
 
 
 def discover() -> Credentials | None:

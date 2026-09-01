@@ -89,6 +89,27 @@ SPELL_RETRY_SECONDS = 1.5
 PAGE_CHECK_SECONDS = 2.0
 MAX_PAGE_FIXES = 3
 
+
+def _arsenal_pages(build: Build) -> tuple[Page, ...]:
+    """Retorna a recomendação e os caminhos estatísticos sem duplicatas.
+
+    Builds salvas por versões anteriores só têm ``pages``; o campo
+    ``variant_pages`` é opcional justamente para manter esse formato
+    compatível. O cliente recebe as abas extras apenas quando elas têm
+    conteúdo real.
+    """
+    pages: list[Page] = []
+    seen: set[tuple[tuple[str, tuple[int, ...]], ...]] = set()
+    for page in (*build.pages, *getattr(build, "variant_pages", ())):
+        if not page.blocks:
+            continue
+        signature = tuple((block.label, tuple(block.items)) for block in page.blocks)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        pages.append(page)
+    return tuple(pages)
+
 #: Elos consultados para as opções de runa: três pontos bem separados
 #: da escala, fixos de propósito. Não é o elo dos Ajustes — aquele
 #: decide o que é aplicado sozinho, este é o leque que a tela oferece
@@ -187,7 +208,11 @@ def rune_options(found: Sequence[tuple[str, Build]]) -> dict[str, Build]:
 def option_label(key: str) -> str:
     """Como a opção de runa se lê no registro: o elo, ou o confronto."""
     if key.startswith(MATCHUP_PREFIX):
-        return f"do confronto contra {key[len(MATCHUP_PREFIX):]}"
+        confronto = key[len(MATCHUP_PREFIX):]
+        if " — " in confronto:
+            opponent, criterion = confronto.split(" — ", 1)
+            return f"do confronto contra {opponent} ({criterion})"
+        return f"do confronto contra {confronto}"
     return f"de {OPGG_TIERS.get(key, key)}"
 
 
@@ -510,7 +535,7 @@ class Loadout:
         # Guardado para o confronto: escolhido o adversário, a loja recebe
         # as duas leituras juntas, e sem isto a do campeão sumiria na segunda
         # gravação.
-        self._pages = tuple(build.pages)
+        self._pages = _arsenal_pages(build)
         if not self._pages:
             self._log("Arsenal não foi montado: o OP.GG devolveu uma build sem itens.")
             return
@@ -1113,11 +1138,12 @@ class Loadout:
             return
         opponent, build = ticket
         try:
-            if self._config.auto_items and build.pages:
+            matchup_pages = _arsenal_pages(build)
+            if self._config.auto_items and matchup_pages:
                 self._items.apply(
                     champion_id,
                     self._catalog.name(champion_id),
-                    (*self._pages, *versus_pages(build.pages, opponent)),
+                    (*self._pages, *versus_pages(matchup_pages, opponent)),
                     self._map_id(),
                 )
         except ClientClosed:
@@ -1127,36 +1153,76 @@ class Loadout:
         self._offer_matchup_runes(opponent, build)
 
     def _offer_matchup_runes(self, opponent: str, build: Build) -> None:
-        """Põe a runa do confronto entre as opções, quando ela é outra.
+        """Põe as runas medidas contra o adversário entre as opções.
 
         Igual a uma que já está na lista, não vira botão — a mesma
         regra de `rune_options` para dois elos que devolvem a mesma
         página. E o confronto anterior sai da lista quando entra o
         novo, a menos que seja o que está no cliente: aí o botão
         marcado precisa continuar existindo para dizer o que está
-        ativo.
+        ativo. Se o guia trouxer várias páginas, cada uma recebe o
+        critério medido no rótulo, como ``vs Ezreal — Maior taxa``.
         """
         if not (self._config.auto_runes and self._config.auto_runes_options):
             return
         if not build.perks:
             return
-        chave = f"{MATCHUP_PREFIX}{opponent}"
+        rune_pages = tuple(getattr(build, "rune_pages", ()))
+        if not rune_pages:
+            # Builds antigas só têm o trio principal.
+            from .opgg import RunePage
+
+            rune_pages = (
+                RunePage(
+                    label="",
+                    style=build.style,
+                    sub_style=build.sub_style,
+                    perks=build.perks,
+                ),
+            )
+
+        opcoes: list[tuple[str, Build]] = []
+        for indice, pagina in enumerate(rune_pages):
+            chave = f"{MATCHUP_PREFIX}{opponent}"
+            if indice:
+                criterio = pagina.label or f"Alternativa {indice + 1}"
+                chave = f"{chave} — {criterio}"
+            opcoes.append(
+                (
+                    chave,
+                    replace(
+                        build,
+                        style=pagina.style,
+                        sub_style=pagina.sub_style,
+                        perks=pagina.perks,
+                        rune_pages=(pagina,),
+                    ),
+                )
+            )
+
+        chaves_atuais = {chave for chave, _ in opcoes}
         for antiga in [
             key
             for key in self._options
             if key.startswith(MATCHUP_PREFIX)
-            and key != chave
+            and key not in chaves_atuais
             and key != self._active_tier
         ]:
             del self._options[antiga]
-        assinatura = (build.style, build.sub_style, build.perks)
-        if any(
-            (outra.style, outra.sub_style, outra.perks) == assinatura
-            for key, outra in self._options.items()
-            if key != chave
-        ):
+
+        adicionadas = False
+        for chave, candidata in opcoes:
+            assinatura = (candidata.style, candidata.sub_style, candidata.perks)
+            if any(
+                (outra.style, outra.sub_style, outra.perks) == assinatura
+                for key, outra in self._options.items()
+                if key != chave
+            ):
+                continue
+            self._options[chave] = candidata
+            adicionadas = True
+        if not adicionadas:
             return
-        self._options[chave] = build
         self._publish_options()
 
     def _clear_options(self) -> None:
