@@ -489,13 +489,23 @@ STYLESHEET = f"""
 }}
 #scoreboardIdentity {{ background: transparent; border: none; }}
 #scoreboardItems {{
-    background: rgba(2, 14, 29, 86);
-    border: 1px solid rgba(103, 148, 185, 42);
-    border-radius: 7px;
+    /* A coluna reserva largura para as sete compras, mas não é uma caixa.
+       Assim, quando uma partida terminou com cinco ou seis itens, o espaço
+       livre não faz a arte parecer pequena dentro de uma moldura longa. */
+    background: transparent;
+    border: none;
+    border-radius: 0;
 }}
 #scoreboardItems #itemIcon {{
     border-color: rgba(143, 190, 220, 142);
     border-radius: 6px;
+}}
+#scoreboardItems #itemIcon[fullBleed="true"] {{
+    /* O espaçamento entre os itens já define a build; a arte usa toda a célula. */
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
 }}
 #scoreboardMetric {{
     background: rgba(2, 14, 29, 122);

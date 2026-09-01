@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from PySide6.QtCore import QSize, Qt  # noqa: E402
+from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 
 from lolqueue.core.lp_history import LP_SOURCE_MANUAL  # noqa: E402
@@ -361,11 +362,36 @@ def test_scoreboard_items_are_larger_but_keep_their_reserved_column(page):
     assert holder is not None
     icons = holder.findChildren(QtWidgets.QLabel, "itemIcon")
     assert len(icons) == 7
-    assert SCOREBOARD_ITEM_ICON == QSize(36, 36)
+    assert SCOREBOARD_ITEM_ICON == QSize(40, 40)
     assert all(icon.minimumSize() == SCOREBOARD_ITEM_ICON for icon in icons)
+    assert all(icon.property("fullBleed") is True for icon in icons)
+    assert all(not icon.hasScaledContents() for icon in icons)
     assert holder.minimumWidth() == SCOREBOARD_ITEMS_WIDTH
     assert holder.maximumWidth() == SCOREBOARD_ITEMS_WIDTH
     assert icons[0].toolTip() == "Item 1"
+
+
+def test_scoreboard_item_art_fills_its_cell_without_stretching(page, tmp_path):
+    source = tmp_path / "wide-item.png"
+    image = QImage(80, 40, QImage.Format.Format_ARGB32)
+    image.fill(Qt.GlobalColor.magenta)
+    assert image.save(str(source))
+
+    icon = page._icon_label(
+        "itemIcon",
+        SCOREBOARD_ITEM_ICON,
+        lambda _: str(source),
+        1001,
+        full_bleed=True,
+    )
+
+    # Uma fonte não quadrada é ampliada e recortada pelo centro, sem ser
+    # deformada. Os itens do LoL são quadrados, então em produção a arte usa
+    # exatamente a célula de 40 x 40 sem borda interna.
+    assert icon.pixmap().size() == QSize(80, 40)
+    assert icon.size() == SCOREBOARD_ITEM_ICON
+    assert icon.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert not icon.hasScaledContents()
 
 
 def test_the_scoreboard_shows_each_players_damage_with_a_relative_bar(page):

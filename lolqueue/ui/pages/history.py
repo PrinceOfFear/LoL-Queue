@@ -16,7 +16,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -56,12 +56,16 @@ HISTORY_ITEMS_WIDTH = (
 )
 RANK_ICON = QSize(58, 58)
 # O detalhe da partida é o lugar em que a build precisa ser lida, não
-# apenas reconhecida por cor. Os 30 px iniciais ainda pareciam pequenos ao
-# lado do retrato do campeão e das métricas. Com 36 px, os itens se aproximam
-# da escala do cliente do LoL, continuam em uma única faixa e a coluna segue
-# tendo uma largura explícita, sem invadir KDA, ouro ou dano.
-SCOREBOARD_ITEM_ICON = QSize(36, 36)
-SCOREBOARD_ITEMS_WIDTH = 7 * SCOREBOARD_ITEM_ICON.width() + 6 * 2
+# apenas reconhecida por cor. A arte ocupa toda a célula de 40 px: a faixa
+# externa já é a moldura, então uma segunda borda dentro do QLabel só faria
+# o item parecer menor. Sete ícones continuam em uma única faixa e a coluna
+# preserva uma largura explícita, sem invadir KDA, ouro ou dano.
+SCOREBOARD_ITEM_ICON = QSize(40, 40)
+SCOREBOARD_ITEM_GAP = 2
+SCOREBOARD_ITEMS_WIDTH = (
+    7 * SCOREBOARD_ITEM_ICON.width()
+    + 6 * SCOREBOARD_ITEM_GAP
+)
 # Estes limites absorvem o espaço adicional dos itens na menor largura
 # suportada. Nome e dano continuam sendo as duas colunas elásticas.
 SCOREBOARD_KDA_WIDTH = 60
@@ -554,14 +558,38 @@ class HistoryPage(QWidget):
         box.addWidget(time_box, 0, 6, 2, 1)
         return row
 
-    def _icon_label(self, object_name: str, size: QSize, resolve, key) -> QLabel:
+    def _icon_label(
+        self,
+        object_name: str,
+        size: QSize,
+        resolve,
+        key,
+        *,
+        full_bleed: bool = False,
+    ) -> QLabel:
         label = QLabel()
         label.setObjectName(object_name)
         label.setFixedSize(size)
-        label.setScaledContents(True)
         path = resolve(key) if resolve else None
-        icon = QIcon(path) if path else QIcon()
-        label.setPixmap(icon.pixmap(size))
+        if full_bleed:
+            # O detalhe já separa os itens pelo próprio espaço entre eles.
+            # Não se perde pixel em uma segunda borda: a arte preserva sua
+            # proporção e ocupa toda a célula, centralizada se precisar cortar.
+            label.setProperty("fullBleed", True)
+            label.setScaledContents(False)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pixmap = QPixmap(path) if path else QPixmap()
+            if not pixmap.isNull():
+                pixmap = pixmap.scaled(
+                    size,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            label.setPixmap(pixmap)
+        else:
+            label.setScaledContents(True)
+            icon = QIcon(path) if path else QIcon()
+            label.setPixmap(icon.pixmap(size))
         return label
 
     def _portrait_with_level(self, champion_id: int, level: int) -> QWidget:
@@ -617,14 +645,24 @@ class HistoryPage(QWidget):
             )
         return box
 
-    def _item_icons(self, match, size: QSize = ITEM_ICON) -> QHBoxLayout:
+    def _item_icons(
+        self,
+        match,
+        size: QSize = ITEM_ICON,
+        *,
+        full_bleed: bool = False,
+    ) -> QHBoxLayout:
         """A grade de itens, do tamanho que a partida realmente comprou."""
         box = QHBoxLayout()
         box.setSpacing(2)
         names = getattr(match, "item_names", ())
         for index, item_id in enumerate(match.items):
             icon = self._icon_label(
-                "itemIcon", size, self._resolve_item_icon, item_id
+                "itemIcon",
+                size,
+                self._resolve_item_icon,
+                item_id,
+                full_bleed=full_bleed,
             )
             name = names[index] if index < len(names) else ""
             if isinstance(name, str) and name:
@@ -967,7 +1005,9 @@ class HistoryPage(QWidget):
         holder = QWidget()
         holder.setObjectName("scoreboardItems")
         holder.setFixedWidth(SCOREBOARD_ITEMS_WIDTH)
-        items = self._item_icons(participant, SCOREBOARD_ITEM_ICON)
+        items = self._item_icons(
+            participant, SCOREBOARD_ITEM_ICON, full_bleed=True
+        )
         items.setContentsMargins(0, 0, 0, 0)
         items.addStretch(1)
         holder.setLayout(items)
