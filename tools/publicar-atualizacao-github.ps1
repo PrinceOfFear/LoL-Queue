@@ -51,10 +51,21 @@ foreach ($arquivo in @($standalone, $python)) {
     if (-not (Test-Path -LiteralPath $arquivo)) { throw "Falta o ZIP de distribuicao: $arquivo. Rode tools/build.ps1 primeiro." }
 }
 
+# O GitHub normaliza espacos de nomes de anexos para pontos. Se o manifesto
+# assinasse o nome local "LoL Queue-...", a API listaria "LoL.Queue-..." e
+# o cliente recusaria a release por nao encontrar o arquivo que assinamos.
+# As copias abaixo tem nome estavel sem espaco e sao as unicas enviadas para
+# a release; os ZIPs com nome amigavel continuam na pasta de distribuicao
+# para envio manual.
+$standaloneUpload = Join-Path $release ("LoL-Queue-" + $versao + '-win64.zip')
+$pythonUpload = Join-Path $release ("LoL-Queue-" + $versao + '-instalacao-python.zip')
+Copy-Item -LiteralPath $standalone -Destination $standaloneUpload -Force
+Copy-Item -LiteralPath $python -Destination $pythonUpload -Force
+
 & py -3 tools\gerar_manifesto_atualizacao.py `
     --version $versao `
-    --standalone $standalone `
-    --python $python `
+    --standalone $standaloneUpload `
+    --python $pythonUpload `
     --chave-privada $ChavePrivada `
     --notas $Notas
 if ($LASTEXITCODE -ne 0) { throw 'Nao consegui gerar o manifesto assinado.' }
@@ -62,7 +73,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Nao consegui gerar o manifesto assinado.' }
 $manifesto = Join-Path $release 'lolqueue-update.json'
 $assinatura = Join-Path $release 'lolqueue-update.json.sig'
 $tag = 'v' + $versao
-$assets = @($standalone, $python, $manifesto, $assinatura)
+$assets = @($standaloneUpload, $pythonUpload, $manifesto, $assinatura)
 if ($DryRun) {
     Write-Output "DRY RUN: gh release create $tag --repo $Repositorio (4 assets assinados)"
     $assets | ForEach-Object { Write-Output "  $_" }
