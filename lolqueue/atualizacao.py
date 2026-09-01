@@ -649,6 +649,12 @@ def launch_prepared_update(
             ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
             creationflags=creation_flags,
             close_fds=True,
+            # O processo atual normalmente tem a pasta da instalacao como
+            # diretorio de trabalho. Se o PowerShell herdar esse cwd, ele
+            # proprio mantem um handle aberto na pasta e o Windows recusa
+            # move-la para o backup ("o item esta em uso"). O helper precisa
+            # nascer fora da instalacao que ele vai substituir.
+            cwd=str(launcher_dir),
         )
     except OSError as exc:
         raise UpdateError("nao consegui iniciar o instalador da atualizacao") from exc

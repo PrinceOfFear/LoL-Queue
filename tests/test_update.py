@@ -214,3 +214,4 @@ def test_apply_helper_lives_outside_staging_and_keeps_python_path_quoted(tmp_pat
     assert "$mainArgument = '\"' + (Join-Path $root 'main.py') + '\"'" in text
     assert "-PassThru" in text
     assert started and started[0][0][0].endswith("powershell.exe")
+    assert started[0][1]["cwd"] == str(script.parent)
