@@ -124,6 +124,17 @@ STYLESHEET = f"""
     font-weight: 800;
     letter-spacing: 1.4px;
 }}
+#brandVersion {{
+    background: rgba(10, 200, 185, 26);
+    border: 1px solid rgba(10, 200, 185, 110);
+    border-radius: 6px;
+    color: #8BF2EA;
+    font-family: "Spiegel";
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.7px;
+    padding: 3px 5px;
+}}
 #brandSubtitle {{
     color: {Palette.ACCENT};
     font-size: 8px;

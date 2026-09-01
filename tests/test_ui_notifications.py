@@ -16,6 +16,7 @@ from lolqueue.ui.widgets.sidebar import (  # noqa: E402
     Sidebar,
 )
 from lolqueue.ui.widgets.update_notification import UpdateNotification  # noqa: E402
+from lolqueue.version import VERSION  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -70,6 +71,16 @@ def test_sidebar_contact_button_opens_the_public_whatsapp_link(app, monkeypatch)
 
     assert opened == [bytes(QUrl(WHATSAPP_CONTACT_URL).toEncoded()).decode()]
     assert "5564992961405" in opened[0]
+
+
+def test_sidebar_brand_shows_the_installed_version(app):
+    sidebar = Sidebar()
+
+    version_badge = sidebar.findChild(QtWidgets.QLabel, "brandVersion")
+
+    assert version_badge is not None
+    assert version_badge.text() == f"v{VERSION}"
+    assert version_badge.accessibleName() == f"Versão {VERSION}"
 
 
 def test_settings_keeps_security_check_internal_without_rendering_the_card(app):

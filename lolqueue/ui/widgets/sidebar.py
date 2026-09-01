@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...resources import asset_path
+from ...version import VERSION
 
 
 #: A ordem manda: o índice de cada seção é o da página correspondente na
@@ -61,9 +62,19 @@ class Sidebar(QWidget):
         brand_layout.addWidget(mark)
         words = QVBoxLayout()
         words.setSpacing(0)
+        title_line = QHBoxLayout()
+        title_line.setContentsMargins(0, 0, 0, 0)
+        title_line.setSpacing(6)
         title = QLabel("LOL QUEUE")
         title.setObjectName("brandTitle")
-        words.addWidget(title)
+        title_line.addWidget(title)
+        title_line.addStretch(1)
+        version = QLabel(f"v{VERSION}")
+        version.setObjectName("brandVersion")
+        version.setAccessibleName(f"Versão {VERSION}")
+        version.setToolTip(f"Versão instalada: {VERSION}")
+        title_line.addWidget(version)
+        words.addLayout(title_line)
         subtitle = QLabel("CENTRAL DE FILA")
         subtitle.setObjectName("brandSubtitle")
         words.addWidget(subtitle)
