@@ -107,6 +107,7 @@ class Engine:
         self._antitoxic: MuteController | None = None
         self._jungle: JungleWatch | None = None
         self._game_sync = None
+        self._lp_tracker = None
         self._pending: Callable[[], None] | None = None
         self._acted = False
         self._action_failures = 0
@@ -175,6 +176,26 @@ class Engine:
         """
         self._game_sync = sync
 
+    def set_lp_tracker(self, tracker) -> None:
+        """Entrega quem captura o delta oficial de PDL no pós-jogo."""
+        previous = self._lp_tracker
+        if previous is not None and previous is not tracker:
+            stop = getattr(previous, "stop", None)
+            if callable(stop):
+                stop()
+        self._lp_tracker = tracker
+        start_live_events = getattr(tracker, "start_live_events", None)
+        if callable(start_live_events):
+            start_live_events()
+
+    def close(self) -> None:
+        """Solta recursos que pertencem a esta conex\u00e3o do cliente."""
+
+        tracker = self._lp_tracker
+        stop = getattr(tracker, "stop", None)
+        if callable(stop):
+            stop()
+
     def handle_identity(self, identity) -> None:
         """Outra conta entrou no cliente."""
         if self._game_sync is not None:
@@ -185,6 +206,9 @@ class Engine:
         if phase is not self._phase:
             self._clear_pending()
         self._phase = phase
+
+        if self._lp_tracker is not None:
+            self._lp_tracker.handle_phase(phase)
 
         if self._antitoxic is not None and phase in MUTE_OVER_PHASES:
             # Fora de qualquer proteção do motor ligado: a partida
@@ -231,6 +255,10 @@ class Engine:
             # o motor ligado para isso não faria sentido para quem só
             # quer entrar na conta de outro e achar as teclas no lugar.
             self._game_sync.tick()
+        if self._lp_tracker is not None:
+            # Histórico é leitura: acompanha PDL mesmo se a automação de
+            # fila estiver desligada.
+            self._lp_tracker.tick()
         if not self._enabled:
             return
         self._watch_search()

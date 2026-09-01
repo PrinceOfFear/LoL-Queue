@@ -1,0 +1,15 @@
+LoL Queue — qual arquivo enviar
+
+1 - Enviar normalmente (executável)
+Envie o ZIP que está dentro desta pasta para a maioria das pessoas. Ela só
+precisa extrair o ZIP inteiro e abrir LoL Queue.exe. Não envie somente o .exe.
+
+2 - Usar se o EXE não abrir (Python)
+Envie este ZIP se o executável fechar imediatamente, mostrar 0xC000001D
+("instrução ilegal") ou for bloqueado pelo Smart App Control do Windows. A
+pessoa deve extrair o ZIP, instalar Python 3.13 ou mais novo e executar
+tools\instalar.ps1 conforme o LEIA-ME interno.
+
+Nunca envie uma versão diferente da que está nestas duas pastas numeradas.
+Os ZIPs estão acompanhados de arquivos .sha256 apenas para quem quiser conferir
+a integridade do download.

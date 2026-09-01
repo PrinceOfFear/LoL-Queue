@@ -76,6 +76,7 @@ def build(
     source=None,
     now=None,
     on_options=None,
+    on_analysis=None,
     deaf=None,
 ):
     base = {
@@ -106,6 +107,7 @@ def build(
         source=source,
         now=now or (lambda: 0.0),
         on_rune_options=on_options,
+        on_analysis=on_analysis,
     )
     return loadout, client, messages
 
@@ -1023,6 +1025,61 @@ def test_a_slow_opgg_gives_way_to_the_riot():
 
     created = page_body(client)
     assert created["selectedPerkIds"] == PERK_IDS
+
+
+def test_a_late_opgg_answer_still_updates_analysis_and_the_arsenal():
+    """O teto protege a seleção, mas não descarta uma build que chegou."""
+    clock = [0.0]
+    source = SlowSource(COM_ARSENAL)
+    source.gate.clear()
+    seen = []
+    loadout, client, _ = build(
+        config=Config(auto_items=True),
+        source=source,
+        now=lambda: clock[0],
+        on_analysis=lambda *args: seen.append(args),
+    )
+    dados = session()
+
+    loadout.apply(dados)
+    clock[0] = WAIT_SECONDS + 1
+    loadout.apply(dados)
+
+    assert ITEM_SETS not in client.paths("PUT")
+    assert seen[-1][2] is None
+    assert seen[-1][3] == "timed_out"
+
+    source.gate.set()
+    loadout._late.thread.join(timeout=2)
+    loadout.apply(dados)
+
+    assert ITEM_SETS in client.paths("PUT")
+    assert seen[-1][2] is COM_ARSENAL
+    assert seen[-1][3] == "ready"
+
+
+def test_a_blank_lane_waits_for_the_client_instead_of_guessing_one():
+    """Sem rota confirmada, consultar qualquer lane seria uma build errada."""
+    source = SlowSource(COM_ARSENAL)
+    seen = []
+    loadout, client, _ = build(
+        config=Config(auto_items=True),
+        source=source,
+        on_analysis=lambda *args: seen.append(args),
+    )
+    dados = session(position="")
+
+    loadout.apply(dados)
+
+    assert source.calls == []
+    assert loadout._done_for is None
+    assert seen[-1][3] == "awaiting_route"
+
+    dados["myTeam"][0]["assignedPosition"] = "bottom"
+    settle(loadout, dados)
+
+    assert source.calls == [("KogMaw", "bottom", False)]
+    assert ITEM_SETS in client.paths("PUT")
 
 
 def test_an_empty_answer_gives_way_to_the_riot():

@@ -12,6 +12,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..atualizacao import (
+    GithubReleaseClient,
+    UpdateError,
+    UpdateNotAvailable,
+    current_installation,
+    launch_prepared_update,
+)
 from ..config import OPGG_TIERS, Config, log_dir, position_name, queue_name
 from ..core.accounts import (
     ARRIVED_FIRST,
@@ -26,6 +33,7 @@ from ..core.gamesettings import GameSettingsSync
 from ..core.icons import AssetStore, IconStore
 from ..core.journal import Journal
 from ..core.loadout import Loadout
+from ..core.lp_history import LpChangeTracker, LpHistory, format_lp_delta
 from ..core.matchup import MatchupSource
 from ..core.opgg import OpggSource
 from ..core.phases import GameflowPhase
@@ -38,7 +46,9 @@ from .fonts import install_application_fonts
 from .game_detail_loader import GameDetailLoader
 from .history_loader import HistoryLoader
 from .icon_loader import IconLoader
+from .lp_import_loader import LpImportLoader
 from .matchup_loader import MatchupLoader
+from .update_loader import UpdateCheckLoader, UpdateDownloadLoader
 from .pages.analysis import AnalysisPage
 from .pages.champions import ChampionsPage
 from .pages.dashboard import DashboardPage
@@ -47,6 +57,7 @@ from .pages.queue import QueuePage
 from .pages.settings import SettingsPage
 from .theme import STYLESHEET
 from .widgets.backdrop import Backdrop
+from .widgets.manual_lp_import import ManualLpImportDialog
 from .widgets.sidebar import Sidebar
 from .widgets.titlebar import TITLEBAR_HEIGHT, TitleBar
 
@@ -113,10 +124,25 @@ class MainWindow(QWidget):
         # sobrevive a uma reconexão com o cliente.
         self._matchups = MatchupSource()
         self._matchup_loader: MatchupLoader | None = None
+        # O atualizador nao toca no disco pela interface: ela mantem apenas
+        # estes workers vivos ate que rede, hash e staging terminem.
+        self._update_client = GithubReleaseClient()
+        self._update_installation = current_installation()
+        self._update_check_loader: UpdateCheckLoader | None = None
+        self._update_download_loader: UpdateDownloadLoader | None = None
         # O perfil e as partidas consultados, pelo mesmo motivo do
         # `_opgg` e do `_matchups`: sobrevivem a uma reconexão.
         self._history_source = SummonerHistorySource()
+        # Os deltas de PDL vêm do cliente, não do OP.GG. Este registro
+        # mantém a confirmação exata mesmo depois que os logs da Riot
+        # forem rotacionados pelo Windows.
+        self._lp_history = LpHistory()
         self._history_loader: HistoryLoader | None = None
+        self._lp_import_loader: LpImportLoader | None = None
+        # Uma confirmação de PDL pode chegar enquanto a consulta disparada
+        # no fim da partida ainda está voltando. Em vez de ignorá-la, deixa
+        # um segundo refresh curto na fila para não exigir clique manual.
+        self._history_refresh_pending = False
         # O alias do campeão que está na página de análise agora.
         self._analysis_alias = ""
         self._icons = IconStore()
@@ -208,6 +234,7 @@ class MainWindow(QWidget):
         self._history.set_secondary_style_icon_resolver(self._match_tree_icon)
         self._history.refresh_requested.connect(self._refresh_history)
         self._history.match_selected.connect(self._open_game_detail)
+        self._history.manual_lp_import_requested.connect(self._open_manual_lp_import)
         self._champions = ChampionsPage(self._binder)
         self._queue = QueuePage(self._binder)
         self._settings = SettingsPage(self._binder)
@@ -216,6 +243,13 @@ class MainWindow(QWidget):
         self._settings.accounts.capture_requested.connect(self._on_capture_game)
         self._settings.accounts.clear_requested.connect(self._on_clear_game)
         self._settings.accounts.apply_requested.connect(self._on_apply_game)
+        self._settings.updates.check_requested.connect(self._check_for_update)
+        self._settings.updates.download_requested.connect(self._download_update)
+        if self._update_installation.is_development_checkout:
+            self._settings.updates.show_unavailable(
+                "Esta pasta e um repositorio de desenvolvimento. O atualizador "
+                "nao a sobrescreve para preservar seu trabalho."
+            )
 
         # A ordem tem de bater com `SECTIONS` da barra lateral: é o
         # índice do botão que escolhe a página.
@@ -240,8 +274,10 @@ class MainWindow(QWidget):
         # logada; sem isso, sair e voltar devolveria o perfil antigo
         # por cima do que o usuário acabou de escolher.
         self._binder.changed.connect(self._remember_account)
+        self._binder.changed.connect(self._on_analysis_config_changed)
         self._render_pick_order()
         self._refresh_accounts()
+        self._refresh_analysis_empty_state()
 
     @staticmethod
     def _scroll_page(page: QWidget) -> QScrollArea:
@@ -280,6 +316,7 @@ class MainWindow(QWidget):
         self._watcher.analysis_changed.connect(self._on_analysis_changed)
         self._watcher.identity_changed.connect(self._on_identity_changed)
         self._watcher.accounts_changed.connect(self._refresh_accounts)
+        self._watcher.lp_change_captured.connect(self._on_lp_change_captured)
         self._watcher.start()
 
     def _make_engine(self, client) -> Engine:
@@ -333,6 +370,13 @@ class MainWindow(QWidget):
         )
         self._game_sync = sync
         engine.set_game_sync(sync)
+        engine.set_lp_tracker(
+            LpChangeTracker(
+                client,
+                self._lp_history,
+                on_change=self._watcher.lp_change_captured.emit,
+            )
+        )
         engine.set_champ_select(
             ChampSelectController(
                 client,
@@ -357,6 +401,7 @@ class MainWindow(QWidget):
         engine = self._watcher.engine
         if engine is not None:
             engine.set_enabled(enabled)
+        self._refresh_analysis_empty_state()
         self._log_message("Motor ligado." if enabled else "Motor desligado.")
 
     def _on_phase_changed(self, phase_value: str) -> None:
@@ -391,6 +436,7 @@ class MainWindow(QWidget):
             # Pedido do usuário: o histórico não pode depender do
             # clique em "Atualizar" para saber que uma partida acabou.
             self._refresh_history()
+        self._refresh_analysis_empty_state()
         self._refresh_ring()
 
     def _show_blocked_queues(self, blocked: set[int]) -> None:
@@ -547,6 +593,84 @@ class MainWindow(QWidget):
             self._matchup_loader = None
         loader.deleteLater()
 
+    # ---------- atualizacao remota ----------
+
+    @staticmethod
+    def _update_error_message(error: BaseException | None) -> str:
+        """Converte falhas esperadas em frase util sem expor traceback."""
+
+        if isinstance(error, UpdateError):
+            return str(error)
+        return "Ocorreu uma falha inesperada. Feche e abra o LoL Queue e tente novamente."
+
+    def _check_for_update(self) -> None:
+        if self._update_installation.is_development_checkout:
+            return
+        if self._update_check_loader is not None or self._update_download_loader is not None:
+            return
+        self._settings.updates.checking()
+        loader = UpdateCheckLoader(self._update_client, self._update_installation, self)
+        loader.ready.connect(self._on_update_check_ready)
+        loader.finished.connect(lambda: self._retire_update_check_loader(loader))
+        self._update_check_loader = loader
+        loader.start()
+
+    def _on_update_check_ready(self, offer, error) -> None:
+        if isinstance(error, UpdateNotAvailable):
+            self._settings.updates.show_current()
+            return
+        if error is not None:
+            self._settings.updates.show_error(self._update_error_message(error))
+            return
+        if offer is None:
+            self._settings.updates.show_error("A release oficial nao trouxe um pacote compativel.")
+            return
+        self._settings.updates.show_offer(offer)
+
+    def _retire_update_check_loader(self, loader) -> None:
+        if self._update_check_loader is loader:
+            self._update_check_loader = None
+        loader.deleteLater()
+
+    def _download_update(self) -> None:
+        if self._update_installation.is_development_checkout:
+            return
+        if self._update_check_loader is not None or self._update_download_loader is not None:
+            return
+        offer = self._settings.updates.offer
+        if offer is None:
+            self._check_for_update()
+            return
+        self._settings.updates.downloading(0, offer.artifact.size)
+        loader = UpdateDownloadLoader(self._update_client, offer, self)
+        loader.progress.connect(self._settings.updates.downloading)
+        loader.ready.connect(self._on_update_download_ready)
+        loader.finished.connect(lambda: self._retire_update_download_loader(loader))
+        self._update_download_loader = loader
+        loader.start()
+
+    def _on_update_download_ready(self, prepared, error) -> None:
+        if error is not None:
+            self._settings.updates.show_error(self._update_error_message(error))
+            return
+        if prepared is None:
+            self._settings.updates.show_error("A atualizacao nao foi preparada corretamente.")
+            return
+        self._settings.updates.preparing_restart()
+        try:
+            launch_prepared_update(prepared, self._update_installation)
+        except Exception as exc:
+            self._settings.updates.show_error(self._update_error_message(exc))
+            return
+        self._log_message(f"Atualizacao {prepared.offer.version} conferida; reiniciando o LoL Queue.")
+        # O instalador externo espera este processo sair para trocar a pasta.
+        self.close()
+
+    def _retire_update_download_loader(self, loader) -> None:
+        if self._update_download_loader is loader:
+            self._update_download_loader = None
+        loader.deleteLater()
+
     def _refresh_history(self) -> None:
         """Busca perfil e partidas numa thread só dela.
 
@@ -556,9 +680,14 @@ class MainWindow(QWidget):
         os dois casos.
         """
         if self._history_loader is not None:
+            self._history_refresh_pending = True
             return
         self._history.set_loading(True)
-        loader = HistoryLoader(self._history_source, self)
+        loader = HistoryLoader(
+            self._history_source,
+            lp_history=self._lp_history,
+            parent=self,
+        )
         loader.ready.connect(self._on_history_ready)
         loader.finished.connect(lambda: self._retire_history_loader(loader))
         self._history_loader = loader
@@ -567,10 +696,61 @@ class MainWindow(QWidget):
     def _retire_history_loader(self, loader) -> None:
         if self._history_loader is loader:
             self._history_loader = None
+            refresh_again = self._history_refresh_pending
+            self._history_refresh_pending = False
+        else:
+            refresh_again = False
         loader.deleteLater()
+        if refresh_again:
+            QTimer.singleShot(0, self._refresh_history)
 
     def _on_history_ready(self, profile, matches) -> None:
         self._history.set_history(profile, matches)
+
+    def _on_lp_change_captured(self, change) -> None:
+        """Atualiza a lista assim que o cliente confirmar o resultado."""
+
+        self._log_message(f"PDL registrado: {format_lp_delta(change.delta)}.")
+        self._refresh_history()
+
+    def _open_manual_lp_import(self, matches) -> None:
+        """Abre a recuperação manual, sem consultar ou raspar sites externos."""
+
+        if self._lp_import_loader is not None:
+            return
+        dialog = ManualLpImportDialog(matches, self._champion_name, self)
+        if not dialog.exec():
+            return
+        rows = dialog.inputs()
+        if not rows:
+            return
+        self._history.set_manual_importing(True)
+        loader = LpImportLoader(self._lp_history, rows, self)
+        loader.ready.connect(self._on_manual_lp_imported)
+        loader.finished.connect(lambda: self._retire_lp_import_loader(loader))
+        self._lp_import_loader = loader
+        loader.start()
+
+    def _on_manual_lp_imported(self, result) -> None:
+        self._history.set_manual_importing(False)
+        imported = len(result.imported)
+        if imported:
+            self._log_message(
+                f"PDL informado salvo em {imported} "
+                f"{'partida' if imported == 1 else 'partidas'}."
+            )
+            self._refresh_history()
+        if result.rejected:
+            self._log_message(
+                "Alguns PDLs não puderam ser confirmados. Deixe o cliente "
+                "aberto, atualize o histórico e tente de novo."
+            )
+
+    def _retire_lp_import_loader(self, loader) -> None:
+        if self._lp_import_loader is loader:
+            self._lp_import_loader = None
+            self._history.set_manual_importing(False)
+        loader.deleteLater()
 
     def _open_game_detail(self, match) -> None:
         """Busca o placar completo de uma partida numa thread só dela.
@@ -604,7 +784,7 @@ class MainWindow(QWidget):
         """
         return self._latest_catalog.name(champion_id) if self._latest_catalog else None
 
-    def _on_analysis_changed(self, champion_id, position, build) -> None:
+    def _on_analysis_changed(self, champion_id, position, build, status="no_data") -> None:
         """Entrega à página de análise o que o OP.GG disse do campeão.
 
         Não some quando a seleção acaba, ao contrário da prévia: a
@@ -632,7 +812,31 @@ class MainWindow(QWidget):
             position,
             OPGG_TIERS.get(self._config.opgg_tier, ""),
             build,
+            status,
         )
+
+    def _on_analysis_config_changed(self, attribute: str) -> None:
+        """Atualiza o motivo vazio quando a configuração muda na tela."""
+        if attribute in {"auto_spells", "auto_runes", "auto_items"}:
+            self._refresh_analysis_empty_state()
+
+    def _refresh_analysis_empty_state(self) -> None:
+        """Diz o próximo passo sem apagar a leitura da partida atual."""
+        if self._analysis.has_analysis:
+            return
+        if not self._connected:
+            state = "client_disconnected"
+        elif not self._enabled:
+            state = "automation_paused"
+        elif not (
+            self._config.auto_spells
+            or self._config.auto_runes
+            or self._config.auto_items
+        ):
+            state = "build_disabled"
+        else:
+            state = "awaiting_champion"
+        self._analysis.set_empty_state(state)
 
     def _on_rune_option_chosen(self, tier: str) -> None:
         """Repassa a escolha ao equipamento, sem falar com o cliente.
@@ -724,6 +928,10 @@ class MainWindow(QWidget):
         self._connected = connected
         self._sidebar.set_connected(connected)
         self._dashboard.ring.set_connected(connected)
+        # A central de contas mostra se as ações de controles podem falar
+        # com o cliente. Atualizar aqui evita um selo "aguardando" preso na
+        # tela depois que o LoL já conectou (ou o contrário ao fechá-lo).
+        self._refresh_accounts()
         if not connected:
             # Sem cliente não há seleção nenhuma rolando — o boneco da
             # partida anterior não pode ficar preso na tela, e nem os
@@ -739,6 +947,7 @@ class MainWindow(QWidget):
             self._on_predicted_pick_changed(None)
             self._on_pick_scope_changed("")
             self._dashboard.set_rune_options([], None, {})
+        self._refresh_analysis_empty_state()
 
     def _refresh_ring(self) -> None:
         # Conta em toda fase, não só nas de fila. Zerado fora delas o
@@ -763,6 +972,7 @@ class MainWindow(QWidget):
         self._save_accounts()
         self._binder.reload()
         self._refresh_accounts()
+        self._refresh_analysis_empty_state()
         if arrival.kind == ARRIVED_INHERITED:
             self._log_message(
                 f"Conta {arrival.label}: ajustes copiados de {arrival.source}."
@@ -810,6 +1020,12 @@ class MainWindow(QWidget):
         A tela é redesenhada na volta seguinte do relógio das contas,
         que é quando o bilhete já virou fotografia.
         """
+        if key != self._active_account:
+            self._log_message(
+                "A conta mudou antes de guardar os controles. Abra a conta "
+                "desejada e tente novamente."
+            )
+            return
         if not self._ask_sync("guardar"):
             return
         self._game_sync.request_capture(key)
@@ -826,6 +1042,12 @@ class MainWindow(QWidget):
         )
 
     def _on_apply_game(self, key: str) -> None:
+        if key != self._active_account:
+            self._log_message(
+                "A conta mudou antes de aplicar os controles. Abra a conta "
+                "desejada e tente novamente."
+            )
+            return
         if not self._ask_sync("aplicar"):
             return
         self._game_sync.request_apply(key)
@@ -846,7 +1068,10 @@ class MainWindow(QWidget):
 
     def _refresh_accounts(self) -> None:
         self._settings.accounts.show_accounts(
-            self._accounts.ordered(), self._active_account, self._accounts.main
+            self._accounts.ordered(),
+            self._active_account,
+            self._accounts.main,
+            self._connected,
         )
 
     def _save_accounts(self) -> None:
@@ -905,4 +1130,10 @@ class MainWindow(QWidget):
             self._history_loader.wait(3000)
         if self._game_detail_loader is not None:
             self._game_detail_loader.wait(3000)
+        if self._lp_import_loader is not None:
+            self._lp_import_loader.wait(3000)
+        if self._update_check_loader is not None:
+            self._update_check_loader.wait(3000)
+        if self._update_download_loader is not None:
+            self._update_download_loader.wait(3000)
         event.accept()

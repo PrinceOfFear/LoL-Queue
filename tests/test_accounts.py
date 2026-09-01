@@ -184,6 +184,48 @@ def test_marking_an_unknown_account_as_main_does_nothing():
     assert contas.main == ""
 
 
+def test_making_another_account_main_keeps_the_current_game_model():
+    """Trocar a principal não pode desligar a cópia de controles."""
+    contas = Accounts(now=lambda: "2026-01-01T00:00:00")
+    dona = quem()
+    amiga = quem("Amigo", "BR2")
+    contas.arrive(dona, Config())
+    contas.arrive(amiga, Config())
+    contas.set_game_settings(account_key(dona), {"input": {"a": 1}})
+
+    assert contas.set_main(account_key(amiga))
+    assert contas.main == account_key(amiga)
+    assert contas.main_game_settings() == {"input": {"a": 1}}
+    assert contas.accounts[account_key(dona)].game_settings == {}
+
+
+def test_new_main_keeps_its_own_game_model_when_it_already_has_one():
+    """A fotografia da conta promovida vence a que existia antes."""
+    contas = Accounts(now=lambda: "2026-01-01T00:00:00")
+    dona = quem()
+    amiga = quem("Amigo", "BR2")
+    contas.arrive(dona, Config())
+    contas.arrive(amiga, Config())
+    contas.set_game_settings(account_key(dona), {"input": {"a": 1}})
+    contas.set_game_settings(account_key(amiga), {"input": {"b": 2}})
+
+    assert contas.set_main(account_key(amiga))
+    assert contas.main_game_settings() == {"input": {"b": 2}}
+    assert contas.accounts[account_key(dona)].game_settings == {}
+
+
+def test_ordered_profiles_are_a_safe_snapshot_for_the_ui():
+    """A vigia não pode trocar dados enquanto a GUI desenha uma linha."""
+    contas = Accounts(now=lambda: "2026-01-01T00:00:00")
+    contas.arrive(quem(), Config())
+    contas.set_game_settings(contas.main, {"input": {"a": 1}})
+
+    _, shown = contas.ordered()[0]
+    shown.game_settings["input"]["a"] = 2
+
+    assert contas.main_game_settings()["input"]["a"] == 1
+
+
 def test_a_half_written_history_is_never_left_behind(tmp_path):
     """Falha na gravação não deixa o pedaço ao lado do arquivo bom."""
     alvo = tmp_path / "sem-permissao" / "contas.json"

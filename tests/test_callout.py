@@ -12,7 +12,7 @@ import pytest
 
 from lolqueue.vision.callout import LONGE, MEDIO, PERTO, announce, map_end
 from lolqueue.vision.livegame import parse
-from lolqueue.vision.zones import CAMPS, classify
+from lolqueue.vision.zones import CAMP_RADIUS, CAMPS, classify
 
 # Posições de referência, todas conferidas contra a textura oficial.
 SAPO_AZUL = (0.146, 0.435)
@@ -230,6 +230,19 @@ def test_a_warning_read_on_a_border_is_not_firm():
     """
     assert announce("Lee Sin", 0.44, 0.30).firm is False
     assert announce("Lee Sin", 0.34, 0.30).firm is True
+
+
+def test_a_stricter_margin_leaves_nearby_camp_edge_silent():
+    """O modo máximo pede mais folga sem renomear a zona do aviso."""
+    blue = next(camp for camp in CAMPS if camp[0] == "blue" and camp[3] == 1)
+    point = (blue[1] + CAMP_RADIUS - 0.023, blue[2])
+
+    normal = announce("Lee Sin", *point)
+    strict = announce("Lee Sin", *point, stable_margin=0.025, firm_probes=16)
+
+    assert normal.zone_key == strict.zone_key == "blue"
+    assert normal.firm is True
+    assert strict.firm is False
 
 
 def test_a_hand_made_warning_is_firm_by_default():

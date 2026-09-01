@@ -14,6 +14,7 @@ from lolqueue.vision.detect import (
     ACQUIRE_MARGIN,
     CONFIRM_FRAMES,
     FORGIVE_FRAMES,
+    JUMP_FRACTION,
     MARGIN,
     THRESHOLD,
     Detector,
@@ -23,6 +24,7 @@ from lolqueue.vision.detect import (
     score_map,
 )
 from lolqueue.vision.icons import Template
+from lolqueue.vision.watcher import MAX_PRECISION
 
 LADO = 20
 
@@ -369,6 +371,21 @@ def test_a_confirmed_match_cannot_walk_across_the_map(molde):
     assert not detector.confirmed
 
 
+def test_a_fast_near_shift_restarts_the_track(molde):
+    """Um pico perto, mas rápido demais, não desloca o local falado.
+
+    Este é o caso que ainda passava com meio lado de tolerância: terreno
+    parecido ao lado do retrato trocava a zona como se fosse movimento do
+    jungler. Um Flash verdadeiro vira evento novo e confirma de novo.
+    """
+    detector = Detector([molde])
+    confirmar(detector, molde, 60, 60)
+    step = int(LADO * JUMP_FRACTION) + 1
+
+    assert detector.feed(plantar(terreno(), molde, 60 + step, 60)) is None
+    assert not detector.confirmed
+
+
 # ---------------------------------------------------------------------------
 # Adquirir é mais difícil que seguir
 # ---------------------------------------------------------------------------
@@ -453,3 +470,53 @@ def test_the_scale_that_won_is_the_only_one_tried_afterwards(molde, retrato):
     detector.reset()
 
     assert detector._locked is None
+
+
+# ---------------------------------------------------------------------------
+# Precisão máxima
+# ---------------------------------------------------------------------------
+
+
+def _strict_detector(molde: Template) -> Detector:
+    return Detector(
+        [molde],
+        threshold=MAX_PRECISION.threshold,
+        confirm=MAX_PRECISION.confirm_frames,
+        forgive=MAX_PRECISION.forgive_frames,
+        margin=MAX_PRECISION.margin,
+        acquire=MAX_PRECISION.acquire_margin,
+        jump_fraction=MAX_PRECISION.jump_fraction,
+    )
+
+
+def test_maximum_precision_requires_five_unbroken_frames(molde):
+    """O perfil conservador não herda a confirmação curta do normal."""
+    detector = _strict_detector(molde)
+    quadro = plantar(terreno(), molde, 60, 60)
+
+    for _ in range(MAX_PRECISION.confirm_frames - 1):
+        assert detector.feed(quadro) is None
+    assert detector.feed(quadro) is not None
+    assert detector.confirmed
+
+
+def test_maximum_precision_forgets_after_one_missing_frame(molde):
+    """Sem rastro visível, o modo máximo recomeça a prova do zero."""
+    detector = _strict_detector(molde)
+    quadro = plantar(terreno(), molde, 60, 60)
+    for _ in range(MAX_PRECISION.confirm_frames):
+        detector.feed(quadro)
+    assert detector.confirmed
+
+    assert detector.feed(terreno()) is None
+    assert not detector.confirmed
+    assert detector.feed(quadro) is None
+
+
+def test_maximum_precision_uses_the_stricter_visual_and_motion_gates(molde):
+    detector = _strict_detector(molde)
+
+    assert detector._threshold == MAX_PRECISION.threshold
+    assert detector._margin == MAX_PRECISION.margin
+    assert detector._acquire == MAX_PRECISION.acquire_margin
+    assert detector._jump_fraction == MAX_PRECISION.jump_fraction

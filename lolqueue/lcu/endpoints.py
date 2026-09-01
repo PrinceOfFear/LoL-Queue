@@ -36,6 +36,19 @@ CHAMPION_SUMMARY = "/lol-game-data/assets/v1/champion-summary.json"
 CHAMPION_ICON = "/lol-game-data/assets/v1/champion-icons/{champion_id}.png"
 CURRENT_SUMMONER = "/lol-summoner/v1/current-summoner"
 
+# O cliente preenche esta notificação depois de uma ranqueada. Ela traz o
+# delta oficial de PDL da partida, incluindo promoções e penalidades — não
+# é uma conta feita a partir do PDL atual.
+CURRENT_LP_CHANGE_NOTIFICATION = "/lol-ranked/v1/current-lp-change-notification"
+# Retrato atual e oficial das filas ranqueadas da conta conectada. É mais
+# imediato que o perfil público e evita mostrar PDL defasado no cabeçalho.
+CURRENT_RANKED_STATS = "/lol-ranked/v1/current-ranked-stats"
+
+# A lista local usa o id numérico da partida. Ela permite ligar a
+# notificação de PDL à entrada equivalente que o OP.GG devolve com um id
+# opaco, casando hora de término, fila e campeão.
+MATCH_HISTORY = "/lol-match-history/v1/products/lol/{puuid}/matches?begIndex=0&endIndex={end_index}"
+
 #: As configurações do jogo em si, não do cliente: interface, minimapa,
 #: câmera, volume, o que aparece na tela durante a partida. GET devolve
 #: o bloco inteiro; PATCH mescla só o que for mandado — o resto fica

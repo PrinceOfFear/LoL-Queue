@@ -56,6 +56,65 @@ TIERS = {1: "OP", 2: "Forte", 3: "Bom", 4: "Fraco", 5: "Ruim"}
 COUNTER_LIMIT = 3
 
 
+#: A tela não pode chamar de "vazia" situações que têm conserto.  A
+#: análise depende de um campeão confirmado, da rota que o cliente realmente
+#: publicou e da consulta externa; cada etapa ganha uma explicação própria.
+#: Isso é especialmente importante numa instalação nova, onde automação e
+#: build começam desligadas por segurança.
+EMPTY_STATES = {
+    "client_disconnected": (
+        "ANÁLISE CONTEXTUAL",
+        "Conecte o cliente do League",
+        "A análise usa o campeão e a rota que o próprio cliente do LoL "
+        "confirmar.",
+        "Abra o cliente do League of Legends e entre em uma conta.",
+    ),
+    "automation_paused": (
+        "ANÁLISE CONTEXTUAL",
+        "A automação está pausada",
+        "O LoL Queue busca a build durante a seleção somente enquanto a "
+        "automação estiver ligada.",
+        "Na Central, clique em INICIAR AUTOMAÇÃO.",
+    ),
+    "build_disabled": (
+        "ANÁLISE CONTEXTUAL",
+        "A consulta de build está desligada",
+        "Runas, feitiços e arsenal estão todos desativados, por isso não há "
+        "uma build para a Análise acompanhar.",
+        "Em Ajustes, ative runas, feitiços ou Montar o arsenal na loja.",
+    ),
+    "awaiting_route": (
+        "ANÁLISE CONTEXTUAL",
+        "Aguardando a rota confirmada",
+        "O cliente ainda não informou a sua rota. O LoL Queue não inventa "
+        "uma posição para consultar uma build errada.",
+        "Aguarde a seleção terminar de carregar ou confirme o campeão.",
+    ),
+    "timed_out": (
+        "ANÁLISE CONTEXTUAL",
+        "O OP.GG demorou para responder",
+        "A automação seguiu sem esperar para não atrapalhar a seleção. "
+        "Se a resposta chegar, esta tela e o arsenal serão atualizados nesta "
+        "mesma seleção.",
+        "Confira a conexão com a internet e mantenha o LoL Queue aberto.",
+    ),
+    "no_data": (
+        "ANÁLISE CONTEXTUAL",
+        "O OP.GG não trouxe uma build agora",
+        "Não há dados suficientes para este campeão, rota e elo, ou a "
+        "consulta externa está indisponível no momento.",
+        "Tente outra seleção ou escolha outro elo nos Ajustes.",
+    ),
+    "awaiting_champion": (
+        "ANÁLISE CONTEXTUAL",
+        "A leitura começa na seleção",
+        "Assim que um campeão for confirmado, você verá ordem de "
+        "habilidades, confrontos, sinergias e o desempenho da build.",
+        "Abra o cliente e entre em uma seleção de campeões.",
+    ),
+}
+
+
 class SkillRow(QWidget):
     """A sequência de subida, uma casinha por nível.
 
@@ -105,6 +164,8 @@ class AnalysisPage(QWidget):
         # dois lados, e este é o lado que não vem do seletor.
         self._alias = ""
         self._position = ""
+        self._has_analysis = False
+        self._empty_state = "awaiting_champion"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(36, 20, 36, 20)
@@ -132,13 +193,10 @@ class AnalysisPage(QWidget):
                 "positions/middle.png",
                 "positions/bottom.png",
             ),
-            eyebrow="ANÁLISE CONTEXTUAL",
-            title="A leitura começa na seleção",
-            detail=(
-                "Assim que um campeão for confirmado, você verá ordem de "
-                "habilidades, confrontos, sinergias e o desempenho da build."
-            ),
-            footnote="Abra o cliente e entre em uma seleção de campeões.",
+            eyebrow=EMPTY_STATES["awaiting_champion"][0],
+            title=EMPTY_STATES["awaiting_champion"][1],
+            detail=EMPTY_STATES["awaiting_champion"][2],
+            footnote=EMPTY_STATES["awaiting_champion"][3],
         )
         layout.addWidget(self._empty)
 
@@ -155,6 +213,30 @@ class AnalysisPage(QWidget):
         content.addWidget(self._build_counters())
         content.addWidget(self._build_synergies())
         content.addStretch(1)
+
+    @property
+    def has_analysis(self) -> bool:
+        """Se a página ainda guarda uma leitura válida para a partida."""
+        return self._has_analysis
+
+    def set_empty_state(self, state: str, *, force: bool = False) -> None:
+        """Explica precisamente por que não há dados para mostrar.
+
+        Uma análise pronta continua útil dentro da partida e não deve
+        desaparecer só porque o cliente saiu da seleção.  Quem sabe que uma
+        nova consulta falhou usa ``force=True`` para trocar a leitura antiga
+        pelo diagnóstico atual.
+        """
+        if self._has_analysis and not force:
+            return
+        copy = EMPTY_STATES.get(state, EMPTY_STATES["no_data"])
+        self._empty_state = state if state in EMPTY_STATES else "no_data"
+        self._empty.set_copy(
+            eyebrow=copy[0], title=copy[1], detail=copy[2], footnote=copy[3]
+        )
+        self._has_analysis = False
+        self._content.hide()
+        self._empty.show()
 
     # ---------- montagem ----------
 
@@ -398,17 +480,17 @@ class AnalysisPage(QWidget):
         self._tip.show()
         self._tip_note.show()
 
-    def set_analysis(self, name, alias, icon_path, position, tier_label, build) -> None:
+    def set_analysis(
+        self, name, alias, icon_path, position, tier_label, build, status: str = "no_data"
+    ) -> None:
         """Mostra a análise do campeão, ou some se não há o que mostrar.
 
-        `build` vindo `None` é o caso de a consulta externa ter falhado.
-        A página inteira volta ao aviso de vazio em vez de ficar com as
-        seções em branco: um cartão de confrontos sem confronto nenhum
-        parece defeito, e não é — é ausência de dado.
+        `build` vindo `None` precisa vir com o estado que levou até ele:
+        rota ainda ausente, servidor lento ou dados indisponíveis. A página
+        inteira volta ao aviso certo em vez de parecer quebrada.
         """
         if not name or build is None:
-            self._content.hide()
-            self._empty.show()
+            self.set_empty_state("awaiting_champion" if not name else status, force=True)
             return
 
         # Campeão novo zera o confronto: a dica que estava na tela é do
@@ -449,6 +531,7 @@ class AnalysisPage(QWidget):
         # a mesma faixa, e o guia do OP.GG não tem o que responder.
         self._matchup_card.setVisible(bool(self._position))
 
+        self._has_analysis = True
         self._empty.hide()
         self._content.show()
 

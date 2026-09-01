@@ -68,6 +68,22 @@ def test_a_champion_without_a_name_shows_nothing(page):
     assert page._content.isHidden()
 
 
+def test_the_empty_state_says_when_the_real_lane_is_still_missing(page):
+    page.set_empty_state("awaiting_route")
+
+    assert page._empty_state == "awaiting_route"
+    assert "rota" in page._empty.detail_label.text().lower()
+    assert "não inventa" in page._empty.detail_label.text().lower()
+
+
+def test_a_timed_out_lookup_explains_that_it_can_still_arrive(page):
+    page.set_analysis("Yasuo", "Yasuo", None, "middle", "Diamante+", None, "timed_out")
+
+    assert page._empty_state == "timed_out"
+    assert "demorou" in page._empty.title_label.text().lower()
+    assert "arsenal" in page._empty.detail_label.text().lower()
+
+
 # --- o que aparece --------------------------------------------------------
 
 

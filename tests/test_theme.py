@@ -29,9 +29,10 @@ def test_stylesheet_uses_the_palette():
 
 
 def test_history_row_has_win_lose_and_target_states():
-    assert '#optionCard[result="win"]' in STYLESHEET
-    assert '#optionCard[result="lose"]' in STYLESHEET
-    assert '#optionCard[target="true"]' in STYLESHEET
+    assert '#historyMatchRow[result="win"]' in STYLESHEET
+    assert '#historyMatchRow[result="lose"]' in STYLESHEET
+    assert '#optionCard[team="blue"][target="true"]' in STYLESHEET
+    assert '#optionCard[team="red"][target="true"]' in STYLESHEET
 
 
 def test_scoreboard_has_badge_and_icon_selectors():
@@ -39,3 +40,8 @@ def test_scoreboard_has_badge_and_icon_selectors():
     assert "#itemIcon" in STYLESHEET
     assert "#runeIcon" in STYLESHEET
     assert "#spellIcon" in STYLESHEET
+
+
+def test_updater_has_a_dedicated_safe_action_style():
+    assert "#updateCard" in STYLESHEET
+    assert "#updateAction:disabled" in STYLESHEET

@@ -97,11 +97,11 @@ CONFIRM_FRAMES = 3
 #: em menos de três segundos. Ninguém anda assim — 400 unidades por
 #: segundo, que é a velocidade de um campeão rápido, valem uns 13 px
 #: por segundo nessa escala, e um Flash inteiro vale 13 px de uma vez.
-#: Metade do lado ainda é sete vezes o movimento real, o bastante para
-#: o centro do casamento tremer entre tamanhos de molde e para os dois
-#: quadros de perdão, e apertado o suficiente para dois falsos
-#: positivos distantes não virarem um só evento.
-JUMP_FRACTION = 0.5
+#: Trinta e cinco por cento do lado ainda deixa mais de duas vezes o passo
+#: máximo de um campeão entre quadros e bastante espaço para o tremor do
+#: casamento. Flash deixa de parecer "continuação perto": ele vira um novo
+#: evento, que precisa da confirmação normal antes de mudar o lugar falado.
+JUMP_FRACTION = 0.35
 
 #: Quantos quadros vazios seguidos um casamento já confirmado sobrevive.
 #: O ícone do inimigo pisca o tempo todo — o nevoeiro cobre por um
@@ -347,6 +347,7 @@ class Detector:
         forgive: int = FORGIVE_FRAMES,
         margin: float = MARGIN,
         acquire: float = ACQUIRE_MARGIN,
+        jump_fraction: float = JUMP_FRACTION,
     ) -> None:
         self._templates = [t for t in templates if t.size >= 1]
         self._threshold = float(threshold)
@@ -354,6 +355,10 @@ class Detector:
         self._acquire = max(float(margin), float(acquire))
         self._confirm = max(1, int(confirm))
         self._forgive = max(0, int(forgive))
+        # Esta tolerância pertence à instância, não ao módulo: o modo de
+        # precisão máxima acompanha só movimentos ainda mais plausíveis sem
+        # alterar o detector equilibrado que as outras partidas usam.
+        self._jump_fraction = max(0.0, float(jump_fraction))
         self._kernels: dict[tuple[int, tuple[int, int]], _Kernels] = {}
         self._last: Match | None = None
         self._streak = 0
@@ -471,8 +476,7 @@ class Detector:
             return True
         return achado.margin >= self._acquire
 
-    @staticmethod
-    def _near(a: Match, b: Match, blind: int = 0) -> bool:
+    def _near(self, a: Match, b: Match, blind: int = 0) -> bool:
         """Se os dois casamentos podem ser o mesmo ícone.
 
         `blind` são os quadros vazios entre um e outro: quem passou um
@@ -480,5 +484,9 @@ class Detector:
         cobrar dele o passo de um quadro só transformaria cada piscada
         do minimapa em um alvo novo.
         """
-        limite = max(a.size, b.size) * JUMP_FRACTION * (1 + max(0, int(blind)))
+        limite = (
+            max(a.size, b.size)
+            * self._jump_fraction
+            * (1 + max(0, int(blind)))
+        )
         return float(np.hypot(a.x - b.x, a.y - b.y)) <= limite

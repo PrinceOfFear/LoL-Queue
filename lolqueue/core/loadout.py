@@ -261,6 +261,8 @@ class _Search:
 
     champion_id: int
     started: float
+    position: str
+    aram: bool
     thread: threading.Thread | None = None
     result: Build | None = None
 
@@ -291,7 +293,7 @@ class Loadout:
             [list[str], str | None, dict[str, Build]], None
         ]
         | None = None,
-        on_analysis: Callable[[int, str, Build | None], None] | None = None,
+        on_analysis: Callable[[int, str, Build | None, str], None] | None = None,
     ) -> None:
         self._client = client
         self._config = config
@@ -306,6 +308,13 @@ class Loadout:
         self._complaint = ""
         self._done_for: int | None = None
         self._pending: _Search | None = None
+        # Se a resposta principal passar do teto, as runas podem seguir
+        # pela Riot, mas a consulta não deve ser jogada fora. Quando ela
+        # finalmente voltar ainda há tempo para atualizar a Análise e o
+        # arsenal durante a seleção.
+        self._late: _Search | None = None
+        self._external_status = "no_data"
+        self._analysis_report: tuple[int, str, int] | None = None
         # Avisa a tela quais builds de runa existem e qual está no
         # cliente agora. Mesmo formato do resto da ponte com a UI: um
         # callback simples, que do outro lado é o `emit` de um sinal Qt.
@@ -357,6 +366,8 @@ class Loadout:
         # A thread em voo, se houver, é daemon e some sozinha; o que
         # importa é não colar a resposta de uma seleção na seguinte.
         self._pending = None
+        self._late = None
+        self._analysis_report = None
         self._spells_wanted = None
         self._spell_attempts = 0
         self._page_watch = None
@@ -411,6 +422,7 @@ class Loadout:
             # Já equipado — o que não quer dizer que continue equipado.
             # A conferência vem antes dos cliques porque é ela que
             # decide o que entra na partida.
+            self._collect_late_external(champion_id, session)
             self._guard_page()
             self._serve_matchup(champion_id)
             self._serve_choice(champion_id)
@@ -420,6 +432,10 @@ class Loadout:
         if external is PENDING:
             # A fonte externa ainda está respondendo. Sair sem marcar
             # é o que faz o próximo tick voltar aqui para recolher.
+            if self._external_status == "awaiting_route":
+                self._announce_analysis(
+                    champion_id, session, None, self._external_status
+                )
             return
 
         # Marcado antes de agir: uma falha no meio do caminho não pode
@@ -429,27 +445,17 @@ class Loadout:
         # Antes de equipar, e fora do bloco protegido, porque a leitura
         # não fala com o cliente: mesmo que aplicar runa falhe adiante,
         # o que já sabemos sobre o campeão vale para ser mostrado.
-        if self._on_analysis is not None:
-            # Import tardio como os outros usos aqui: `champ_select`
-            # importa este módulo, e no topo isto fecharia o ciclo.
-            from .champ_select import local_position
-
-            self._on_analysis(champion_id, local_position(session), external)
+        self._announce_analysis(
+            champion_id, session, external, self._external_status
+        )
 
         try:
             # O arsenal vem primeiro porque nao depende da Riot: se a
             # recomendacao dela faltar, ele ainda tem por que existir.
             if self._config.auto_items and external is not None:
-                # Guardado para o confronto: escolhido o adversário, a
-                # loja recebe as duas leituras juntas, e sem isto a do
-                # campeão sumiria na segunda gravação.
-                self._pages = tuple(external.pages)
-                self._items.apply(
-                    champion_id,
-                    self._catalog.name(champion_id),
-                    self._pages,
-                    self._map_id(),
-                )
+                self._apply_arsenal(champion_id, external)
+            elif self._config.auto_items:
+                self._report_missing_arsenal(self._external_status)
             if not (self._config.auto_spells or self._config.auto_runes):
                 return
             recommendation = self._recommendation(
@@ -477,6 +483,88 @@ class Loadout:
             raise
         except LcuError as exc:
             self._log(f"Não deu para aplicar runas e feitiços: {exc}")
+
+    def _announce_analysis(
+        self, champion_id: int, session: dict, build: Build | None, status: str
+    ) -> None:
+        """Publica a leitura e o motivo de ela ainda não existir.
+
+        O estado de rota pendente pode aparecer a cada tick.  Deduplicar aqui
+        evita atravessar a ponte Qt quatro vezes por segundo com a mesma frase,
+        sem esconder uma build que chegou depois.
+        """
+        if self._on_analysis is None:
+            return
+        marker = (champion_id, status, id(build))
+        if marker == self._analysis_report:
+            return
+        self._analysis_report = marker
+        # Import tardio como os outros usos aqui: `champ_select` importa
+        # este módulo, e no topo isto fecharia o ciclo.
+        from .champ_select import local_position
+
+        self._on_analysis(champion_id, local_position(session), build, status)
+
+    def _apply_arsenal(self, champion_id: int, build: Build) -> None:
+        """Monta a loja sem duplicar o caminho da resposta tardia."""
+        # Guardado para o confronto: escolhido o adversário, a loja recebe
+        # as duas leituras juntas, e sem isto a do campeão sumiria na segunda
+        # gravação.
+        self._pages = tuple(build.pages)
+        if not self._pages:
+            self._log("Arsenal não foi montado: o OP.GG devolveu uma build sem itens.")
+            return
+        self._items.apply(
+            champion_id,
+            self._catalog.name(champion_id),
+            self._pages,
+            self._map_id(),
+        )
+
+    def _report_missing_arsenal(self, status: str) -> None:
+        """Deixa no diário o motivo real de não haver itens na loja."""
+        if status == "timed_out":
+            self._log(
+                "Arsenal aguardando o OP.GG: a resposta tardia ainda será "
+                "aproveitada nesta seleção."
+            )
+        elif status == "awaiting_route":
+            self._log("Arsenal aguardando a rota confirmada pelo cliente do LoL.")
+        else:
+            self._log(
+                "Arsenal não foi montado: o OP.GG não devolveu uma build "
+                "para esta combinação agora."
+            )
+
+    def _collect_late_external(self, champion_id: int, session: dict) -> None:
+        """Aproveita uma resposta que chegou após a reserva da Riot.
+
+        O teto protege pick e ban, mas descartar a resposta definitivamente
+        fazia Análise e Arsenal falharem em conexões apenas um pouco mais
+        lentas.  Runas e feitiços continuam na reserva nesta seleção; só os
+        dados que podem entrar tarde sem atrapalhar o jogador são aplicados.
+        """
+        search = self._late
+        if search is None or search.champion_id != champion_id:
+            return
+        if search.thread is not None and search.thread.is_alive():
+            return
+        self._late = None
+        build = search.result
+        status = "ready" if build is not None else "no_data"
+        self._announce_analysis(champion_id, session, build, status)
+        if build is None:
+            if self._config.auto_items:
+                self._report_missing_arsenal(status)
+            return
+        if not self._config.auto_items:
+            return
+        try:
+            self._apply_arsenal(champion_id, build)
+        except ClientClosed:
+            raise
+        except LcuError as exc:
+            self._log(f"Não deu para montar o arsenal após a espera: {exc}")
 
     # ---------- recomendação ----------
 
@@ -525,31 +613,56 @@ class Loadout:
         seria trocar a runa pela partida.
         """
         if self._source is None:
+            self._external_status = "no_data"
             return None
+
+        from .champ_select import local_position
+
+        position = local_position(session)
+        aram = self._map_id() == ARAM_MAP
+        # Na Fenda o OP.GG não aceita uma rota em branco. Em vez de
+        # perguntar qualquer uma e colar uma build errada, esperamos a
+        # informação real do cliente. A seleção ainda não acabou, então
+        # isto não custa a recomendação inteira.
+        if not aram and not position:
+            self._external_status = "awaiting_route"
+            return PENDING
 
         search = self._pending
         if search is None or search.champion_id != champion_id:
-            search = self._start(champion_id, session)
+            # Trocar de campeão na mesma seleção torna a resposta tardia
+            # anterior irrelevante; ela não pode ganhar uma segunda chance
+            # de montar itens para quem o jogador não vai usar.
+            if self._late is not None and self._late.champion_id != champion_id:
+                self._late = None
+            search = self._start(champion_id, position, aram)
 
         if search.thread is not None and search.thread.is_alive():
             if self._now() - search.started < WAIT_SECONDS:
                 return PENDING
+            # Runas e feitiços precisam seguir agora, mas Análise e
+            # Arsenal ainda podem aproveitar o resultado se ele chegar na
+            # sequência. Antes este objeto era perdido aqui para sempre.
             self._pending = None
+            self._late = search
+            self._external_status = "timed_out"
             self._log("O OP.GG demorou; usando a recomendação da Riot.")
             return None
 
         self._pending = None
+        self._external_status = "ready" if search.result is not None else "no_data"
         return search.result
 
-    def _start(self, champion_id: int, session: dict) -> _Search:
-        from .champ_select import local_position
-
+    def _start(self, champion_id: int, position: str, aram: bool) -> _Search:
         # O alias, não o nome: o cliente traduz o nome, e quem está
         # do outro lado só conhece o identificador da Riot.
         champion = self._catalog.alias(champion_id)
-        position = local_position(session)
-        aram = self._map_id() == ARAM_MAP
-        search = _Search(champion_id=champion_id, started=self._now())
+        search = _Search(
+            champion_id=champion_id,
+            started=self._now(),
+            position=position,
+            aram=aram,
+        )
         # Campeão trocado depois da trava recomeça tudo: as opções da
         # busca anterior são de outro boneco e não podem ficar na tela.
         self._clear_options()

@@ -18,6 +18,7 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lolqueue import config as config_module  # noqa: E402
 from lolqueue.config import JUNGLE_VOICES, Config  # noqa: E402
+from lolqueue.core.lp_history import LpChange, LpImportResult  # noqa: E402
 from lolqueue.ui.pages.analysis import AnalysisPage  # noqa: E402
 from lolqueue.ui.pages.champions import ChampionsPage  # noqa: E402
 from lolqueue.ui.pages.dashboard import DashboardPage  # noqa: E402
@@ -129,6 +130,19 @@ def test_every_message_is_also_written_to_the_file(window, tmp_path):
 
 def test_the_log_folder_sits_next_to_the_config(window, tmp_path):
     assert window._journal.directory == tmp_path / "registro"
+
+
+def test_the_analysis_empty_state_explains_each_required_step(window):
+    assert window._analysis._empty_state == "client_disconnected"
+
+    window._connected = True
+    window._enabled = True
+    window._refresh_analysis_empty_state()
+    assert window._analysis._empty_state == "build_disabled"
+
+    window._config.auto_items = True
+    window._refresh_analysis_empty_state()
+    assert window._analysis._empty_state == "awaiting_champion"
 
 
 # --- opções de runa ------------------------------------------------------
@@ -431,6 +445,52 @@ def test_a_ready_game_detail_reaches_the_history_page(window, monkeypatch):
     assert seen == ["placar-falso"]
 
 
+def test_a_lp_refresh_requested_during_a_history_load_is_not_lost(window, monkeypatch):
+    """O PDL pode chegar antes da busca do fim da partida voltar."""
+    import lolqueue.ui.window as window_module
+
+    class FakeTimer:
+        scheduled = []
+
+        @staticmethod
+        def singleShot(_milliseconds, callback):  # noqa: N802 (API Qt)
+            FakeTimer.scheduled.append(callback)
+
+    monkeypatch.setattr(window_module, "QTimer", FakeTimer)
+    loader = FakeLoader()
+    window._history_loader = loader
+
+    window._refresh_history()
+    window._retire_history_loader(loader)
+
+    assert loader.descartado
+    assert window._history_loader is None
+    assert window._history_refresh_pending is False
+    assert FakeTimer.scheduled == [window._refresh_history]
+
+
+def test_manual_lp_import_refreshes_only_after_a_validated_value(window, monkeypatch):
+    refreshed, messages = [], []
+    monkeypatch.setattr(window, "_refresh_history", lambda: refreshed.append(True))
+    monkeypatch.setattr(window, "_log_message", messages.append)
+
+    window._on_manual_lp_imported(
+        LpImportResult(imported=(LpChange(998877, 420, 22, source="manual"),))
+    )
+
+    assert refreshed == [True]
+    assert any("salvo" in message for message in messages)
+
+
+def test_manual_lp_import_explains_when_the_lcu_cannot_confirm_a_row(window, monkeypatch):
+    messages = []
+    monkeypatch.setattr(window, "_log_message", messages.append)
+
+    window._on_manual_lp_imported(LpImportResult(rejected=1))
+
+    assert any("não puderam" in message for message in messages)
+
+
 class FakeThread:
     """Substitui `HistoryLoader`/`GameDetailLoader` sem abrir thread de verdade.
 
@@ -502,6 +562,20 @@ def test_turning_the_jungle_callout_off_is_saved(window, tmp_path):
     boxes(window, "jungle_callouts")[0].setChecked(False)
 
     assert Config.load(tmp_path / "config.json").jungle_callouts is False
+
+
+def test_maximum_jungle_precision_has_a_switch_on_the_settings_page(window):
+    precision = boxes(window, "jungle_max_precision")
+
+    assert len(precision) == 1
+    assert precision[0].objectName() == "jungleMaxPrecision"
+    assert precision[0].isChecked() is True
+
+
+def test_turning_off_maximum_jungle_precision_is_saved(window, tmp_path):
+    boxes(window, "jungle_max_precision")[0].setChecked(False)
+
+    assert Config.load(tmp_path / "config.json").jungle_max_precision is False
 
 
 def test_the_voice_selector_offers_every_voice(window):

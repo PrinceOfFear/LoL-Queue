@@ -137,6 +137,16 @@ def accounts_path() -> Path:
     return config_path().parent / "contas.json"
 
 
+def lp_history_path() -> Path:
+    """Onde ficam os deltas de PDL confirmados pelo cliente.
+
+    Não vive dentro da configuração da automação: é um registro de
+    partidas, compartilhado por todas as contas que já passaram por este
+    computador e associado ao id real de cada jogo.
+    """
+    return config_path().parent / "pdl.json"
+
+
 def champion_ids(value) -> list[int]:
     """Filtra uma lista de prioridade, deixando só ids plausíveis.
 
@@ -194,6 +204,10 @@ class Config:
     # jogador não consegue se dar sozinho: quem está olhando a rota
     # não está olhando o canto da tela.
     jungle_callouts: bool = True
+    # Quando houver dúvida visual ou espacial, não fala. Este é o
+    # padrão porque uma localização inventada é pior que um aviso um pouco
+    # mais tarde; quem preferir mais cobertura pode desmarcar na tela.
+    jungle_max_precision: bool = True
     jungle_voice: str = DEFAULT_JUNGLE_VOICE
     # Guarda, ao lado de cada aviso falado, onde o retrato foi achado e
     # com quanta folga. Serve para julgar um aviso suspeito depois da

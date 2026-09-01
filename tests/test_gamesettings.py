@@ -224,6 +224,21 @@ def test_asking_for_it_now_does_not_wait():
     assert len(cliente.escrito) == 2
 
 
+def test_a_pending_manual_apply_is_cancelled_after_switching_accounts():
+    """O clique não pode alcançar a conta que entrou logo depois."""
+    ditas: list[str] = []
+    cliente = ClienteFalso()
+    sync = GameSettingsSync(cliente, com_modelo(), log=ditas.append)
+    sync.account_arrived(quem("Amigo", "BR2"))
+    sync.request_apply("amigo#br2@br")
+    sync.account_arrived(quem())
+
+    sync.tick()
+
+    assert cliente.escrito == []
+    assert any("pedido antigo foi cancelado" in linha for linha in ditas)
+
+
 def test_asking_without_a_model_explains_instead_of_writing():
     ditas: list[str] = []
     contas = Accounts(now=lambda: "2026-01-01T00:00:00")
@@ -270,6 +285,22 @@ def test_capturing_an_unknown_account_stores_nothing():
     sync.tick()
 
     assert gravou == []
+
+
+def test_a_pending_capture_is_cancelled_after_switching_accounts():
+    """A fotografia precisa pertencer à conta que ainda está na LCU."""
+    ditas: list[str] = []
+    contas = com_modelo()
+    contas.set_game_settings(contas.main, {})
+    sync = GameSettingsSync(ClienteFalso(), contas, log=ditas.append)
+    sync.account_arrived(quem())
+    sync.request_capture(contas.main)
+    sync.account_arrived(quem("Amigo", "BR2"))
+
+    sync.tick()
+
+    assert contas.main_game_settings() == {}
+    assert any("pedido antigo foi cancelado" in linha for linha in ditas)
 
 
 def test_an_empty_answer_is_never_stored_as_a_model():

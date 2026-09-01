@@ -40,6 +40,26 @@ def _client_process() -> psutil.Process | None:
     return None
 
 
+def client_install_dir() -> Path | None:
+    """Pasta do cliente em execução, ou uma instalação conhecida.
+
+    Também serve para localizar os logs locais que o próprio cliente
+    produz depois de calcular o PDL. Nunca lê lockfile nem expõe token.
+    """
+    proc = _client_process()
+    if proc is not None:
+        try:
+            directory = Path(proc.exe()).parent
+            if directory.is_dir():
+                return directory
+        except (psutil.Error, OSError):
+            pass
+    for directory in CANDIDATE_DIRS:
+        if directory.is_dir():
+            return directory
+    return None
+
+
 def credentials_from_lockfile() -> Credentials | None:
     directories = list(CANDIDATE_DIRS)
     proc = _client_process()

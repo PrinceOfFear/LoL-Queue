@@ -31,21 +31,40 @@ PYPROJECT = RAIZ / "pyproject.toml"
 _NOME = re.compile(r"^[A-Za-z0-9._-]+")
 
 
-def requisitos() -> tuple[str, ...]:
-    """Os nomes que o `pip install` receberia, na ordem declarada.
+def pacotes_instalacao() -> tuple[str, ...]:
+    """As dependências exatamente como foram declaradas para o ``pip``.
 
-    Devolve vazio quando o `pyproject.toml` não está do lado — é o caso
-    do executável compilado, onde o arquivo não viaja junto e as
-    dependências já foram embutidas. Nada declarado, nada a cobrar.
+    O instalador da versão Python precisa preservar limites como
+    ``PySide6>=6.10``. Entregar somente ``PySide6`` deixa uma instalação
+    antiga aparentemente válida, embora ela possa não ter as APIs que o
+    aplicativo usa.
+
+    Devolve vazio quando o ``pyproject.toml`` não está ao lado — caso do
+    executável compilado, em que as dependências já foram embutidas.
     """
     try:
         dados = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return ()
     declaradas = dados.get("project", {}).get("dependencies", [])
-    nomes = []
+    if not isinstance(declaradas, list):
+        return ()
+    pacotes = []
     for linha in declaradas:
-        achado = _NOME.match(linha.strip())
+        if not isinstance(linha, str):
+            continue
+        pacote = linha.strip()
+        achado = _NOME.match(pacote)
+        if achado is not None:
+            pacotes.append(pacote)
+    return tuple(pacotes)
+
+
+def requisitos() -> tuple[str, ...]:
+    """Somente os nomes dos pacotes, para conferir se os imports existem."""
+    nomes = []
+    for pacote in pacotes_instalacao():
+        achado = _NOME.match(pacote)
         if achado is not None:
             nomes.append(achado.group(0))
     return tuple(nomes)

@@ -164,3 +164,44 @@ def test_a_tab_with_its_own_list_is_marked(picker):
     vazia = picker._tabs.tabText(tab_index("jungle"))
     assert marcada.endswith("●")
     assert not vazia.endswith("●")
+
+
+def test_large_route_selector_and_context_make_the_scope_explicit(picker):
+    """Não basta uma aba pequena: a rota aberta precisa se explicar."""
+    assert picker._tabs.expanding() is True
+
+    picker._tabs.setCurrentIndex(tab_index("jungle"))
+
+    assert "SELVA" in picker._scope_title.text()
+    assert "USANDO A GERAL" in picker._scope_title.text()
+    assert "lista Geral" in picker._scope_detail.text()
+    # O widget pai roda offscreen no teste; ``isVisible`` fica falso sem uma
+    # janela, enquanto ``isHidden`` registra a intenção real da tela.
+    assert not picker._fallback_button.isHidden()
+    assert not picker._fallback_button.isEnabled()
+
+
+def test_clearing_a_route_returns_only_that_route_to_the_general_list(picker):
+    """"Usar Geral" remove a prioridade local, não as escolhas do usuário."""
+    seen = []
+    picker.changed.connect(lambda key, ids: seen.append((key, list(ids))))
+    picker._tabs.setCurrentIndex(tab_index("utility"))
+
+    picker.clear_current_position()
+
+    assert picker.general() == [64]
+    assert picker.by_position() == {}
+    assert picker._picker.ids() == []
+    assert seen == [("utility", [])]
+    assert "USANDO A GERAL" in picker._scope_title.text()
+
+
+def test_edit_general_action_switches_back_without_changing_any_list(picker):
+    picker._tabs.setCurrentIndex(tab_index("utility"))
+    before = picker.by_position()
+
+    picker._edit_general()
+
+    assert picker._current == GENERAL
+    assert picker.general() == [64]
+    assert picker.by_position() == before

@@ -206,7 +206,13 @@ class GameSettingsSync:
         self._hold = hold or (lambda: {})
         self._due: list[float] = []
         self._capture = ""
-        self._apply = ""
+        self._apply_requested = False
+        self._apply_target = ""
+        # A LCU só representa uma conta de cada vez. Guardar a chave que a
+        # vigia acabou de anunciar permite cancelar um clique que ficou na
+        # fila enquanto o usuário trocava de conta, em vez de copiar os
+        # controles no perfil errado.
+        self._active_key = ""
         self._rounds = 0
         self._announced = False
 
@@ -215,6 +221,7 @@ class GameSettingsSync:
     def account_arrived(self, identity: Identity) -> None:
         """Outra conta entrou: agenda a cópia, se houver o que copiar."""
         key = account_key(identity)
+        self._active_key = key
         if key == self._accounts.main:
             # A principal é o modelo; ela não recebe cópia de ninguém.
             self._due = []
@@ -234,9 +241,15 @@ class GameSettingsSync:
         """A janela pediu para guardar as configurações desta conta."""
         self._capture = key
 
-    def request_apply(self, _key: str = "") -> None:
-        """A janela pediu para aplicar agora, sem esperar."""
-        self._apply = "agora"
+    def request_apply(self, key: str = "") -> None:
+        """A janela pediu para aplicar agora, sem esperar.
+
+        ``key`` é conservada até o `tick`: a chamada vem da thread da GUI,
+        mas a escrita acontece na thread que tem a LCU. Sem esse vínculo um
+        clique antigo podia alcançar a conta que entrou logo depois.
+        """
+        self._apply_requested = True
+        self._apply_target = key
         self._rounds = 0
 
     # -- trabalho -------------------------------------------------------
@@ -245,15 +258,38 @@ class GameSettingsSync:
         """Uma volta do relógio da vigia: faz o que estiver na hora."""
         key, self._capture = self._capture, ""
         if key:
-            self._do_capture(key)
-        asked, self._apply = self._apply, ""
+            if self._is_current(key):
+                self._do_capture(key)
+            else:
+                self._log(
+                    "A conta mudou antes de guardar os controles; o pedido antigo "
+                    "foi cancelado."
+                )
+        asked, target = self._apply_requested, self._apply_target
+        self._apply_requested = False
+        self._apply_target = ""
         if asked:
+            if target and not self._is_current(target):
+                self._log(
+                    "A conta mudou antes de aplicar os controles; o pedido antigo "
+                    "foi cancelado."
+                )
+                return
             self._due = []
             self._do_apply(asked=True)
             return
         if self._due and self._now() >= self._due[0]:
             self._due.pop(0)
             self._do_apply()
+
+    def _is_current(self, key: str) -> bool:
+        """Verdadeiro quando a chave ainda é a conta que a LCU representa.
+
+        A ausência de anúncio é aceita para compatibilidade com chamadas de
+        inicialização e com o cliente ainda subindo; depois que a vigia já
+        anunciou alguém, a igualdade passa a ser obrigatória.
+        """
+        return not self._active_key or key == self._active_key
 
     def _do_capture(self, key: str) -> None:
         account = self._accounts.accounts.get(key)

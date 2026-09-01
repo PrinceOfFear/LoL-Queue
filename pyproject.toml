@@ -1,11 +1,15 @@
 [project]
 name = "lolqueue"
-version = "0.1.0"
+version = "0.1.2"
 description = "Automação de fila do League of Legends via LCU API"
 requires-python = ">=3.13"
 dependencies = [
     "PySide6>=6.10",
     "requests>=2.32",
+    # O PDL \u00e9 uma notifica\u00e7\u00e3o curta no WebSocket WAMP da LCU. O polling
+    # continua como redund\u00e2ncia, mas sem este cliente de WebSocket uma
+    # instala\u00e7\u00e3o nova poderia perder o evento antes do pr\u00f3ximo ciclo HTTP.
+    "websockets>=16.0",
     "psutil>=6.0",
     "keyboard>=0.13.5",
     # A leitura do minimapa faz correlação pixel a pixel; em Python puro
@@ -26,6 +30,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# O servidor de licenças não roda na máquina do usuário — ele mora no
+# host. Se estas entrassem na lista de cima, `ambiente.py` passaria a
+# cobrar fastapi de quem só quer jogar, e o app recusaria abrir por
+# falta de uma biblioteca que ele nunca importa.
+servidor = ["fastapi>=0.115", "uvicorn>=0.30", "cryptography>=43.0", "requests>=2.32"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

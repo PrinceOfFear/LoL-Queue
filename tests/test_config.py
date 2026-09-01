@@ -95,10 +95,12 @@ def test_an_unknown_elo_falls_back_to_the_default():
 
 def test_jungle_callouts_start_on():
     """É o aviso que o jogador não consegue se dar sozinho: quem olha a
-    rota não olha o canto da tela. Nasce ligado, com a voz padrão.
+    rota não olha o canto da tela. Nasce ligado, com a voz padrão e sem
+    escolher uma localização quando a prova ainda é insuficiente.
     """
     config = Config()
     assert config.jungle_callouts is True
+    assert config.jungle_max_precision is True
     assert config.jungle_voice == DEFAULT_JUNGLE_VOICE
 
 
@@ -125,6 +127,13 @@ def test_every_voice_option_round_trips_through_disk(tmp_path):
         loaded = Config.load(path)
         assert loaded.jungle_voice == voice
         assert loaded.jungle_callouts is False
+
+
+def test_jungle_max_precision_round_trips_through_disk(tmp_path):
+    path = tmp_path / "config.json"
+    for enabled in (True, False):
+        Config(jungle_max_precision=enabled).save(path)
+        assert Config.load(path).jungle_max_precision is enabled
 
 
 def test_every_elo_option_round_trips_through_disk(tmp_path):

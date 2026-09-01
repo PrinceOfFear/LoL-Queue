@@ -11,7 +11,7 @@ formato mudado vira `None`/`()`, nunca uma exceção para quem chama.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Callable
 
@@ -48,7 +48,17 @@ GAME_DETAIL_FIELDS = (
 )
 
 DEFAULT_LANG = "pt_BR"
-DEFAULT_LIMIT = 10
+# O OP.GG aceita no máximo vinte partidas nesta consulta. Mostrar essa
+# janela inteira permite relacionar confirmações oficiais que já saíram
+# dos dez jogos mais recentes, sem pedir uma quantidade que o servidor
+# simplesmente descartaria.
+DEFAULT_LIMIT = 20
+
+LCU_RANK_QUEUE_TYPES = {
+    "RANKED_SOLO_5X5": "SOLORANKED",
+    "RANKED_FLEX_SR": "FLEXRANKED",
+}
+ROMAN_DIVISIONS = {"I": 1, "II": 2, "III": 3, "IV": 4}
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,74 @@ class Profile:
     tag_line: str
     level: int
     ranks: tuple[RankEntry, ...] = ()
+
+
+def _native_int(value) -> int | None:
+    """Inteiro vindo diretamente do JSON da LCU, sem aceitar ``bool``."""
+
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _lcu_division(value) -> int | None:
+    if (number := _native_int(value)) is not None:
+        return number
+    if not isinstance(value, str):
+        return None
+    text = value.strip().upper()
+    if text.isdecimal():
+        return int(text)
+    return ROMAN_DIVISIONS.get(text)
+
+
+def local_rank_entries(payload) -> tuple[RankEntry, ...]:
+    """Converte o retrato de ranking atual da LCU em linhas da interface.
+
+    A tela ainda usa o OP.GG para nome, nível e histórico, mas o PDL do
+    retrato local é a fonte oficial e chega sem a defasagem do perfil
+    público. Só Solo/Duo e Flex entram aqui; filas sem PDL não devem criar
+    cartões vazios.
+    """
+
+    queues = payload.get("queues") if isinstance(payload, dict) else None
+    if not isinstance(queues, list):
+        return ()
+    found: list[RankEntry] = []
+    for row in queues:
+        if not isinstance(row, dict):
+            continue
+        raw_queue = row.get("queueType")
+        queue_type = (
+            LCU_RANK_QUEUE_TYPES.get(raw_queue.strip().upper())
+            if isinstance(raw_queue, str)
+            else None
+        )
+        tier = row.get("tier")
+        lp = _native_int(row.get("leaguePoints"))
+        if queue_type is None or not isinstance(tier, str) or not tier.strip() or lp is None:
+            continue
+        found.append(
+            RankEntry(
+                queue_type=queue_type,
+                tier=tier.strip().upper(),
+                division=_lcu_division(row.get("division")),
+                lp=lp,
+                wins=_native_int(row.get("wins")) or 0,
+                losses=_native_int(row.get("losses")) or 0,
+            )
+        )
+    return tuple(found)
+
+
+def with_local_rank_entries(profile: Profile, payload) -> Profile:
+    """Troca apenas Solo/Duo e Flex pelos PDL atuais do cliente."""
+
+    local = {entry.queue_type: entry for entry in local_rank_entries(payload)}
+    if not local:
+        return profile
+    ranks = tuple(local.pop(rank.queue_type, rank) for rank in profile.ranks)
+    # O perfil público pode demorar para criar uma fila recém-colocada;
+    # nesse caso o cliente ainda merece exibi-la imediatamente.
+    return replace(profile, ranks=ranks + tuple(local.values()))
 
 
 @dataclass(frozen=True)
@@ -102,6 +180,17 @@ class MatchSummary:
     secondary_style_id: int
     champion_level: int
     gold: int
+    #: Delta oficial do cliente, quando ainda existe uma confirmação.
+    #: `None` é intencional: partidas antigas não recebem estimativa.
+    lp_delta: int | None = None
+    lp_after: int | None = None
+    lp_queue: str = ""
+    #: Origem do PDL: evento Riot, snapshot local ou preenchimento manual.
+    #: Fica vazio quando ainda não há um delta salvo para a linha.
+    lp_source: str = ""
+    #: Id numérico confirmado pela LCU para esta linha do OP.GG. É efêmero
+    #: na tela e serve para validar uma eventual importação manual.
+    local_game_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +247,11 @@ class GameDetail:
     played_at: datetime
     teams: tuple[TeamDetail, TeamDetail]
     average_tier: str | None
+    #: Repassado da linha que abriu este placar.
+    lp_delta: int | None = None
+    #: A mesma origem mostrada na lista; evita chamar de oficial um valor
+    #: que foi informado manualmente pelo jogador.
+    lp_source: str = ""
 
 
 def relative_time(played_at: datetime, now: datetime) -> str:

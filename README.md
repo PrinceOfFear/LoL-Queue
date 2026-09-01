@@ -64,15 +64,35 @@ girado. Nada disso está preso a `C:`.
 powershell -ExecutionPolicy Bypass -File tools\build.ps1
 ```
 
-Gera `dist-standalone\main.dist\LoL Queue.exe`, que roda sozinho, sem
-Python instalado — a pasta `main.dist` inteira é o programa, então é ela
-que se copia pra outra máquina, não só o `.exe`. O build usa Nuitka em
-vez de PyInstaller: compila o Python para C e gera binário nativo, então
+Gera `Distribuicao\LoL Queue\LoL Queue.exe` e também o arquivo
+`Distribuicao\LoL Queue-<versão>-win64.zip`. O ZIP é o arquivo certo para
+enviar: ele já leva a pasta inteira que precisa ser extraída antes de abrir o
+app. Nunca copie somente o `.exe`, pois as DLLs, módulos e imagens ao lado dele
+fazem parte do programa. A compilação fica separada em
+`build\distribuicao-nuitka`, para não se confundir com a entrega.
+Depois do build, `Distribuicao\ENVIAR PARA OUTRAS PESSOAS` contém somente os
+dois ZIPs atuais e explica qual enviar em cada caso.
+
+O build usa Nuitka em vez de PyInstaller: compila o Python para C e gera binário nativo, então
 não dá pra extrair o `.exe` e decompilar de volta pra algo parecido com
 o código-fonte — o que o PyInstaller sozinho não impede (`lolqueue.spec`
 ainda existe no repositório por referência, mas não é mais o caminho
 usado). Rebuilda sempre que o código ou os assets mudarem; o build é
 lento porque está compilando C de verdade.
+
+O build fixa a base do processador em `x86_64`, em vez de herdar AVX2 do PC
+que compilou. Isso evita o fechamento imediato com `0xC000001D` em CPUs x64
+mais antigas. A edição `instalação-python` continua disponível como alternativa
+compatível caso um PC ainda não consiga abrir o executável.
+
+### Atualização pelo aplicativo
+
+A partir da versão 0.1.2, abra **Ajustes** e use **Verificar atualizações**.
+O LoL Queue consulta a release oficial no GitHub, valida a assinatura e o
+SHA-256 do pacote antes de baixar e reinicia com segurança. A instalação por
+Python recebe somente o pacote compatível por Python; ela nunca é trocada pelo
+executável compilado. A primeira instalação da 0.1.2 ainda precisa ser enviada
+manualmente, pois versões anteriores não tinham o atualizador embutido.
 
 **Numa máquina com o Smart App Control ligado, esse `.exe` não abre** —
 e não há conserto pelo lado do código. O Smart App Control recusa

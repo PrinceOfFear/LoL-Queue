@@ -102,3 +102,40 @@ def test_loading_a_list_does_not_report_it_back(picker):
     picker.set_ids([21, 202])
 
     assert seen == []
+
+
+def test_priority_buttons_move_the_selected_champion_without_dragging(picker):
+    """Setas deixam mudar posição sem a precisão frágil de um arrasto."""
+    seen = []
+    picker.changed.connect(lambda ids: seen.append(list(ids)))
+
+    picker._list.setCurrentRow(2)
+    picker._move_selected(-1)
+
+    assert picker.ids() == [64, 12, 11]
+    assert picker._list.currentRow() == 1
+    assert seen == [[64, 12, 11]]
+
+
+def test_priority_buttons_only_enable_when_their_move_is_possible(picker):
+    """Não há botão que pareça quebrado no topo, no meio ou no fim."""
+    assert not picker._up_button.isEnabled()
+    assert not picker._down_button.isEnabled()
+    assert not picker._remove_button.isEnabled()
+
+    picker._list.setCurrentRow(0)
+    assert not picker._up_button.isEnabled()
+    assert picker._down_button.isEnabled()
+    assert picker._remove_button.isEnabled()
+
+    picker._list.setCurrentRow(2)
+    assert picker._up_button.isEnabled()
+    assert not picker._down_button.isEnabled()
+
+
+def test_an_empty_priority_explains_how_to_start(app):
+    picker = ChampionPicker("ESCOLHA")
+
+    assert picker._priority_stack.currentWidget() is picker._empty_priority
+    assert "Clique nos retratos" in picker._empty_priority.text()
+    assert picker._count_badge.text() == "LISTA VAZIA"

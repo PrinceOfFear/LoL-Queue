@@ -91,9 +91,9 @@ class IllustratedEmptyState(QFrame):
         words = QVBoxLayout()
         words.setSpacing(8)
         words.addStretch(1)
-        eyebrow_label = QLabel(eyebrow)
-        eyebrow_label.setObjectName("emptyEyebrow")
-        words.addWidget(eyebrow_label)
+        self.eyebrow_label = QLabel(eyebrow)
+        self.eyebrow_label.setObjectName("emptyEyebrow")
+        words.addWidget(self.eyebrow_label)
         self.title_label = QLabel(title)
         self.title_label.setObjectName("emptyTitle")
         words.addWidget(self.title_label)
@@ -102,14 +102,38 @@ class IllustratedEmptyState(QFrame):
         self.detail_label.setWordWrap(True)
         self.detail_label.setMaximumWidth(440)
         words.addWidget(self.detail_label)
-        footnote_label = QLabel(footnote)
-        footnote_label.setObjectName("emptyFootnote")
-        footnote_label.setWordWrap(True)
-        footnote_label.setMaximumWidth(440)
-        words.addWidget(footnote_label)
+        self.footnote_label = QLabel(footnote)
+        self.footnote_label.setObjectName("emptyFootnote")
+        self.footnote_label.setWordWrap(True)
+        self.footnote_label.setMaximumWidth(440)
+        words.addWidget(self.footnote_label)
         words.addStretch(1)
         layout.addLayout(words, 1)
         layout.addStretch(1)
+
+    def set_copy(
+        self,
+        *,
+        eyebrow: str | None = None,
+        title: str | None = None,
+        detail: str | None = None,
+        footnote: str | None = None,
+    ) -> None:
+        """Troca o texto do estado sem reconstruir a ilustração.
+
+        A mesma arte pode explicar estados bem diferentes: cliente fechado,
+        automação pausada e uma consulta externa indisponível.  Refazer
+        o cartão para cada um deixa widgets antigos no layout e torna a
+        transição visivelmente instável.
+        """
+        if eyebrow is not None:
+            self.eyebrow_label.setText(eyebrow)
+        if title is not None:
+            self.title_label.setText(title)
+        if detail is not None:
+            self.detail_label.setText(detail)
+        if footnote is not None:
+            self.footnote_label.setText(footnote)
 
 
 __all__ = ["IllustratedEmptyState"]

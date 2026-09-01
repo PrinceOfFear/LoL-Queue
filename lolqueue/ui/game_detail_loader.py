@@ -7,6 +7,8 @@ o OP.GG — mas para uma partida só, a que o usuário clicou na lista.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import QThread, Signal
 
 from ..core.identity import current_identity
@@ -42,6 +44,12 @@ class GameDetailLoader(QThread):
                         identity.game_name,
                         identity.tag_line,
                     )
+                    if detail is not None:
+                        detail = replace(
+                            detail,
+                            lp_delta=self._match.lp_delta,
+                            lp_source=self._match.lp_source,
+                        )
         except Exception:
             # Cliente fechado no meio da consulta, DNS falhando, o que
             # for: quem chama só precisa saber que não há placar agora.

@@ -43,6 +43,16 @@ class LcuClient:
         self._session.auth = ("riot", credentials.token)
         self._session.verify = False
 
+    @property
+    def credentials(self) -> Credentials:
+        """Credenciais da conex\u00e3o local para servi\u00e7os LCU complementares.
+
+        Elas nunca s\u00e3o serializadas ou exibidas; o WebSocket de eventos usa a
+        mesma porta e autentica\u00e7\u00e3o da sess\u00e3o HTTP j\u00e1 aberta.
+        """
+
+        return self._credentials
+
     def get(self, path: str) -> Any:
         return self._request("GET", path)
 

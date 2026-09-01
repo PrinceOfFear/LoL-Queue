@@ -44,6 +44,7 @@ MEDIR = _medidor()
 #: névoa por cima, retrato em escala errada, tela comprimida.
 NORMAL = 0.005
 RUIM = 0.010
+LEVE = 0.002
 
 SEMENTES = (11, 23, 37)
 
@@ -105,3 +106,22 @@ def test_the_fix_is_a_measured_improvement_over_what_came_before():
         assert agora[lane] <= antes[lane] / 2.0, (
             f"{lane}: era {antes[lane]:.1f}%, ficou {agora[lane]:.1f}%"
         )
+
+
+@pytest.mark.parametrize("tremor", [LEVE, NORMAL, RUIM])
+def test_maximum_precision_has_zero_zone_error_in_the_noise_simulation(tremor):
+    """O perfil estrito não compra o zero ficando completamente calado.
+
+    O detector é dublado com a posição visual correta: esta régua prova
+    a parte espacial (mediana, divisa e nome da zona), não promete que
+    qualquer imagem real do jogo possa ser reconhecida sem um corpus.
+    """
+    for lane, ancora in PERFIS:
+        linhas = [
+            MEDIR.medir("maxima", lane, ancora, tremor, seed) for seed in SEMENTES
+        ]
+        assert all(line["estrito"] == 0 for line in linhas), lane
+        assert all(line["tolerante"] == 0 for line in linhas), lane
+        assert all(line["vaivem"] == 0 for line in linhas), lane
+        coverage = sum(line["certas_min"] for line in linhas) / len(linhas)
+        assert coverage >= 5.5, f"{lane}: só {coverage:.1f} avisos certos/min"

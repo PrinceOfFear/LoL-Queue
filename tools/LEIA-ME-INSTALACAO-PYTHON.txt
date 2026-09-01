@@ -1,0 +1,28 @@
+LoL Queue — instalação compatível via Python
+
+Use esta versão somente se o Windows bloquear o executável portátil por causa
+do Smart App Control ou de uma política corporativa. Ela contém o código Python
+do app e usa o pythonw.exe assinado pela Python Software Foundation para abrir
+o LoL Queue.
+
+Como instalar
+1. Extraia o ZIP inteiro para uma pasta permanente. Não a apague depois.
+2. Abra o PowerShell dentro dessa pasta.
+3. Rode:
+
+   powershell -ExecutionPolicy Bypass -File tools\instalar.ps1
+
+4. Se o Python ainda não estiver instalado, o instalador mostrará o link
+   oficial. Instale Python 3.13 ou mais recente, marcando "Add python.exe to
+   PATH", e repita o passo 3.
+5. Ao terminar, abra o atalho "LoL Queue" criado na Área de Trabalho.
+
+Antes de instalar
+- Confira o arquivo .sha256 entregue junto com o ZIP, se disponível.
+- Para recursos do League (fila, seleção, histórico e PDL), abra o cliente do
+  League of Legends e entre em uma conta normalmente.
+
+Esta alternativa existe para não incentivar a desativação das proteções do
+Windows. Para uma distribuição por .exe que funcione em larga escala sem esse
+passo extra, é necessário assinar o aplicativo com um certificado público de
+code signing confiável.

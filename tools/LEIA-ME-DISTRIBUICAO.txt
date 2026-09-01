@@ -1,0 +1,33 @@
+LoL Queue — distribuição para Windows 64 bits
+
+Como abrir
+1. Extraia o arquivo ZIP inteiro para uma pasta normal do computador.
+2. Abra "LoL Queue.exe" dentro da pasta extraída.
+3. Não copie somente o .exe: as DLLs, módulos e imagens ao lado dele são
+   parte do programa e precisam permanecer juntos.
+4. Para recursos ligados ao League (fila, seleção, histórico e PDL), abra o
+   cliente do League of Legends e entre em uma conta normalmente.
+
+O que esta pasta contém
+- O executável e todas as bibliotecas necessárias. Não é preciso instalar
+  Python para usar esta versão.
+- Os dados pessoais do usuário ficam em %APPDATA%\LoLQueue, fora desta pasta.
+  Por isso atualizar ou substituir esta distribuição não apaga configurações,
+  listas de campeões, contas locais ou histórico de PDL.
+
+Compatibilidade de processador
+Este pacote é compilado para a base x86_64, sem exigir AVX2. Isso evita o erro
+0xC000001D ("instrução ilegal") que um executável compilado em CPU mais nova
+pode causar em máquinas x64 antigas. Se ainda houver esse erro, use a edição
+"instalar com Python" fornecida junto com a distribuição.
+
+Aviso importante do Windows
+Este executável não possui certificado público de assinatura de código. Em PCs
+com Smart App Control ou uma política corporativa mais rígida, o Windows pode
+bloquear a abertura de executáveis sem assinatura/reputação. Não desative as
+proteções do Windows para contornar isso. A solução correta para distribuição
+ampla é assinar a versão final com um certificado de code signing confiável.
+
+Integridade do download
+Ao lado do ZIP há um arquivo .sha256. Ele permite conferir se a cópia recebida
+é exatamente a que foi enviada antes de abrir o programa.

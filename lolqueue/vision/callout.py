@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from .livegame import BOT, JUNGLE, MID, SUPPORT, TOP, LiveGame
-from .zones import Zone, classify, describe, well_inside
+from .zones import STABLE_MARGIN, Zone, classify, describe, well_inside
 
 #: Perto o bastante para o jogador ter que reagir agora.
 NEAR = 0.20
@@ -156,6 +156,9 @@ def announce(
     mx: float,
     my: float,
     game: LiveGame | None = None,
+    *,
+    stable_margin: float = STABLE_MARGIN,
+    firm_probes: int = 8,
 ) -> Callout:
     """O aviso completo para um ícone visto em (mx, my) no minimapa.
 
@@ -165,7 +168,11 @@ def announce(
     if game is None:
         zona = classify(mx, my)
         return Callout(
-            phrase(champion, zona), MEDIO, zona.key, zona.side, well_inside(mx, my)
+            phrase(champion, zona),
+            MEDIO,
+            zona.key,
+            zona.side,
+            well_inside(mx, my, stable_margin, firm_probes),
         )
 
     # O minimapa pode estar girado 180° pela opção do jogo; o mundo não.
@@ -205,5 +212,5 @@ def announce(
         urgencia,
         zona.key,
         zona.side,
-        well_inside(wx, wy),
+        well_inside(wx, wy, stable_margin, firm_probes),
     )

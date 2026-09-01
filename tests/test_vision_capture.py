@@ -48,6 +48,8 @@ from lolqueue.vision.watcher import (
     NOTE_NO_WINDOW,
     NOTE_TWIN_JUNGLER,
     RELOCATE_SECONDS,
+    MAX_PRECISION,
+    STUBBORN_FRAMES,
     JungleWatcher,
 )
 from lolqueue.vision.window import Rect
@@ -1466,7 +1468,7 @@ class _VozAnotada(_VozFalsa):
         self.chamadas.append((texto, ttl, group))
 
 
-def _vigia_com_avisos(avisos, voz=None):
+def _vigia_com_avisos(avisos, voz=None, max_precision=False):
     """Uma vigilância que fala os avisos da lista, um por `tick`.
 
     `announce` é substituído porque o que se testa aqui é a decisão de
@@ -1479,6 +1481,7 @@ def _vigia_com_avisos(avisos, voz=None):
     vigia, relogio, diario, padrao = _vigia(
         game_fn=_jogo_de_meio,
         locate_fn=lambda frame, area, flipped=False: mapa,
+        max_precision=max_precision,
     )
     if voz is not None:
         vigia._voice = voz
@@ -1530,13 +1533,13 @@ def test_a_zone_that_flickers_on_the_border_is_only_said_once(announce_original)
     assert voz.ditas == [a.text]
 
 
-def test_a_zone_that_holds_for_two_frames_is_said(announce_original):
-    """A histerese é de um quadro, não um silêncio: quem fica, é dito."""
+def test_a_zone_that_holds_for_three_frames_is_said(announce_original):
+    """Três leituras coerentes bastam para uma nova zona firme."""
     a = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
     b = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo")
-    vigia, relogio, _diario, voz = _vigia_com_avisos([a, b, b])
+    vigia, relogio, _diario, voz = _vigia_com_avisos([a, b, b, b])
 
-    for indice in range(3):
+    for indice in range(4):
         relogio.agora = 10.0 + indice * 4.0
         vigia.tick()
 
@@ -1727,11 +1730,78 @@ def test_a_reading_on_a_border_waits_for_more_than_two_frames(
     assert voz.ditas == [a.text]
 
 
+def test_the_first_border_reading_waits_for_proof(announce_original):
+    """Reaparecer na divisa não pode inaugurar uma localização falsa."""
+    border = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo", firme=False)
+    vigia, relogio, _diario, voz = _vigia_com_avisos([border])
+
+    for indice in range(STUBBORN_FRAMES - 1):
+        relogio.agora = 10.0 + indice * 1.0
+        vigia.tick()
+
+    assert voz.ditas == []
+
+    relogio.agora += 1.0
+    vigia.tick()
+
+    assert voz.ditas == [border.text]
+
+
+def test_maximum_precision_waits_for_five_firm_zone_reads(announce_original):
+    """No perfil máximo, até uma zona bem dentro precisa se provar."""
+    aviso = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    vigia, relogio, _diario, voz = _vigia_com_avisos(
+        [aviso], max_precision=True
+    )
+
+    for indice in range(MAX_PRECISION.steady_frames - 1):
+        relogio.agora = 10.0 + indice
+        vigia.tick()
+    assert voz.ditas == []
+
+    relogio.agora += 1.0
+    vigia.tick()
+    assert voz.ditas == [aviso.text]
+
+
+def test_maximum_precision_never_accepts_a_persistent_border(announce_original):
+    """A saída de teimosia do normal não existe no perfil estrito."""
+    border = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo", firme=False)
+    vigia, relogio, _diario, voz = _vigia_com_avisos(
+        [border], max_precision=True
+    )
+
+    for indice in range(STUBBORN_FRAMES * 2):
+        relogio.agora = 10.0 + indice
+        vigia.tick()
+
+    assert voz.ditas == []
+
+
+def test_an_urgent_border_reading_does_not_bypass_confirmation(
+    announce_original,
+):
+    """Uma nova frase de perigo também precisa acertar o lugar."""
+    calm = _aviso("Lee Sin no rio de cima", MEDIO, "rio_cima")
+    border = _aviso(
+        "Cuidado, Lee Sin no rio de baixo", PERTO, "rio_baixo", firme=False
+    )
+    vigia, relogio, _diario, voz = _vigia_com_avisos([calm, border])
+
+    relogio.agora = 10.0
+    vigia.tick()
+    for indice in range(3):
+        relogio.agora = 11.0 + indice * 1.0
+        vigia.tick()
+
+    assert voz.ditas == [calm.text]
+
+
 def test_insisting_long_enough_beats_the_border(announce_original):
     """Parar em cima da divisa não pode calar o app para sempre.
 
     A folga espacial nunca se cumpre para quem farma um acampamento
-    encostado numa fronteira. Passados dois segundos insistindo na mesma
+    encostado numa fronteira. Passados três segundos insistindo na mesma
     zona, a insistência vale mais que a folga — senão o nome antigo
     ficaria valendo até ele sair dali.
     """
@@ -1739,7 +1809,7 @@ def test_insisting_long_enough_beats_the_border(announce_original):
     b = _aviso("Lee Sin no rio de baixo", MEDIO, "rio_baixo", firme=False)
     vigia, relogio, _diario, voz = _vigia_com_avisos([a, b])
 
-    for indice in range(11):
+    for indice in range(STUBBORN_FRAMES + 1):
         relogio.agora = 10.0 + indice * 1.0
         vigia.tick()
 

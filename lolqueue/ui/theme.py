@@ -191,6 +191,47 @@ STYLESHEET = f"""
 }}
 #contentCard, #settingsCard {{ background: rgba(9, 27, 49, 222); }}
 #championCard {{ background: rgba(8, 25, 46, 225); }}
+#updateCard {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(16, 63, 78, 224), stop:.55 rgba(10, 37, 61, 235),
+        stop:1 rgba(8, 24, 45, 242));
+    border: 1px solid rgba(10, 200, 185, 118);
+    border-radius: 15px;
+}}
+#updateVersion {{
+    background: rgba(10, 200, 185, 22);
+    border: 1px solid rgba(10, 200, 185, 104);
+    border-radius: 8px;
+    color: #8AF1E6;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 1.15px;
+    padding: 5px 8px;
+}}
+#updateStatus {{
+    color: #EFF9F8;
+    font-size: 13px;
+    font-weight: 750;
+}}
+#updateAction {{
+    background: rgba(8, 130, 130, 152);
+    border: 1px solid rgba(90, 229, 215, 174);
+    border-radius: 9px;
+    color: #E9FFFC;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .7px;
+    padding: 9px 15px;
+}}
+#updateAction:hover {{
+    background: rgba(12, 177, 164, 188);
+    border-color: #A1FFF4;
+}}
+#updateAction:disabled {{
+    background: rgba(25, 48, 65, 150);
+    border-color: rgba(104, 139, 163, 92);
+    color: #71889B;
+}}
 #optionCard {{
     background: rgba(28, 58, 87, 106);
     border: 1px solid rgba(127, 165, 198, 54);
@@ -200,13 +241,299 @@ STYLESHEET = f"""
    cliente do jogo — verde de vitória, vermelho de derrota — e o
    destaque de fundo marca a própria partida do jogador na tela de
    placar completo, onde as dez linhas se parecem. */
-#optionCard[result="win"] {{ border-left: 3px solid {Palette.ACTIVE}; }}
-#optionCard[result="lose"] {{ border-left: 3px solid {Palette.DANGER}; }}
-/* Placar completo: cada linha herda a cor do próprio time, do mesmo
-   jeito que o cliente do jogo separa os dois lados de relance. */
-#optionCard[team="blue"] {{ border-left: 3px solid {Palette.SKY}; }}
-#optionCard[team="red"] {{ border-left: 3px solid {Palette.DANGER}; }}
-#optionCard[target="true"] {{ background: rgba(200, 170, 110, 46); }}
+#historyMatchRow {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(25, 59, 89, 210), stop:.58 rgba(13, 39, 67, 220),
+        stop:1 rgba(8, 27, 49, 232));
+    border: 1px solid rgba(125, 162, 196, 76);
+    border-left: 4px solid rgba(125, 162, 196, 110);
+    border-radius: 12px;
+}}
+#historyMatchRow:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(40, 82, 117, 230), stop:1 rgba(13, 46, 75, 236));
+    border-color: rgba(200, 170, 110, 140);
+}}
+#historyMatchRow[result="win"] {{ border-left-color: {Palette.ACTIVE}; }}
+#historyMatchRow[result="lose"] {{ border-left-color: {Palette.DANGER}; }}
+#historyChampion {{
+    color: {Palette.TEXT};
+    font-size: 16px;
+    font-weight: 750;
+}}
+#historyMatchSubtitle {{
+    color: #AFC0D0;
+    font-size: 11px;
+    font-weight: 600;
+}}
+#historyMatchSubtitle[result="win"] {{ color: #7FE5D1; }}
+#historyMatchSubtitle[result="lose"] {{ color: #F2A2AA; }}
+#historyItems {{
+    background: rgba(3, 16, 31, 108);
+    border: 1px solid rgba(104, 149, 185, 68);
+    border-radius: 8px;
+}}
+#historyItems #itemIcon {{
+    border-color: rgba(128, 169, 200, 128);
+    border-radius: 6px;
+}}
+#historyKda {{
+    color: #F2F6F9;
+    font-size: 17px;
+    font-weight: 800;
+    min-width: 76px;
+}}
+#historyMatchStat {{
+    color: #ABC0D2;
+    font-size: 10px;
+    font-weight: 650;
+}}
+#historyLpBox {{
+    background: rgba(3, 16, 31, 176);
+    border: 1px solid rgba(120, 156, 190, 86);
+    border-radius: 8px;
+}}
+#historyLpBox[direction="gain"] {{
+    background: rgba(10, 200, 185, 16);
+    border-color: rgba(10, 200, 185, 116);
+}}
+#historyLpBox[direction="loss"] {{
+    background: rgba(232, 82, 101, 18);
+    border-color: rgba(232, 82, 101, 126);
+}}
+#historyLpBox[source="manual"] {{
+    border-style: dashed;
+    border-color: rgba(230, 206, 144, 150);
+}}
+#historyLpCaption {{
+    color: #93AABD;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 1.1px;
+}}
+#historyTimeBox {{ background: transparent; border: none; }}
+#historyDuration {{
+    color: #E0E8EF;
+    font-size: 12px;
+    font-weight: 750;
+}}
+#historyWhen {{
+    color: #8FA5B8;
+    font-size: 10px;
+    font-weight: 600;
+}}
+/* Placar completo: azul/vermelho entram como acento, não como fundo.
+   Isso deixa os dez jogadores legíveis como uma tabela profissional. */
+#optionCard[team="blue"] {{
+    background: rgba(9, 29, 50, 226);
+    border: 1px solid rgba(100, 148, 185, 72);
+    border-left-color: #59B9E8;
+}}
+#optionCard[team="red"] {{
+    background: rgba(9, 29, 50, 226);
+    border: 1px solid rgba(100, 148, 185, 72);
+    border-left-color: #EA6870;
+}}
+#optionCard[team="blue"][target="true"] {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(26, 67, 91, 239), stop:1 rgba(11, 37, 61, 239));
+    border-color: rgba(200, 170, 110, 162);
+}}
+#optionCard[team="red"][target="true"] {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(65, 38, 55, 239), stop:1 rgba(32, 31, 52, 239));
+    border-color: rgba(200, 170, 110, 162);
+}}
+#lpDelta {{
+    font-size: 15px;
+    font-weight: 800;
+    min-width: 48px;
+}}
+#lpDelta[direction="gain"] {{ color: {Palette.ACTIVE}; }}
+#lpDelta[direction="loss"] {{ color: {Palette.DANGER}; }}
+#lpDelta[direction="neutral"] {{ color: #E6C775; }}
+#lpDelta[direction="unavailable"] {{ color: #879AAC; font-weight: 650; }}
+#historyImportButton {{
+    background: rgba(12, 79, 93, 104);
+    color: #A6F1E9;
+    border: 1px solid rgba(59, 193, 182, 135);
+    border-radius: 9px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .75px;
+    padding: 9px 15px;
+}}
+#historyImportButton:hover {{
+    background: rgba(12, 132, 143, 138);
+    color: #EEFFFC;
+    border-color: #79E3D9;
+}}
+#historyImportButton:disabled {{
+    background: rgba(20, 39, 57, 110);
+    color: #61788B;
+    border-color: rgba(88, 117, 142, 88);
+}}
+#manualLpImportDialog {{
+    background: #0A1A30;
+    border: 1px solid rgba(128, 177, 212, 142);
+}}
+#manualLpTitle {{
+    font-family: "Beaufort for LOL";
+    color: #F1DEAC;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+}}
+#manualLpIntro {{ color: #CAD9E5; font-size: 12px; line-height: 1.4; }}
+#manualLpHint {{
+    background: rgba(17, 112, 125, 68);
+    border: 1px solid rgba(75, 205, 195, 94);
+    border-radius: 8px;
+    color: #A7F0E8;
+    font-size: 11px;
+    font-weight: 650;
+    padding: 8px 10px;
+}}
+#manualLpScroll {{ background: transparent; border: none; }}
+#manualLpRow {{
+    background: rgba(8, 31, 55, 212);
+    border: 1px solid rgba(97, 143, 177, 100);
+    border-radius: 9px;
+}}
+#manualLpRow:hover {{ border-color: rgba(129, 213, 205, 165); }}
+#manualLpChampion {{ color: #F1F6FB; font-size: 13px; font-weight: 800; }}
+#manualLpMatchDetail {{ color: #9EB6C8; font-size: 10px; font-weight: 600; }}
+#manualLpInput {{
+    background: rgba(3, 16, 31, 225);
+    border-color: rgba(68, 182, 177, 158);
+    color: #DFFEF8;
+    font-size: 14px;
+    font-weight: 800;
+    padding: 7px 5px;
+}}
+#manualLpError {{
+    background: rgba(126, 32, 48, 96);
+    border: 1px solid rgba(239, 106, 123, 150);
+    border-radius: 7px;
+    color: #FFC7CF;
+    font-size: 11px;
+    font-weight: 650;
+    padding: 7px 9px;
+}}
+#manualLpCancel {{
+    background: rgba(31, 55, 78, 168);
+    color: #C4D2DE;
+    border: 1px solid rgba(112, 151, 182, 118);
+    border-radius: 9px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 11px 20px;
+}}
+#manualLpCancel:hover {{ background: rgba(54, 88, 117, 198); color: #F3F8FC; }}
+#scoreboardTeamCard {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(16, 47, 76, 236), stop:.6 rgba(9, 29, 52, 240),
+        stop:1 rgba(6, 21, 39, 244));
+    border: 1px solid rgba(111, 151, 190, 92);
+    border-radius: 15px;
+}}
+#scoreboardTeamCard[team="blue"] {{ border-color: rgba(89, 185, 232, 145); }}
+#scoreboardTeamCard[team="red"] {{ border-color: rgba(234, 104, 112, 145); }}
+#scoreboardTeamName {{
+    font-family: "Beaufort for LOL";
+    color: #DCEBF5;
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 1.35px;
+}}
+#scoreboardTeamName[team="blue"] {{ color: #8CDCF8; }}
+#scoreboardTeamName[team="red"] {{ color: #F29AA2; }}
+#scoreboardTeamResult {{
+    border-radius: 8px;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    padding: 3px 8px;
+}}
+#scoreboardTeamResult[result="win"] {{
+    background: rgba(10, 200, 185, 23);
+    border: 1px solid rgba(10, 200, 185, 128);
+    color: #77EBD8;
+}}
+#scoreboardTeamResult[result="lose"] {{
+    background: rgba(232, 82, 101, 24);
+    border: 1px solid rgba(232, 82, 101, 128);
+    color: #F39FA8;
+}}
+#scoreboardObjectives {{
+    color: #C6D6E2;
+    font-size: 11px;
+    font-weight: 650;
+}}
+#scoreboardBans {{
+    color: #91A9BB;
+    font-size: 10px;
+    font-weight: 600;
+}}
+#scoreboardColumns {{
+    background: rgba(2, 14, 29, 174);
+    border: 1px solid rgba(103, 148, 185, 74);
+    border-radius: 7px;
+}}
+#scoreboardColumnLabel {{
+    color: #9DB6C9;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .9px;
+}}
+#scoreboardIdentity {{ background: transparent; border: none; }}
+#scoreboardItems {{
+    background: rgba(2, 14, 29, 86);
+    border: 1px solid rgba(103, 148, 185, 42);
+    border-radius: 7px;
+}}
+#scoreboardItems #itemIcon {{
+    border-color: rgba(143, 190, 220, 142);
+    border-radius: 6px;
+}}
+#scoreboardMetric {{
+    background: rgba(2, 14, 29, 122);
+    border: 1px solid rgba(103, 148, 185, 52);
+    border-radius: 7px;
+}}
+#scoreboardMetricValue {{
+    color: #F2F6F9;
+    font-size: 14px;
+    font-weight: 800;
+}}
+#scoreboardDamage {{
+    background: rgba(2, 14, 29, 122);
+    border: 1px solid rgba(103, 148, 185, 52);
+    border-radius: 7px;
+}}
+#damageValue {{
+    color: #F0F5F8;
+    font-size: 13px;
+    font-weight: 800;
+}}
+#damageBar {{
+    background: rgba(13, 35, 57, 190);
+    border: none;
+    border-radius: 4px;
+}}
+#damageBar::chunk {{ border-radius: 4px; background: #4BB4E6; }}
+#damageBar[team="red"]::chunk {{ background: #EA6870; }}
+#damageBar[team="blue"]::chunk {{ background: #59B9E8; }}
+#scoreboardChampion {{
+    color: #F2F6F9;
+    font-size: 14px;
+    font-weight: 800;
+}}
+#scoreboardSummoner {{
+    color: #AFC2D0;
+    font-size: 10px;
+    font-weight: 600;
+}}
 /* Selo "VOCÊ" ao lado do nome, na própria linha do jogador conectado. */
 #youBadge {{
     background: rgba(200, 170, 110, 46);

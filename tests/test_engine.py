@@ -38,6 +38,18 @@ class Relogio:
         self.agora += segundos
 
 
+class RastreadorPdl:
+    def __init__(self):
+        self.phases = []
+        self.ticks = 0
+
+    def handle_phase(self, phase):
+        self.phases.append(phase)
+
+    def tick(self):
+        self.ticks += 1
+
+
 def make_engine(
     config=None, responses=None, failures=None, closed=False, now=None, rng=None
 ):
@@ -66,6 +78,19 @@ def test_disabled_engine_does_nothing():
     engine.set_enabled(False)
     engine.handle_phase(GameflowPhase.READY_CHECK)
     assert client.calls == []
+
+
+def test_lp_tracker_keeps_working_when_queue_automation_is_disabled():
+    engine, _client = make_engine()
+    tracker = RastreadorPdl()
+    engine.set_lp_tracker(tracker)
+    engine.set_enabled(False)
+
+    engine.handle_phase(GameflowPhase.END_OF_GAME)
+    engine.tick()
+
+    assert tracker.phases == [GameflowPhase.END_OF_GAME]
+    assert tracker.ticks == 1
 
 
 def test_auto_accept_off_means_no_accept():
@@ -1123,3 +1148,27 @@ def test_a_guest_does_not_touch_the_positions():
     )
     engine.handle_phase(GameflowPhase.LOBBY)
     assert endpoints.LOBBY_POSITION_PREFERENCES not in client.paths("PUT")
+
+
+class _LivePdlTracker(RastreadorPdl):
+    def __init__(self):
+        super().__init__()
+        self.started = 0
+        self.stopped = 0
+
+    def start_live_events(self):
+        self.started += 1
+
+    def stop(self):
+        self.stopped += 1
+
+
+def test_engine_keeps_the_live_pdl_subscription_with_its_connection():
+    engine, _client = make_engine()
+    tracker = _LivePdlTracker()
+
+    engine.set_lp_tracker(tracker)
+    engine.close()
+
+    assert tracker.started == 1
+    assert tracker.stopped == 1

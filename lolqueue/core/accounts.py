@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import threading
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -139,7 +140,11 @@ class Accounts:
         # mexe nos ajustes, e a vigia da conexão, quando copia as
         # configurações do jogo. A gravação já é inteira-ou-nada; o
         # cadeado impede que uma troque o `.part` da outra no meio.
-        self._lock = threading.Lock()
+        # `save` também usa este cadeado; ele precisa ser reentrante porque
+        # uma troca de principal pode preparar o modelo e em seguida ser
+        # persistida na mesma passagem da GUI. O arquivo pertence às duas
+        # threads (janela e vigia do cliente), não a uma delas só.
+        self._lock = threading.RLock()
         if self.main not in self.accounts:
             self.main = ""
 
@@ -174,15 +179,19 @@ class Accounts:
     def save(self, path: Path | None = None) -> None:
         """Grava os perfis, inteiros ou não grava. Ver `Config.save`."""
         target = path or accounts_path()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "main": self.main,
-            "accounts": {
-                key: asdict(account) for key, account in self.accounts.items()
-            },
-        }
-        temp = target.with_name(target.name + ".part")
         with self._lock:
+            # O retrato precisa nascer dentro do cadeado. Antes, uma
+            # atualização do modelo pela thread do cliente podia acontecer
+            # enquanto a compreensão percorria o dicionário e deixar o
+            # `contas.json` incompleto (ou levantar RuntimeError).
+            payload = {
+                "main": self.main,
+                "accounts": {
+                    key: asdict(account) for key, account in self.accounts.items()
+                },
+            }
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temp = target.with_name(target.name + ".part")
             try:
                 temp.write_text(
                     json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -205,30 +214,31 @@ class Accounts:
         """
         key = account_key(identity)
         label = account_label(identity)
-        known = self.accounts.get(key)
-        source = ""
-        if known is not None:
-            apply_settings(config, known.settings)
-            kind = ARRIVED_KNOWN
-        else:
-            parent = self.accounts.get(self.main)
-            if parent is not None:
-                apply_settings(config, parent.settings)
-                kind = ARRIVED_INHERITED
-                source = parent.label
+        with self._lock:
+            known = self.accounts.get(key)
+            source = ""
+            if known is not None:
+                apply_settings(config, known.settings)
+                kind = ARRIVED_KNOWN
             else:
-                kind = ARRIVED_FIRST
-            self.accounts[key] = Account(label=label, region=identity.region)
-        account = self.accounts[key]
-        account.label = label
-        account.region = identity.region
-        account.last_seen = self._now()
-        account.settings = settings_of(config)
-        if not self.main:
-            self.main = key
-        return Arrival(
-            key=key, label=label, kind=kind, source=source, main=key == self.main
-        )
+                parent = self.accounts.get(self.main)
+                if parent is not None:
+                    apply_settings(config, parent.settings)
+                    kind = ARRIVED_INHERITED
+                    source = parent.label
+                else:
+                    kind = ARRIVED_FIRST
+                self.accounts[key] = Account(label=label, region=identity.region)
+            account = self.accounts[key]
+            account.label = label
+            account.region = identity.region
+            account.last_seen = self._now()
+            account.settings = settings_of(config)
+            if not self.main:
+                self.main = key
+            return Arrival(
+                key=key, label=label, kind=kind, source=source, main=key == self.main
+            )
 
     def remember(self, key: str, config: Config) -> bool:
         """Guarda no perfil da conta o que a config tem agora.
@@ -237,18 +247,40 @@ class Accounts:
         conta nova aqui: sem o cliente aberto não há como saber o nome
         nem a região, e um perfil sem dono seria lixo permanente.
         """
-        account = self.accounts.get(key)
-        if account is None:
-            return False
-        account.settings = settings_of(config)
-        return True
+        with self._lock:
+            account = self.accounts.get(key)
+            if account is None:
+                return False
+            account.settings = settings_of(config)
+            return True
 
     def set_main(self, key: str) -> bool:
-        """Marca a conta principal. Chave desconhecida não marca nada."""
-        if key not in self.accounts:
-            return False
-        self.main = key
-        return True
+        """Marca a conta principal sem deixar o modelo de jogo desaparecer.
+
+        O modelo de controles é uma fotografia escolhida pelo usuário, não
+        uma particularidade do nome que antes era principal. Se a nova
+        principal ainda não tem fotografia própria, ela recebe uma cópia do
+        modelo atual; se já tem, a fotografia dela vence. Isso evita que um
+        simples ``Tornar principal`` desligue silenciosamente a cópia entre
+        contas.
+        """
+        with self._lock:
+            if key not in self.accounts:
+                return False
+            if key == self.main:
+                return True
+            previous = self.main
+            previous_account = self.accounts.get(previous)
+            target = self.accounts[key]
+            if previous_account is not None and previous_account.game_settings:
+                if not target.game_settings:
+                    target.game_settings = deepcopy(previous_account.game_settings)
+                # Só a principal deve carregar a etiqueta de modelo. A cópia
+                # acima é profunda para um futuro PATCH nunca editar o perfil
+                # antigo por referência.
+                previous_account.game_settings = {}
+            self.main = key
+            return True
 
     def set_game_settings(self, key: str, snapshot: dict) -> bool:
         """Guarda na conta a fotografia das configurações do jogo.
@@ -256,20 +288,23 @@ class Accounts:
         Fotografia vazia apaga a que havia: é assim que o usuário
         desliga a cópia sem esquecer a conta inteira.
         """
-        account = self.accounts.get(key)
-        if account is None:
-            return False
-        account.game_settings = dict(snapshot or {})
-        return True
+        with self._lock:
+            account = self.accounts.get(key)
+            if account is None:
+                return False
+            account.game_settings = deepcopy(snapshot or {})
+            return True
 
     def game_settings_of(self, key: str) -> dict:
         """O que a conta guardou do jogo. Vazio se não guardou nada."""
-        account = self.accounts.get(key)
-        return dict(account.game_settings) if account is not None else {}
+        with self._lock:
+            account = self.accounts.get(key)
+            return deepcopy(account.game_settings) if account is not None else {}
 
     def main_game_settings(self) -> dict:
         """O modelo a copiar: o que a conta principal guardou."""
-        return self.game_settings_of(self.main) if self.main else {}
+        with self._lock:
+            return self.game_settings_of(self.main) if self.main else {}
 
     def forget(self, key: str) -> bool:
         """Tira uma conta do histórico.
@@ -277,11 +312,12 @@ class Accounts:
         Apagar a principal deixa o posto vago em vez de escolher outra
         no lugar: herdar da conta errada é pior do que não herdar.
         """
-        if self.accounts.pop(key, None) is None:
-            return False
-        if self.main == key:
-            self.main = ""
-        return True
+        with self._lock:
+            if self.accounts.pop(key, None) is None:
+                return False
+            if self.main == key:
+                self.main = ""
+            return True
 
     def ordered(self) -> list[tuple[str, Account]]:
         """As contas da mais recente para a mais antiga, principal antes.
@@ -294,13 +330,22 @@ class Accounts:
             key, account = item
             return (key != self.main, _newest_first(account.last_seen), account.label)
 
-        return sorted(self.accounts.items(), key=rank)
+        with self._lock:
+            # A GUI só precisa desenhar valores. Devolver cópias faz com que
+            # a thread da vigia não consiga mudar uma etiqueta no meio do
+            # desenho de uma linha.
+            return [
+                (key, deepcopy(account))
+                for key, account in sorted(self.accounts.items(), key=rank)
+            ]
 
     def __len__(self) -> int:
-        return len(self.accounts)
+        with self._lock:
+            return len(self.accounts)
 
     def __contains__(self, key: object) -> bool:
-        return key in self.accounts
+        with self._lock:
+            return key in self.accounts
 
 
 def _newest_first(text: str) -> tuple[int, str]:

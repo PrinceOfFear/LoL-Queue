@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.playwright-cli/
 .venv/
 build/
 dist/
@@ -15,6 +16,7 @@ _legado/
 # Atalho gerado por tools/criar-atalho.ps1 (aponta para o pythonw desta máquina)
 *.lnk
 dist-standalone/
+Distribuicao/
 
 # Amostras de voz geradas por tools/comparar_vozes.py (regeraveis, nao versionar)
 docs/amostras-voz/
@@ -22,6 +24,9 @@ docs/amostras-voz/
 # Chave privada Ed25519 do servidor de licencas. NUNCA versionar:
 # quem tem este arquivo emite licenca de graca para sempre.
 chaves-licenca/
+# Chave privada Ed25519 que assina as atualizacoes remotas. A pasta inteira
+# fica local; somente a chave publica e embutida deliberadamente no build.
+chaves-atualizacao/
 *.chave-privada
 servidor/.env
 servidor/licencas.db*

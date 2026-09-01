@@ -23,6 +23,7 @@ from ..widgets.loadout_studio import (
     SpellKeyPreview,
     decorate_rank_combo,
 )
+from ..widgets.update_card import UpdateCard
 
 
 class SettingsPage(QWidget):
@@ -247,6 +248,22 @@ class SettingsPage(QWidget):
 
         assistance_layout.addWidget(
             binder.checkbox(
+                "Precisão máxima — só avisa com confirmação reforçada",
+                "jungle_max_precision",
+                "jungleMaxPrecision",
+            )
+        )
+        precision_note = QLabel(
+            "Prioriza não falar a adivinhar: confirma imagem, movimento e "
+            "zona antes do aviso. Pode ignorar aparições rápidas ou sob "
+            "névoa; a escolha vale na próxima partida."
+        )
+        precision_note.setObjectName("hint")
+        precision_note.setWordWrap(True)
+        assistance_layout.addWidget(precision_note)
+
+        assistance_layout.addWidget(
+            binder.checkbox(
                 "Guardar no registro o porquê de cada aviso",
                 "jungle_debug",
             )
@@ -298,6 +315,12 @@ class SettingsPage(QWidget):
 
         self.accounts = AccountsCard()
         layout.addWidget(self.accounts)
+
+        # A troca de arquivos e feita pela janela, em threads separadas; a
+        # pagina so abriga o cartao para manter Ajustes como a casa de tudo
+        # que diz respeito a manutencao do aplicativo.
+        self.updates = UpdateCard()
+        layout.addWidget(self.updates)
 
         legal = QLabel(
             "PROJETO INDEPENDENTE · LoL Queue não é endossado pela Riot Games. "

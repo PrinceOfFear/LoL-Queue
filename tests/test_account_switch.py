@@ -223,14 +223,71 @@ def botoes(window) -> list[str]:
     return textos
 
 
+def linhas_de_conta(window):
+    rows = window._settings.accounts._rows
+    return [rows.itemAt(index).widget() for index in range(rows.count())]
+
+
+def test_accounts_card_makes_connection_and_roles_clear(window):
+    """O cartão novo deixa claro qual perfil está em uso e qual é o modelo."""
+    window._on_identity_changed(quem())
+    window._accounts.set_game_settings(window._accounts.main, {"input": {"a": 1}})
+    window._on_connection_changed(True)
+
+    card = window._settings.accounts
+    row = linhas_de_conta(window)[0]
+    badges = [
+        badge.text() for badge in row.findChildren(QtWidgets.QLabel)
+        if badge.objectName() == "accountPill"
+    ]
+
+    assert card._count.text() == "1 PERFIL"
+    assert card._connection.text() == "CLIENTE CONECTADO"
+    assert card._model_status.text() == "MODELO DO JOGO ATIVO"
+    assert row.property("state") == "active-main"
+    assert {"PRINCIPAL", "EM USO", "MODELO DO JOGO"}.issubset(badges)
+
+
+def test_accounts_card_keeps_removal_disabled_for_the_active_profile(window):
+    window._on_identity_changed(quem())
+    row = linhas_de_conta(window)[0]
+    remove = next(
+        button for button in row.findChildren(QtWidgets.QPushButton)
+        if button.text() == "Remover"
+    )
+
+    assert not remove.isEnabled()
+    assert "não pode ser removida" in remove.toolTip()
+
+
+def test_control_actions_wait_for_the_lol_client(window):
+    window._on_identity_changed(quem())
+    row = linhas_de_conta(window)[0]
+    capture = next(
+        button for button in row.findChildren(QtWidgets.QPushButton)
+        if button.text() == "Guardar controles"
+    )
+
+    assert not capture.isEnabled()
+    assert "Abra o cliente" in capture.toolTip()
+
+    window._on_connection_changed(True)
+    refreshed = linhas_de_conta(window)[0]
+    capture = next(
+        button for button in refreshed.findChildren(QtWidgets.QPushButton)
+        if button.text() == "Guardar controles"
+    )
+    assert capture.isEnabled()
+
+
 def test_only_the_account_that_is_logged_in_offers_to_save_the_game_settings(window):
     """Só dá para ler o jogo da conta que o cliente tem na mão."""
     window._on_identity_changed(quem())
     window._on_identity_changed(quem("Amigo", "BR2"))
     window._on_identity_changed(quem())
 
-    assert "Guardar config do jogo" in botoes(window)
-    assert botoes(window).count("Guardar config do jogo") == 1
+    assert "Guardar controles" in botoes(window)
+    assert botoes(window).count("Guardar controles") == 1
 
 
 def test_an_account_that_is_not_the_main_one_gets_the_button_to_receive(window):
@@ -239,15 +296,15 @@ def test_an_account_that_is_not_the_main_one_gets_the_button_to_receive(window):
     window._accounts.set_game_settings(window._accounts.main, {"input": {"a": 1}})
     window._on_identity_changed(quem("Amigo", "BR2"))
 
-    assert "Aplicar config do jogo" in botoes(window)
-    assert "Guardar config do jogo" not in botoes(window)
+    assert "Aplicar controles agora" in botoes(window)
+    assert "Guardar controles" not in botoes(window)
 
 
 def test_without_a_model_nobody_is_offered_a_copy(window):
     window._on_identity_changed(quem())
     window._on_identity_changed(quem("Amigo", "BR2"))
 
-    assert "Aplicar config do jogo" not in botoes(window)
+    assert "Aplicar controles agora" not in botoes(window)
 
 
 def test_stopping_the_copy_erases_the_model(window):

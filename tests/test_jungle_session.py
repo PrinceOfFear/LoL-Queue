@@ -9,6 +9,8 @@ quando ele apaga.
 from lolqueue.config import Config
 from lolqueue.vision.session import JungleSession
 from lolqueue.vision import session as session_module
+from lolqueue.vision import voice as voice_module
+from lolqueue.vision import watcher as watcher_module
 from lolqueue.vision.voice import DEFAULT_VOICE, MISSING_PACKAGE_NOTICE, VOICES
 
 
@@ -94,6 +96,30 @@ def test_a_voice_the_config_does_not_know_falls_back():
     sessao, criados, _ = make_session(config)
     sessao.start()
     assert criados[0][0].voice_name == DEFAULT_VOICE
+
+
+def test_the_default_builder_passes_the_precision_selected_for_the_next_match(
+    monkeypatch,
+):
+    """A opção é lida ao abrir a partida, como a voz e o diagnóstico."""
+    captured = []
+
+    class Voice:
+        def __init__(self, name, on_message=None):
+            self.name = name
+
+    class Watcher:
+        def __init__(self, voice, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr(voice_module, "Voice", Voice)
+    monkeypatch.setattr(watcher_module, "JungleWatcher", Watcher)
+
+    for enabled in (True, False):
+        session = JungleSession(Config(jungle_max_precision=enabled))
+        session._default_build(DEFAULT_VOICE)
+
+    assert [kwargs["max_precision"] for kwargs in captured] == [True, False]
 
 
 def test_a_broken_environment_does_not_take_the_app_down():

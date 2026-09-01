@@ -24,6 +24,8 @@ Duas receitas correm o mesmo trajeto:
             trava de zona valendo só contra o quadro anterior, com
             "cuidado" furando a fila sempre.
   agora  -- o código como está no disco.
+  maxima -- a mesma vigilância no perfil que prefere ficar muda a nomear
+            uma zona sem confirmação visual e espacial reforçada.
 
 Roda: py -3 tools/medir_avisos.py
 """
@@ -138,7 +140,13 @@ def rota_jungler(n: int) -> list[tuple[float, float]]:
     return saida
 
 
-def montar(partida, relogio, detector, mapa) -> JungleWatcher:
+def montar(
+    partida,
+    relogio,
+    detector,
+    mapa,
+    max_precision: bool = False,
+) -> JungleWatcher:
     vigia = JungleWatcher(
         voice=_Voz(),
         on_message=lambda _t: None,
@@ -149,6 +157,7 @@ def montar(partida, relogio, detector, mapa) -> JungleWatcher:
         clock=relogio,
         fullscreen_fn=lambda: False,
         config_fn=lambda: Path("game.cfg"),
+        max_precision=max_precision,
     )
     vigia._minimap = mapa
     vigia._minimap_at = 0.0
@@ -194,7 +203,13 @@ def medir(
     relogio = _Relogio()
     detector = _Detector()
     mapa = Minimap(rect=Rect(1600, 800, LADO, LADO), flipped=False)
-    vigia = montar(jogo(lane, ancora), relogio, detector, mapa)
+    vigia = montar(
+        jogo(lane, ancora),
+        relogio,
+        detector,
+        mapa,
+        max_precision=receita == "maxima",
+    )
     if receita == "antes":
         envelhecer(vigia)
 
@@ -269,7 +284,7 @@ def main() -> None:
             f"{'certas/min':>11}"
         )
         for tremor in TREMORES:
-            for receita in ("antes", "agora"):
+            for receita in ("antes", "agora", "maxima"):
                 linhas = [
                     medir(receita, lane, ancora, tremor, s) for s in SEMENTES
                 ]

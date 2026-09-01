@@ -17,13 +17,19 @@ rotas laterais; quem ocupa norte/sul/leste/oeste é a selva.
 
 from __future__ import annotations
 
+from math import cos, hypot, pi, sin, sqrt
+
 import pytest
 
 from lolqueue.vision.zones import (
     BARON_PIT,
     BLUE_BASE,
+    CAMP_RADIUS,
+    CAMPS,
     DRAGON_PIT,
+    OBJECTIVE_RADIUS,
     RED_BASE,
+    STABLE_MARGIN,
     classify,
     describe,
 )
@@ -78,6 +84,42 @@ def test_bases_win_over_mid():
     """As bases ficam nas pontas da mid e não podem ser engolidas por ela."""
     assert classify(*BLUE_BASE).key == "blue_base"
     assert classify(*RED_BASE).key == "red_base"
+
+
+def test_adjacent_camp_areas_do_not_overlap():
+    """O meio entre dois campos não pode escolher o primeiro da lista.
+
+    Esta era uma fonte literal de falso aviso: Blue e lobos ficam a
+    aproximadamente 0,10 do mapa um do outro, mas dois raios de 0,055
+    se cruzavam. Quem caía no cruzamento recebia "blue" por ordem de
+    iteração, não por estar no blue.
+    """
+    for side in (AZUL, VERMELHO):
+        camps = [camp for camp in CAMPS if camp[3] == side]
+        for index, left in enumerate(camps):
+            for right in camps[index + 1 :]:
+                distance = hypot(left[1] - right[1], left[2] - right[2])
+                assert distance > CAMP_RADIUS * 2
+
+
+def test_objective_area_does_not_swallow_the_nearest_camp():
+    """Perto do covil ainda pode ser red; são duas localizações distintas."""
+    for pit in (BARON_PIT, DRAGON_PIT):
+        nearest = min(
+            hypot(camp[1] - pit[0], camp[2] - pit[1]) for camp in CAMPS
+        )
+        assert nearest > OBJECTIVE_RADIUS + CAMP_RADIUS
+
+
+def test_the_space_between_blue_and_wolves_stays_generic_jungle():
+    """Sem localização precisa, a resposta honesta é selva, não um campo."""
+    blue = next(camp for camp in CAMPS if camp[0] == "blue" and camp[3] == AZUL)
+    wolves = next(
+        camp for camp in CAMPS if camp[0] == "wolves" and camp[3] == AZUL
+    )
+    midpoint = ((blue[1] + wolves[1]) / 2, (blue[2] + wolves[2]) / 2)
+
+    assert classify(*midpoint).key not in {"blue", "wolves"}
 
 
 @pytest.mark.parametrize(
@@ -153,6 +195,43 @@ def test_a_point_in_the_middle_of_a_zone_is_well_inside():
 
     assert well_inside(*BARON_PIT)
     assert well_inside(0.19, 0.63)
+
+
+def test_a_diagonal_camp_edge_is_not_firm():
+    """As sondas diagonais protegem a borda redonda de um acampamento."""
+    from lolqueue.vision.zones import well_inside
+
+    blue = next(camp for camp in CAMPS if camp[0] == "blue" and camp[3] == AZUL)
+    radius = CAMP_RADIUS - STABLE_MARGIN * 0.8
+    point = (
+        blue[1] + radius / sqrt(2),
+        blue[2] + radius / sqrt(2),
+    )
+
+    assert classify(*point).key == "blue"
+    assert not well_inside(*point)
+
+
+def test_sixteen_probes_cover_the_slanted_gap_left_by_eight():
+    """Uma curva entre duas sondas também é divisa no modo máximo.
+
+    Com oito direções, o ponto a 22,5° fica entre duas sondas. Ele está
+    só 0,02425 para dentro do blue, portanto não pode passar pela margem
+    estrita de 0,025 mesmo que os oito raios usuais ainda não o alcancem.
+    """
+    from lolqueue.vision.zones import well_inside
+
+    blue = next(camp for camp in CAMPS if camp[0] == "blue" and camp[3] == AZUL)
+    strict_margin = 0.025
+    radius = CAMP_RADIUS - strict_margin + 0.00075
+    point = (
+        blue[1] + radius * cos(pi / 8),
+        blue[2] + radius * sin(pi / 8),
+    )
+
+    assert classify(*point).key == "blue"
+    assert well_inside(*point, strict_margin, probes=8)
+    assert not well_inside(*point, strict_margin, probes=16)
 
 
 def test_being_well_inside_does_not_depend_on_staying_on_the_map():

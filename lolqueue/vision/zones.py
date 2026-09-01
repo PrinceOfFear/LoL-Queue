@@ -29,22 +29,26 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-#: Quão perto do canto ainda é base. Generoso de propósito: o que importa
-#: para o aviso é "está em casa", não o metro exato.
-BASE_RADIUS = 0.14
+#: Quão perto do canto ainda é base. A área anterior alcançava 39 px num
+#: minimapa de 280 px e chamava de base a saída dela; a zona curta prefere
+#: uma descrição genérica a localizar o jungler dentro da fonte inimiga sem
+#: prova suficiente.
+BASE_RADIUS = 0.105
 
-#: Raio dos objetivos. Menor que o das bases porque nomear um objetivo
-#: errado ("perto do Dragão" quando está na selva) custa caro.
-OBJECTIVE_RADIUS = 0.10
+#: Raio dos objetivos. O antigo 0,10 encostava no red mais próximo e
+#: chegava a engolir parte do campo. 0,075 deixa uma faixa honesta de
+#: selva entre o covil e os acampamentos vizinhos.
+OBJECTIVE_RADIUS = 0.075
 
-#: Largura de meia rota. As rotas do LoL são corredores estreitos.
-LANE_HALF_WIDTH = 0.065
+#: Largura de meia rota. O caminho desenhado no minimapa é estreito; fora
+#: deste corredor a frase "na rota" vira palpite sobre alguém na selva.
+LANE_HALF_WIDTH = 0.047
 
 #: Meia largura do rio, medida a partir da diagonal.
-RIVER_HALF_WIDTH = 0.07
+RIVER_HALF_WIDTH = 0.052
 
 #: Distância do corredor das rotas laterais até a borda do mapa.
-SIDE_LANE_OFFSET = 0.11
+SIDE_LANE_OFFSET = 0.075
 
 #: Onde ficam os poços dos objetivos, sobre a diagonal do rio.
 BARON_PIT = (0.34, 0.30)
@@ -60,9 +64,12 @@ NEUTRAL_BAND = 0.04
 
 _SQRT2 = math.sqrt(2.0)
 
-#: Raio de um campo da selva. Pequeno: os campos ficam a cerca de 0.10
-#: um do outro, e nomear o campo errado é pior que não nomear nenhum.
-CAMP_RADIUS = 0.055
+#: Raio de um campo da selva. Blue e lobos, os vizinhos mais próximos,
+#: ficam a 0,100 do mapa um do outro. O antigo raio 0,055 fazia os
+#: círculos se sobreporem; 0,045 deixa um corredor entre eles para que um
+#: ponto ambíguo caia em "selva" em vez de receber o nome do primeiro campo
+#: que a lista examinou.
+CAMP_RADIUS = 0.045
 
 #: Os seis campos de cada metade, com o nome que o jogador brasileiro
 #: usa de verdade. Ninguém fala "Rubrivira" nem "Acuáminas": fala red e
@@ -215,8 +222,9 @@ def classify(mx: float, my: float) -> Zone:
 
 
 # Quanto o ponto precisa estar para DENTRO de uma zona para o nome dela
-# valer como firme. Ver `well_inside`.
-STABLE_MARGIN = 0.010
+# valer como firme. Em um minimapa de 280 px são 4,5 px de folga: maior
+# que o tremor normal do casamento, menor que a distância entre campos.
+STABLE_MARGIN = 0.016
 
 
 def place(mx: float, my: float) -> tuple[str, int]:
@@ -230,7 +238,12 @@ def place(mx: float, my: float) -> tuple[str, int]:
     return zona.key, zona.side
 
 
-def well_inside(mx: float, my: float, margin: float = STABLE_MARGIN) -> bool:
+def well_inside(
+    mx: float,
+    my: float,
+    margin: float = STABLE_MARGIN,
+    probes: int = 8,
+) -> bool:
     """Se o ponto está a mais de `margin` de qualquer divisa.
 
     O mapa tem 29 zonas e um terço da área dele fica a menos de 0.02 de
@@ -241,14 +254,28 @@ def well_inside(mx: float, my: float, margin: float = STABLE_MARGIN) -> bool:
     vezes mais nomes diferentes do que o campeão de fato visitou.
 
     A divisa não pode ser detectada olhando um ponto só: é preciso
-    perguntar o que tem em volta. Quatro sondas a `margin` de distância
-    bastam, porque as fronteiras daqui são retas e círculos grandes
-    perto dessa escala. 0.010 do mapa são uns 150 unidades do Rift, uma
-    largura e meia de campeão — a folga certa para não confundir "está
-    na divisa" com "atravessou".
+    perguntar o que tem em volta. Oito sondas igualmente espaçadas a
+    `margin` de distância cobrem retas, diagonais e as bordas circulares
+    de campo e objetivo. O modo de precisão máxima pede dezesseis:
+    entre duas sondas ainda existe uma pequena fresta em uma curva, e
+    nela a resposta honesta é esperar em vez de nomear o vizinho.
+
+    0.016 do mapa são cerca de 240 unidades do Rift: folga bastante para
+    não chamar um vizinho de acampamento, sem transformar o mapa inteiro
+    em área morta.
     """
     aqui = place(mx, my)
-    for dx, dy in ((margin, 0.0), (-margin, 0.0), (0.0, margin), (0.0, -margin)):
+    # Menos de quatro sondas deixa qualquer uma das quatro direções
+    # principais descoberta; valor torto vindo de um chamador não pode
+    # transformar "firme" em uma aposta.
+    try:
+        count = max(4, int(probes))
+    except (TypeError, ValueError):
+        count = 8
+    for index in range(count):
+        angle = 2.0 * math.pi * index / count
+        dx = margin * math.cos(angle)
+        dy = margin * math.sin(angle)
         if place(mx + dx, my + dy) != aqui:
             return False
     return True

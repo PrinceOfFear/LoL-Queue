@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import dataclass
 from typing import Callable
 
 from . import gamecfg
@@ -21,10 +22,19 @@ from . import minimap as minimap_module
 from . import window as window_module
 from .callout import LONGE, MEDIO, PERTO, REPEAT_SECONDS
 from .callout import Callout, all_phrases, announce
-from .detect import Detector
+from .detect import (
+    ACQUIRE_MARGIN,
+    CONFIRM_FRAMES,
+    FORGIVE_FRAMES,
+    JUMP_FRACTION,
+    MARGIN,
+    THRESHOLD,
+    Detector,
+)
 from .icons import ChampionIcons
 from .livegame import LiveGame, LiveGameUnavailable
 from .livegame import fetch as fetch_game
+from .zones import STABLE_MARGIN
 
 #: Quantos quadros por segundo o laço tenta manter. O jungler leva pelo
 #: menos um segundo cruzando o minimapa; cinco quadros bastam para pegá-lo
@@ -83,14 +93,76 @@ URGENCY_RANK = {LONGE: 0, MEDIO: 1, PERTO: 2}
 # um deslocamento que se mantém.
 SMOOTH_FRAMES = 5
 
-# Quadros seguidos que uma zona nova precisa somar antes de valer.
-STEADY_FRAMES = 2
+# Quadros seguidos que uma zona nova precisa somar antes de valer. A cinco
+# quadros por segundo são 0,6 s de posição consistente depois que o retrato
+# já passou pela confirmação do detector.
+STEADY_FRAMES = 3
 
 # A válvula da teimosia. Um campeão pode parar exatamente em cima de uma
 # divisa, e aí a folga espacial nunca se cumpre: sem esta saída o nome
-# antigo ficaria valendo até ele sair dali. Dois segundos insistindo na
-# mesma zona valem mais que a folga.
-STUBBORN_FRAMES = 10
+# antigo ficaria valendo até ele sair dali. Três segundos insistindo na
+# mesma zona valem mais que a folga — antes disso, uma borda é dúvida, não
+# localização.
+STUBBORN_FRAMES = 15
+
+
+@dataclass(frozen=True)
+class JunglePrecisionPolicy:
+    """Quanto de prova uma localização precisa antes de ganhar voz.
+
+    A escolha fica reunida para que o modo máximo seja de verdade uma
+    regra completa: detector, movimento, mediana e divisa precisam ser
+    conservadores juntos. Apertar só uma dessas portas apenas desloca o
+    falso aviso para a próxima.
+    """
+
+    threshold: float
+    margin: float
+    acquire_margin: float
+    confirm_frames: int
+    forgive_frames: int
+    jump_fraction: float
+    smooth_frames: int
+    steady_frames: int
+    stubborn_frames: int | None
+    stable_margin: float
+    firm_probes: int
+
+
+# O perfil histórico: mantém a resposta rápida para quem desmarca a
+# precisão máxima nas configurações. Os nomes públicos acima continuam
+# existindo porque são a régua dos testes e da documentação.
+NORMAL_PRECISION = JunglePrecisionPolicy(
+    threshold=THRESHOLD,
+    margin=MARGIN,
+    acquire_margin=ACQUIRE_MARGIN,
+    confirm_frames=CONFIRM_FRAMES,
+    forgive_frames=FORGIVE_FRAMES,
+    jump_fraction=JUMP_FRACTION,
+    smooth_frames=SMOOTH_FRAMES,
+    steady_frames=STEADY_FRAMES,
+    stubborn_frames=STUBBORN_FRAMES,
+    stable_margin=STABLE_MARGIN,
+    firm_probes=8,
+)
+
+# Preferir calar a adivinhar. Este perfil exige cinco imagens consecutivas
+# do mesmo retrato, não carrega um rastro por cima de um quadro perdido e
+# recusa uma mudança rápida demais para um campeão. A margem de zona e as
+# 16 sondas deixam toda a vizinhança de uma divisa em silêncio.
+MAX_PRECISION = JunglePrecisionPolicy(
+    threshold=0.90,
+    margin=0.10,
+    acquire_margin=0.14,
+    confirm_frames=5,
+    forgive_frames=0,
+    jump_fraction=0.20,
+    smooth_frames=7,
+    steady_frames=5,
+    stubborn_frames=None,
+    stable_margin=0.025,
+    firm_probes=16,
+)
 
 #: Quanto tempo um aviso do jungler ainda vale depois de calculado.
 #: Passado o prazo sem ter começado a tocar, ele é descartado em vez de
@@ -297,6 +369,7 @@ class JungleWatcher:
         fullscreen_fn: Callable[[], bool] | None = None,
         config_fn=None,
         debug: bool = False,
+        max_precision: bool = False,
     ) -> None:
         self._voice = voice
         self._icons = icons if icons is not None else ChampionIcons()
@@ -313,6 +386,13 @@ class JungleWatcher:
         # quem só quer jogar, e é a única coisa que responde "por que
         # ele falou isso?" para quem foi conferir depois da partida.
         self._debug = bool(debug)
+        # A sessão do app escolhe o perfil pela configuração. O construtor
+        # fica equilibrado por padrão para integrações que já o usam direto;
+        # o produto liga este modo conservador pela configuração nova.
+        self._max_precision = bool(max_precision)
+        self._precision = (
+            MAX_PRECISION if self._max_precision else NORMAL_PRECISION
+        )
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -506,16 +586,23 @@ class JungleWatcher:
             return None
         achado = detector.feed(quadro)
         if achado is None:
-            # Perdeu o rastro: a próxima zona a aparecer é a primeira de
-            # um reaparecimento, e essa não espera confirmação nenhuma.
-            # A janela da mediana vai junto — misturar o antes e o
-            # depois de um sumiço inventa uma posição intermediária que
-            # o campeão nunca ocupou.
+            # Perdeu o rastro: a próxima zona é um novo avistamento e
+            # precisa provar que não caiu na divisa. A janela da mediana
+            # vai junto — misturar o antes e o depois de um sumiço
+            # inventa uma posição intermediária que o campeão nunca
+            # ocupou.
             self._forget_zone()
             return None
 
         mx, my = self._smooth(*mapa.to_map(achado.x, achado.y))
-        aviso = announce(jungler.champion, mx, my, jogo)
+        aviso = announce(
+            jungler.champion,
+            mx,
+            my,
+            jogo,
+            stable_margin=self._precision.stable_margin,
+            firm_probes=self._precision.firm_probes,
+        )
         if not self._steady(aviso) or not self._due(aviso, agora):
             return None
         nivel = URGENCY_RANK.get(aviso.urgency, 1)
@@ -723,7 +810,15 @@ class JungleWatcher:
             )
             return None
         self._champion = champion
-        self._detector = Detector(moldes)
+        self._detector = Detector(
+            moldes,
+            threshold=self._precision.threshold,
+            confirm=self._precision.confirm_frames,
+            forgive=self._precision.forgive_frames,
+            margin=self._precision.margin,
+            acquire=self._precision.acquire_margin,
+            jump_fraction=self._precision.jump_fraction,
+        )
         return self._detector
 
     def _forget_zone(self) -> None:
@@ -749,7 +844,7 @@ class JungleWatcher:
         maioria.
         """
         self._recent.append((mx, my))
-        del self._recent[:-SMOOTH_FRAMES]
+        del self._recent[:-self._precision.smooth_frames]
         xs = sorted(p[0] for p in self._recent)
         ys = sorted(p[1] for p in self._recent)
         meio = len(xs) // 2
@@ -770,19 +865,19 @@ class JungleWatcher:
 
         A trava tem três portas, e a ordem entre elas é o desenho todo:
 
-        - o mesmo lugar do quadro anterior passa sempre, senão nada seria
-          dito duas vezes;
-        - a urgência que **sobe** passa na frente de tudo. Um "cuidado"
-          atrasado é um "cuidado" inútil, e esta é a única pressa que
-          vale um nome menos certo;
-        - qualquer outra troca de lugar espera dois quadros seguidos de
-          acordo **e** o ponto longe das divisas.
+        - a zona já sustentada continua valendo quando a leitura segue
+          firme; se ela cai na divisa, preservamos o estado, mas não
+          repetimos uma localização incerta;
+        - uma leitura firme pode inaugurar uma zona, ou aumentar para
+          "Cuidado", sem perder tempo;
+        - toda leitura em uma divisa espera três quadros coerentes e
+          continua esperando a folga espacial. Só três segundos no mesmo
+          lado tornam uma borda insistente em localização.
 
-        A porta do meio substitui a regra antiga de deixar todo aviso
-        "cuidado" passar direto. Aquela deixava sem freio nenhum
-        justamente as frases mais ouvidas, e eram elas as que mais
-        erravam. Só a subida de urgência é notícia; ficar perto e
-        oscilar entre dois cantos vizinhos não é, e agora espera.
+        O detalhe de "firme" vale também para a primeira leitura e para a
+        subida de urgência. Esses dois atalhos antes furavam a defesa da
+        borda e eram justamente a origem de avisos falsos que soavam
+        confiantes.
         """
         lugar = (aviso.zone_key, aviso.zone_side)
         nivel = URGENCY_RANK.get(aviso.urgency, 1)
@@ -793,15 +888,36 @@ class JungleWatcher:
             self._zone_seen = lugar
             self._zone_streak = 1
 
+        if self._max_precision:
+            # Nem a primeira leitura nem um novo "Cuidado" fura a prova.
+            # O detector já confirmou o retrato; estas cinco leituras firmes
+            # confirmam também o NOME da região. Uma divisa persistente fica
+            # muda de propósito, pois escolher um lado seria adivinhar.
+            if not aviso.firm or self._zone_streak < self._precision.steady_frames:
+                return False
+            self._hold(lugar, nivel)
+            return True
+
         if self._zone_hold is None or lugar == self._zone_hold:
-            self._hold(lugar, nivel)
-            return True
-        if nivel > self._zone_level:
-            self._hold(lugar, nivel)
-            return True
-        if self._zone_streak < STEADY_FRAMES:
+            if aviso.firm:
+                self._hold(lugar, nivel)
+                return True
+            if (
+                self._precision.stubborn_frames is not None
+                and self._zone_streak >= self._precision.stubborn_frames
+            ):
+                self._hold(lugar, nivel)
+                return True
             return False
-        if aviso.firm or self._zone_streak >= STUBBORN_FRAMES:
+        if nivel > self._zone_level and aviso.firm:
+            self._hold(lugar, nivel)
+            return True
+        if self._zone_streak < self._precision.steady_frames:
+            return False
+        if aviso.firm or (
+            self._precision.stubborn_frames is not None
+            and self._zone_streak >= self._precision.stubborn_frames
+        ):
             self._hold(lugar, nivel)
             return True
         return False

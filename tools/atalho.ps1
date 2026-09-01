@@ -10,11 +10,27 @@
 # assinado, então o mesmo código roda sem esbarrar na política.
 #
 # O `pythonw` (e não `python`) é o que abre sem janela de console.
+param(
+    # O instalador envia o executável exato no qual instalou as bibliotecas.
+    # Isso impede que o atalho escolha outro Python em uma máquina com mais
+    # de uma versão instalada.
+    [string]$PythonExe
+)
+
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $PSScriptRoot
-$pythonw = & py -c "import sys, pathlib; print(pathlib.Path(sys.executable).with_name('pythonw.exe'))"
-if (-not (Test-Path $pythonw)) { throw "pythonw.exe nao encontrado em $pythonw" }
+if ([string]::IsNullOrWhiteSpace($PythonExe)) {
+    # Uso manual do script: mantém o mesmo seletor do instalador, em vez do
+    # `py` sem versão, que pode apontar para outro runtime.
+    $PythonExe = & py -3 -c "import sys; print(sys.executable)"
+}
+$python = (($PythonExe | Select-Object -Last 1).ToString()).Trim()
+if (-not $python -or -not (Test-Path -LiteralPath $python)) {
+    throw "python.exe nao encontrado em $python"
+}
+$pythonw = Join-Path (Split-Path -Parent $python) "pythonw.exe"
+if (-not (Test-Path -LiteralPath $pythonw)) { throw "pythonw.exe nao encontrado em $pythonw" }
 
 $icone = Join-Path $repo "lolqueue\assets\icon.ico"
 $destino = Join-Path ([Environment]::GetFolderPath("Desktop")) "LoL Queue.lnk"

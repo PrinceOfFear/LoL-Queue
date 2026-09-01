@@ -16,6 +16,7 @@ from lolqueue.core.summoner_history import (
     RankEntry,
     SummonerHistorySource,
     TeamDetail,
+    with_local_rank_entries,
     relative_time,
 )
 
@@ -107,6 +108,47 @@ def test_without_identity_no_request_is_made():
 
     assert source.fetch_profile("", "BR1", "BR") is None
     assert send.calls == []
+
+
+def test_the_local_client_rank_replaces_a_stale_public_lp_value():
+    public = Profile(
+        game_name="Jogador",
+        tag_line="BR1",
+        level=1098,
+        ranks=(
+            RankEntry("SOLORANKED", "GOLD", 2, 0, 4, 5),
+            RankEntry("ARENA", None, None, None, 0, 0),
+        ),
+    )
+    current = {
+        "queues": [
+            {
+                "queueType": "RANKED_SOLO_5x5",
+                "tier": "GOLD",
+                "division": "II",
+                "leaguePoints": 48,
+                "wins": 75,
+                "losses": 79,
+            },
+            {
+                "queueType": "RANKED_FLEX_SR",
+                "tier": "GOLD",
+                "division": "II",
+                "leaguePoints": 86,
+                "wins": 205,
+                "losses": 195,
+            },
+            {"queueType": "RANKED_TFT", "leaguePoints": 0},
+        ]
+    }
+
+    merged = with_local_rank_entries(public, current)
+
+    assert merged.ranks == (
+        RankEntry("SOLORANKED", "GOLD", 2, 48, 75, 79),
+        RankEntry("ARENA", None, None, None, 0, 0),
+        RankEntry("FLEXRANKED", "GOLD", 2, 86, 205, 195),
+    )
 
 
 # --- partidas -----------------------------------------------------------
@@ -235,6 +277,16 @@ def test_the_limit_is_forwarded_to_the_request():
     tool, arguments = send.calls[0]
     assert tool == "lol_list_summoner_matches"
     assert arguments["limit"] == 10
+
+
+def test_the_default_history_window_uses_the_maximum_supported_by_the_source():
+    send = FakeSend(matches_answer=MATCHES)
+    source = SummonerHistorySource(send=send)
+
+    source.fetch_matches("Jogador", "BR1", "BR")
+
+    _, arguments = send.calls[0]
+    assert arguments["limit"] == 20
 
 
 # --- placar completo -----------------------------------------------------

@@ -73,3 +73,21 @@ def test_disconnecting_reports_a_change_and_slows_down():
     state.set_connected(True)
     assert state.set_connected(False) is True
     assert state.interval == RECONNECT_INTERVAL
+
+
+def test_discarding_a_connection_closes_its_engine_resources():
+    class EngineWithClose:
+        def __init__(self):
+            self.closed = 0
+
+        def close(self):
+            self.closed += 1
+
+    engine = EngineWithClose()
+    watcher = PhaseWatcher(lambda _client: engine)
+    watcher._engine = engine
+
+    watcher._close_engine()
+
+    assert engine.closed == 1
+    assert watcher.engine is None

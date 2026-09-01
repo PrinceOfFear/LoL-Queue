@@ -78,13 +78,18 @@ class PhaseWatcher(QThread):
     #: devolveu — a parte que não se aplica no cliente, só se lê.
     #: `object` porque a build pode vir `None`, quando a consulta
     #: externa falhou ou o modo não tem dados.
-    analysis_changed = Signal(object, object, object)
+    # A quarta informação é o estado da consulta: não basta saber que a
+    # build veio ``None`` quando a tela precisa explicar se falta rota,
+    # se o OP.GG demorou ou se simplesmente não havia dados.
+    analysis_changed = Signal(object, object, object, str)
     #: Quem entrou na conta, quando muda. `object` porque viaja um
     #: `Identity`, e porque a primeira leitura pode nunca vir.
     identity_changed = Signal(object)
     #: O arquivo de contas mudou fora da janela — hoje, quando as
     #: configurações do jogo são guardadas. Só um toque para redesenhar.
     accounts_changed = Signal()
+    #: O cliente confirmou o PDL de uma ranqueada. Viaja um `LpChange`.
+    lp_change_captured = Signal(object)
 
     def __init__(self, engine_factory: Callable[[LcuClient], object]) -> None:
         super().__init__()
@@ -104,6 +109,14 @@ class PhaseWatcher(QThread):
     def stop(self) -> None:
         self._running = False
         self._wake.set()
+
+    def _close_engine(self) -> None:
+        """Fecha recursos vinculados \u00e0 conex\u00e3o LCU que acabou de cair."""
+
+        engine, self._engine = self._engine, None
+        close = getattr(engine, "close", None)
+        if callable(close):
+            close()
 
     def run(self) -> None:
         state = ConnectionState()
@@ -130,14 +143,14 @@ class PhaseWatcher(QThread):
                     # pro próximo ciclo, sem matar a thread inteira (senão
                     # só fechar e reabrir o app reconecta).
                     client = None
-                    self._engine = None
+                    self._close_engine()
                     if state.set_connected(False):
                         self.connection_changed.emit(False)
                     self._wake.wait(state.interval)
                     continue
                 except LcuError as exc:
                     client = None
-                    self._engine = None
+                    self._close_engine()
                     self.message.emit(str(exc))
                     if state.set_connected(False):
                         self.connection_changed.emit(False)
@@ -159,7 +172,7 @@ class PhaseWatcher(QThread):
                     self._engine.tick()
             except ClientClosed:
                 client = None
-                self._engine = None
+                self._close_engine()
                 if state.set_connected(False):
                     self.connection_changed.emit(False)
                     self.message.emit("Cliente do LoL fechado.")
@@ -171,6 +184,8 @@ class PhaseWatcher(QThread):
                 self._check_identity(client)
 
             self._wake.wait(state.interval)
+
+        self._close_engine()
 
     def _check_identity(self, client: LcuClient) -> None:
         """Anuncia a conta logada, e só quando ela muda.

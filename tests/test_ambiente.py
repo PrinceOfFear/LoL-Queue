@@ -18,6 +18,12 @@ def test_the_requirements_come_from_the_declaration():
     assert "edge-tts" in ambiente.requisitos()
 
 
+def test_the_installer_keeps_declared_version_constraints():
+    """O Python alternativo não pode aceitar uma versão velha por acaso."""
+    assert "PySide6>=6.10" in ambiente.pacotes_instalacao()
+    assert "websockets>=16.0" in ambiente.pacotes_instalacao()
+
+
 def test_the_version_specifier_is_not_part_of_the_name():
     for nome in ambiente.requisitos():
         assert ">" not in nome
@@ -37,6 +43,7 @@ def test_the_pip_name_is_translated_to_the_import_name():
 def test_a_missing_pyproject_charges_nothing(monkeypatch):
     """No executável compilado o arquivo não viaja junto."""
     monkeypatch.setattr(ambiente, "PYPROJECT", Path("nao-existe.toml"))
+    assert ambiente.pacotes_instalacao() == ()
     assert ambiente.requisitos() == ()
     assert ambiente.faltando() == []
 
@@ -45,6 +52,7 @@ def test_a_broken_pyproject_charges_nothing(tmp_path, monkeypatch):
     quebrado = tmp_path / "pyproject.toml"
     quebrado.write_text("[project\nisto nao e toml", encoding="utf-8")
     monkeypatch.setattr(ambiente, "PYPROJECT", quebrado)
+    assert ambiente.pacotes_instalacao() == ()
     assert ambiente.requisitos() == ()
 
 
