@@ -6,8 +6,8 @@ esteja hospedado no repositorio correto.
 
 Exemplo:
     py -3 tools/gerar_manifesto_atualizacao.py \
-      --standalone "Distribuicao/LoL Queue-0.1.2-win64.zip" \
-      --python "Distribuicao/LoL Queue-0.1.2-instalacao-python.zip" \
+      --standalone "Distribuicao/LoL-Queue-0.1.2-win64.zip" \
+      --python "Distribuicao/LoL-Queue-0.1.2-instalacao-python.zip" \
       --chave-privada chaves-atualizacao/release.chave-privada
 """
 
