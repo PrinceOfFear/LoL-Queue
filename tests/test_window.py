@@ -19,7 +19,7 @@ from PySide6.QtCore import QPoint, QRect, QSize, Qt  # noqa: E402
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lolqueue import config as config_module  # noqa: E402
-from lolqueue.config import JUNGLE_VOICES, Config  # noqa: E402
+from lolqueue.config import Config  # noqa: E402
 from lolqueue.core.lp_history import LpChange, LpImportResult  # noqa: E402
 from lolqueue.ui.pages.analysis import AnalysisPage  # noqa: E402
 from lolqueue.ui.pages.champions import ChampionsPage  # noqa: E402
@@ -625,8 +625,6 @@ def test_refresh_history_shows_a_loading_state_before_asking_for_data(
     window._refresh_history()
 
     assert marcado == [True]
-
-
 def test_open_game_detail_shows_a_loading_state_before_asking_for_data(
     window, monkeypatch
 ):
@@ -639,60 +637,3 @@ def test_open_game_detail_shows_a_loading_state_before_asking_for_data(
     window._open_game_detail("partida-falsa")
 
     assert marcado == [True]
-
-
-# --- aviso do jungler inimigo --------------------------------------------
-
-
-def settings_page(window):
-    """A página de Ajustes como a janela a monta, não uma cópia solta."""
-    for index in range(window._pages.count()):
-        pagina = window._pages.widget(index).widget()
-        if isinstance(pagina, SettingsPage):
-            return pagina
-    raise AssertionError("a página de Ajustes sumiu da pilha")
-
-
-def test_the_jungle_callout_has_a_switch_on_the_settings_page(window):
-    assert len(boxes(window, "jungle_callouts")) == 1
-    assert boxes(window, "jungle_callouts")[0].isChecked() is True
-
-
-def test_turning_the_jungle_callout_off_is_saved(window, tmp_path):
-    boxes(window, "jungle_callouts")[0].setChecked(False)
-
-    assert Config.load(tmp_path / "config.json").jungle_callouts is False
-
-
-def test_maximum_jungle_precision_has_a_switch_on_the_settings_page(window):
-    precision = boxes(window, "jungle_max_precision")
-
-    assert len(precision) == 1
-    assert precision[0].objectName() == "jungleMaxPrecision"
-    assert precision[0].isChecked() is True
-
-
-def test_turning_off_maximum_jungle_precision_is_saved(window, tmp_path):
-    boxes(window, "jungle_max_precision")[0].setChecked(False)
-
-    assert Config.load(tmp_path / "config.json").jungle_max_precision is False
-
-
-def test_the_voice_selector_offers_every_voice(window):
-    seletor = settings_page(window)._voice
-
-    escolhas = [seletor.itemData(i) for i in range(seletor.count())]
-
-    assert escolhas == list(JUNGLE_VOICES)
-    assert seletor.currentData() == window._config.jungle_voice
-
-
-def test_choosing_another_voice_is_saved(window, tmp_path):
-    seletor = settings_page(window)._voice
-
-    seletor.setCurrentIndex(seletor.findData("pt-BR-FranciscaNeural"))
-
-    assert window._config.jungle_voice == "pt-BR-FranciscaNeural"
-    assert Config.load(tmp_path / "config.json").jungle_voice == (
-        "pt-BR-FranciscaNeural"
-    )

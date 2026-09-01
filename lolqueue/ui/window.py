@@ -42,7 +42,6 @@ from ..core.phases import GameflowPhase
 from ..core.queues import unavailable_queues
 from ..core.summoner_history import SummonerHistorySource
 from ..core.watcher import PhaseWatcher
-from ..vision.session import JungleSession
 from .binding import ConfigBinder
 from .fonts import install_application_fonts
 from .game_detail_loader import GameDetailLoader
@@ -153,10 +152,6 @@ class MainWindow(QWidget):
         # deixa um bilhete nele, que o tick seguinte executa.
         self._loadout: Loadout | None = None
         self._antitoxic: MuteGuard | None = None
-        # A vigilância do minimapa. Guardada aqui pelo mesmo motivo do
-        # guarda acima: fechar o app no meio da partida escaparia do
-        # motor e deixaria uma thread capturando tela.
-        self._jungle: JungleSession | None = None
         # Quem copia as configurações de dentro do jogo. Nasce com a
         # conexão, na thread da vigia; até lá os botões avisam que o
         # cliente do LoL precisa estar aberto.
@@ -653,11 +648,6 @@ class MainWindow(QWidget):
         # mudo sem saber por quê.
         self._antitoxic = antitoxic
         engine.set_antitoxic(antitoxic)
-        # O aviso do jungler. O motor liga quando a partida aparece na
-        # tela e desliga quando ela sai, por qualquer porta.
-        jungle = JungleSession(self._config, log=self._watcher.message.emit)
-        self._jungle = jungle
-        engine.set_jungle_watch(jungle)
         # A cópia das configurações de dentro do jogo. Nasce aqui porque
         # é aqui que existe o cliente da LCU; a janela só deixa bilhetes
         # nela, e quem os executa é a thread da vigia.
@@ -1415,10 +1405,6 @@ class MainWindow(QWidget):
             # Antes de parar o watcher: o cliente da LCU é dele, e
             # depois do stop não há mais por onde escrever.
             self._antitoxic.restore()
-        if self._jungle is not None:
-            # Antes do watcher também: são threads próprias, e o Qt
-            # não espera por elas na saída.
-            self._jungle.stop()
         self._watcher.stop()
         self._watcher.wait(3000)
         if self._icon_loader is not None:

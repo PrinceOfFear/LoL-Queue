@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 from ...config import (
     ACCEPT_DELAY_CEILING,
     FLASH_KEYS,
-    JUNGLE_VOICE_LABELS,
     OPGG_TIERS,
     PICK_INTENT_CEILING,
 )
@@ -212,70 +211,6 @@ class SettingsPage(QWidget):
         note.setWordWrap(True)
         loadout_layout.addWidget(note)
         layout.addWidget(loadout)
-
-        assistance = QFrame()
-        assistance.setObjectName("settingsCard")
-        assistance_layout = QVBoxLayout(assistance)
-        assistance_layout.setContentsMargins(24, 20, 24, 20)
-        assistance_layout.setSpacing(8)
-        assistance_title = QLabel("ASSISTÊNCIA DURANTE A PARTIDA")
-        assistance_title.setObjectName("sectionTitle")
-        assistance_layout.addWidget(assistance_title)
-
-        jungle_row = QHBoxLayout()
-        jungle_row.addWidget(
-            binder.checkbox(
-                "Avisar o jungler inimigo por voz",
-                "jungle_callouts",
-            )
-        )
-        self._voice = binder.combo(
-            "jungle_voice",
-            [(label, voice) for voice, label in JUNGLE_VOICE_LABELS.items()],
-            "voiceSelector",
-        )
-        jungle_row.addWidget(self._voice)
-        jungle_row.addStretch(1)
-        assistance_layout.addLayout(jungle_row)
-
-        jungle_note = QLabel(
-            "O minimapa é acompanhado durante a partida e a voz informa onde "
-            "o jungler inimigo apareceu, sem tirar seus olhos da rota."
-        )
-        jungle_note.setObjectName("hint")
-        jungle_note.setWordWrap(True)
-        assistance_layout.addWidget(jungle_note)
-
-        assistance_layout.addWidget(
-            binder.checkbox(
-                "Precisão máxima — só avisa com confirmação reforçada",
-                "jungle_max_precision",
-                "jungleMaxPrecision",
-            )
-        )
-        precision_note = QLabel(
-            "Prioriza não falar a adivinhar: confirma imagem, movimento e "
-            "zona antes do aviso. Pode ignorar aparições rápidas ou sob "
-            "névoa; a escolha vale na próxima partida."
-        )
-        precision_note.setObjectName("hint")
-        precision_note.setWordWrap(True)
-        assistance_layout.addWidget(precision_note)
-
-        assistance_layout.addWidget(
-            binder.checkbox(
-                "Guardar no registro o porquê de cada aviso",
-                "jungle_debug",
-            )
-        )
-        debug_note = QLabel(
-            "Modo técnico: registra coordenada, confiança e zona detectada "
-            "para investigar um aviso incorreto."
-        )
-        debug_note.setObjectName("hint")
-        debug_note.setWordWrap(True)
-        assistance_layout.addWidget(debug_note)
-        layout.addWidget(assistance)
 
         timing_card = QFrame()
         timing_card.setObjectName("settingsCard")

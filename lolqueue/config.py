@@ -5,13 +5,6 @@ import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-# A lista de vozes mora com quem sintetiza; a config só guarda a
-# escolha. Importar de lá evita duas listas que saem de sincronia na
-# primeira voz nova.
-from .vision.voice import DEFAULT_VOICE as DEFAULT_JUNGLE_VOICE
-from .vision.voice import VOICE_LABELS as JUNGLE_VOICE_LABELS
-from .vision.voice import VOICES as JUNGLE_VOICES
-
 QUEUES: dict[int, str] = {
     400: "Normal Draft",
     420: "Ranqueada Solo/Duo",
@@ -199,21 +192,6 @@ class Config:
     # os emotes dos inimigos. Reversível: o que havia antes volta assim
     # que a partida termina.
     mute_before_game: bool = True
-    # Vigia o minimapa durante a partida e fala em voz alta quando o
-    # jungler inimigo aparece. Nasce ligado porque é o aviso que o
-    # jogador não consegue se dar sozinho: quem está olhando a rota
-    # não está olhando o canto da tela.
-    jungle_callouts: bool = True
-    # Quando houver dúvida visual ou espacial, não fala. Este é o
-    # padrão porque uma localização inventada é pior que um aviso um pouco
-    # mais tarde; quem preferir mais cobertura pode desmarcar na tela.
-    jungle_max_precision: bool = True
-    jungle_voice: str = DEFAULT_JUNGLE_VOICE
-    # Guarda, ao lado de cada aviso falado, onde o retrato foi achado e
-    # com quanta folga. Serve para julgar um aviso suspeito depois da
-    # partida: coordenada certa com nome de lugar errado é o mapa de
-    # zonas; coordenada saltando pelo mapa é detecção falsa.
-    jungle_debug: bool = False
     queue_id: int = 420
     # Rotas pedidas na fila. Vazio quer dizer "não mexe": o app deixa o
     # que o jogador já escolheu no cliente, que é o certo para quem
@@ -262,10 +240,6 @@ class Config:
         self.primary_position, self.secondary_position = self._clean_preferences()
         if self.flash_key not in FLASH_KEYS:
             self.flash_key = DEFAULT_FLASH_KEY
-        if self.jungle_voice not in JUNGLE_VOICES:
-            # Mesma regra do elo: voz que o sintetizador não conhece
-            # deixaria o aviso mudo justamente na hora do gank.
-            self.jungle_voice = DEFAULT_JUNGLE_VOICE
         self.lock_delay_min, self.lock_delay_max = self._clean_delay(
             self.lock_delay_min, self.lock_delay_max
         )

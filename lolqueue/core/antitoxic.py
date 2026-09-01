@@ -65,12 +65,12 @@ def _disk_flag(name: str, default: bool) -> bool:
     A leitura do cliente não devolve a seção `Chat` — aceita escrever
     nela, mas não a mostra. O arquivo em disco mostra, e é a única forma
     de saber o que o jogador tinha antes de mexermos. O import é tardio
-    de propósito: `core` não carrega `vision` para ler uma linha de
-    texto, e se o arquivo não estiver onde se espera, o padrão do jogo
+    de propósito: a descoberta do arquivo só é necessária quando esta
+    proteção responde; se ele não estiver onde se espera, o padrão do jogo
     responde.
     """
     try:
-        from ..vision.gamecfg import read_flag
+        from .gamecfg import read_flag
     except Exception:  # pragma: no cover - depende da instalação do jogo
         return default
     return read_flag(name, default=default)

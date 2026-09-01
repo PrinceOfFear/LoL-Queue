@@ -945,69 +945,6 @@ def test_there_is_no_recovery_notice_for_a_problem_never_announced():
     assert not any("Fila retomada" in m for m in messages), messages
 
 
-# ---------------------------------------------------------------------
-# A vigilância do jungler inimigo: liga com a partida, para quando ela
-# acaba, e não depende do motor de fila estar ligado.
-# ---------------------------------------------------------------------
-
-
-class VigiaFalso:
-    def __init__(self):
-        self.starts = 0
-        self.stops = 0
-
-    def start(self) -> bool:
-        self.starts += 1
-        return True
-
-    def stop(self) -> None:
-        self.stops += 1
-
-
-def com_vigia(config=None):
-    vigia = VigiaFalso()
-    engine = Engine(FakeLcuClient(), config or Config(jungle_callouts=True))
-    engine.set_jungle_watch(vigia)
-    return engine, vigia
-
-
-def test_the_match_starts_the_jungle_watch():
-    engine, vigia = com_vigia()
-    engine.handle_phase(GameflowPhase.IN_PROGRESS)
-    assert vigia.starts == 1
-
-
-def test_the_end_of_the_match_stops_the_watch():
-    """Sair da partida por qualquer porta tem de parar a captura de tela."""
-    engine, vigia = com_vigia()
-    engine.handle_phase(GameflowPhase.IN_PROGRESS)
-    engine.handle_phase(GameflowPhase.END_OF_GAME)
-    assert vigia.stops == 1
-
-
-def test_the_watch_does_not_need_the_queue_engine_on():
-    """Quem quer só o aviso não deve ter de ligar a fila automática."""
-    engine, vigia = com_vigia()
-    engine.set_enabled(False)
-    engine.handle_phase(GameflowPhase.IN_PROGRESS)
-    assert vigia.starts == 1
-
-
-def test_the_setting_off_keeps_the_watch_quiet():
-    engine, vigia = com_vigia(Config(jungle_callouts=False))
-    engine.handle_phase(GameflowPhase.IN_PROGRESS)
-    assert (vigia.starts, vigia.stops) == (0, 0)
-
-
-def test_the_lobby_stops_the_watch_even_without_an_end_of_game():
-    """Fechar o jogo pela janela não passa por EndOfGame."""
-    engine, vigia = com_vigia()
-    engine.handle_phase(GameflowPhase.IN_PROGRESS)
-    engine.handle_phase(GameflowPhase.LOBBY)
-    assert vigia.stops == 1
-
-
-
 # ---------- a cópia das configurações do jogo ----------
 
 

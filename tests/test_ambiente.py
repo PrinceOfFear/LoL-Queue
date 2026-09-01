@@ -15,7 +15,7 @@ from lolqueue import ambiente
 
 def test_the_requirements_come_from_the_declaration():
     assert "PySide6" in ambiente.requisitos()
-    assert "edge-tts" in ambiente.requisitos()
+    assert "cryptography" in ambiente.requisitos()
 
 
 def test_the_installer_keeps_declared_version_constraints():
@@ -30,13 +30,8 @@ def test_the_version_specifier_is_not_part_of_the_name():
         assert "=" not in nome
 
 
-def test_the_voice_is_declared_because_a_silent_machine_costs_a_game():
-    """Ficou de fora uma vez e o app abriu normalmente, e mudo."""
-    assert "edge-tts" in ambiente.requisitos()
-
-
 def test_the_pip_name_is_translated_to_the_import_name():
-    assert ambiente.modulo("edge-tts") == "edge_tts"
+    assert ambiente.modulo("some-package") == "some_package"
     assert ambiente.modulo("PySide6") == "PySide6"
 
 
@@ -70,8 +65,8 @@ def test_a_dependency_nobody_ever_published_is_reported_missing(tmp_path, monkey
 
 
 def test_the_complaint_names_what_is_missing_and_how_to_fix_it():
-    texto = ambiente.queixa(["edge-tts"])
-    assert "edge-tts" in texto
+    texto = ambiente.queixa(["some-package"])
+    assert "some-package" in texto
     assert "instalar.ps1" in texto
 
 

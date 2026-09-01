@@ -80,8 +80,8 @@ $pythonHashPath = $pythonZipPath + ".sha256"
 # pasta permanece portátil. O modo standalone é deliberado: onefile extrai DLL
 # temporária e é ainda mais incompatível com o Smart App Control do Windows.
 #
-# edge_tts e keyboard são imports tardios. websockets sustenta a captura de PDL
-# em tempo real. Incluí-los explicitamente evita que uma análise estática deixe
+# keyboard é importado sob demanda, e websockets sustenta a captura de PDL em
+# tempo real. Incluí-los explicitamente evita que uma análise estática deixe
 # recursos importantes de fora do .exe distribuído.
 # O compilador Zig usado pelo Nuitka pode herdar AVX2 da máquina que está
 # compilando. Isso faz um .exe fechar com 0xC000001D em CPUs x64 mais antigas
@@ -110,7 +110,6 @@ try {
         --windows-console-mode=disable `
         --windows-icon-from-ico=lolqueue/assets/icon.ico `
         --include-data-dir=lolqueue/assets=lolqueue/assets `
-        --include-package=edge_tts `
         --include-package=keyboard `
         --include-package=websockets `
         --include-package=cryptography `

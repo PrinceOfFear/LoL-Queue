@@ -9,7 +9,7 @@ from ..config import UNSELECTED, Config, preference_name, queue_name
 from ..lcu import endpoints
 from ..lcu.client import ClientClosed, LcuError
 from .delay import Rng, sample
-from .phases import END_PHASES, PLAYING_PHASES, GameflowPhase
+from .phases import END_PHASES, GameflowPhase
 
 MAX_FAILURES = 3
 
@@ -60,11 +60,6 @@ class MuteController(Protocol):
     def restore(self) -> bool: ...
 
 
-class JungleWatch(Protocol):
-    def start(self) -> bool: ...
-    def stop(self) -> None: ...
-
-
 class ChampSelectController(Protocol):
     def reset(self) -> None: ...
     def tick(self) -> None: ...
@@ -105,7 +100,6 @@ class Engine:
         self._phase = GameflowPhase.UNKNOWN
         self._champ_select: ChampSelectController | None = None
         self._antitoxic: MuteController | None = None
-        self._jungle: JungleWatch | None = None
         self._game_sync = None
         self._lp_tracker = None
         self._pending: Callable[[], None] | None = None
@@ -164,9 +158,6 @@ class Engine:
     def set_antitoxic(self, guard: MuteController | None) -> None:
         self._antitoxic = guard
 
-    def set_jungle_watch(self, watch: JungleWatch | None) -> None:
-        self._jungle = watch
-
     def set_game_sync(self, sync) -> None:
         """Quem copia as configurações do jogo entre contas.
 
@@ -215,20 +206,6 @@ class Engine:
             # acabou, e o que era do jogador volta a ser dele.
             self._antitoxic.restore()
 
-        if self._jungle is not None:
-            # Fora da trava do motor de propósito: quem quer só o aviso
-            # do jungler não deveria ser obrigado a deixar a fila
-            # automática ligada para tê-lo. Só a partida na tela e a
-            # opção marcada decidem.
-            if phase in PLAYING_PHASES:
-                if getattr(self._config, "jungle_callouts", False):
-                    self._jungle.start()
-            else:
-                # Inclui sair da partida por qualquer porta: fim normal,
-                # queda de conexão ou volta ao lobby. Nenhuma delas pode
-                # deixar o app capturando tela.
-                self._jungle.stop()
-
         if phase is GameflowPhase.CHAMP_SELECT and self._champ_select is not None:
             # Também com o motor desligado: o controlador é reaproveitado
             # entre seleções da mesma conexão, então sem isto religar a
@@ -250,8 +227,8 @@ class Engine:
     def tick(self) -> None:
         """Chamado a cada ciclo de polling, para trabalho contínuo."""
         if self._game_sync is not None:
-            # Antes da trava do motor, como o aviso do jungler: copiar
-            # as configurações do jogo não é fila automática, e exigir
+            # Antes da trava do motor: copiar as configurações do jogo
+            # não é fila automática, e exigir
             # o motor ligado para isso não faria sentido para quem só
             # quer entrar na conta de outro e achar as teclas no lugar.
             self._game_sync.tick()

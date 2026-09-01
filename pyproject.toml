@@ -1,6 +1,6 @@
 [project]
 name = "lolqueue"
-version = "0.1.4"
+version = "0.2.0"
 description = "Automação de fila do League of Legends via LCU API"
 requires-python = ">=3.13"
 dependencies = [
@@ -12,15 +12,6 @@ dependencies = [
     "websockets>=16.0",
     "psutil>=6.0",
     "keyboard>=0.13.5",
-    # A leitura do minimapa faz correlação pixel a pixel; em Python puro
-    # não fecha dentro de um quadro.
-    "numpy>=2.0",
-    # A voz do aviso do jungler. Não é opcional: sem ela o app abre
-    # normalmente e fica mudo a partida inteira, que é o modo de falha
-    # mais caro que existe aqui — parece funcionar e não funciona.
-    # Ficou de fora desta lista por um tempo, e a máquina que instalou
-    # só o que estava declarado nunca falou uma palavra.
-    "edge-tts>=7.0",
     # Assinatura Ed25519 da licenca. Precisa ser assinatura, e nao um
     # segredo compartilhado: o app confere a licenca sozinho quando esta
     # sem internet, e com HMAC o segredo teria que viajar dentro do

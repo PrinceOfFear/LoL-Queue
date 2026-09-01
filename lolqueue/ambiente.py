@@ -8,9 +8,8 @@ exatamente assim que o app "não funcionou" no outro PC. Perguntar antes
 é o que transforma esse nada em uma frase.
 
 A lista de requisitos sai do `pyproject.toml`, não daqui. Duas listas
-viram uma lista desatualizada, e isso já custou caro uma vez: a máquina
-que instalou só o que estava declarado ficou muda a partida inteira
-porque o `edge-tts` não estava na declaração.
+viram uma lista desatualizada, então há uma única fonte de verdade para
+o instalador Python e para esta conferência.
 """
 
 from __future__ import annotations
@@ -73,11 +72,11 @@ def requisitos() -> tuple[str, ...]:
 def modulo(distribuicao: str) -> str:
     """O nome que o `import` usa, a partir do nome que o `pip` usa.
 
-    São coisas diferentes — `edge-tts` se importa como `edge_tts` — e o
-    mapa oficial (`packages_distributions`) só conhece o que já está
+    São coisas diferentes — um pacote com hífen usa sublinhado no import —
+    e o mapa oficial (`packages_distributions`) só conhece o que já está
     instalado, ou seja, justamente o que não interessa aqui. A troca do
-    hífen por sublinhado é a regra que acerta as seis dependências
-    declaradas hoje; uma que fuja disso precisa de uma linha aqui.
+    hífen por sublinhado cobre as dependências declaradas; uma que fuja
+    disso precisa de uma linha aqui.
     """
     return distribuicao.replace("-", "_")
 

@@ -18,8 +18,8 @@ Duas coisas ficam de fora de propósito:
 *   O bloco `Performance` e o modo de vídeo (`WindowMode`,
     `WaitForVerticalSync`). São do computador, não do jogador: copiar a
     qualidade gráfica de uma máquina boa para uma fraca estraga o jogo,
-    e reescrever o modo de vídeo seria o app brigando com a própria
-    captura do minimapa, que é quem lê essa opção.
+    e reescrever o modo de vídeo pode deixar a instalação desconfortável
+    em outro hardware.
 *   O momento. A troca de conta não é instantânea no cliente: ele ainda
     está baixando os ajustes da conta nova quando anuncia quem entrou.
     Escrever nesse intervalo seria escrever por cima de algo que vai ser

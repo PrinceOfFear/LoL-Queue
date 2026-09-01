@@ -4,9 +4,7 @@ import pytest
 
 from lolqueue.config import (
     ACCEPT_DELAY_CEILING,
-    DEFAULT_JUNGLE_VOICE,
     DEFAULT_OPGG_TIER,
-    JUNGLE_VOICES,
     OPGG_TIERS,
     POSITIONS,
     QUEUES,
@@ -90,52 +88,6 @@ def test_an_unknown_elo_falls_back_to_the_default():
     assert Config(opgg_tier="lendario_supremo").opgg_tier == DEFAULT_OPGG_TIER
 
 
-# ---------- o aviso do jungler inimigo ----------
-
-
-def test_jungle_callouts_start_on():
-    """É o aviso que o jogador não consegue se dar sozinho: quem olha a
-    rota não olha o canto da tela. Nasce ligado, com a voz padrão e sem
-    escolher uma localização quando a prova ainda é insuficiente.
-    """
-    config = Config()
-    assert config.jungle_callouts is True
-    assert config.jungle_max_precision is True
-    assert config.jungle_voice == DEFAULT_JUNGLE_VOICE
-
-
-def test_a_chosen_voice_is_kept():
-    assert Config(jungle_voice="pt-BR-FranciscaNeural").jungle_voice == (
-        "pt-BR-FranciscaNeural"
-    )
-
-
-def test_an_unknown_voice_falls_back_to_the_default():
-    """Voz que o sintetizador não conhece deixaria o aviso mudo bem na
-    hora do gank, e sem nenhum sinal de que foi a config que errou.
-    """
-    assert Config(jungle_voice="pt-BR-Inexistente").jungle_voice == (
-        DEFAULT_JUNGLE_VOICE
-    )
-
-
-def test_every_voice_option_round_trips_through_disk(tmp_path):
-    path = tmp_path / "config.json"
-    for voice in JUNGLE_VOICES:
-        config = Config(jungle_callouts=False, jungle_voice=voice)
-        config.save(path)
-        loaded = Config.load(path)
-        assert loaded.jungle_voice == voice
-        assert loaded.jungle_callouts is False
-
-
-def test_jungle_max_precision_round_trips_through_disk(tmp_path):
-    path = tmp_path / "config.json"
-    for enabled in (True, False):
-        Config(jungle_max_precision=enabled).save(path)
-        assert Config.load(path).jungle_max_precision is enabled
-
-
 def test_every_elo_option_round_trips_through_disk(tmp_path):
     path = tmp_path / "config.json"
     for tier in OPGG_TIERS:
@@ -149,6 +101,21 @@ def test_round_trips_through_disk(tmp_path):
     original = Config(auto_queue=True, pick_priority=[64, 11], queue_id=440)
     original.save(path)
     assert Config.load(path) == original
+
+
+def test_removed_jungle_alert_settings_are_ignored_from_old_configs(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"auto_queue": true, "jungle_callouts": true, "jungle_voice": "old"}',
+        encoding="utf-8",
+    )
+
+    loaded = Config.load(path)
+
+    assert loaded.auto_queue is True
+    assert not hasattr(loaded, "jungle_callouts")
+    loaded.save(path)
+    assert "jungle_callouts" not in path.read_text(encoding="utf-8")
 
 
 def test_missing_file_yields_defaults(tmp_path):

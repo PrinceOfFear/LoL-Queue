@@ -118,8 +118,8 @@ def test_applying_writes_the_two_halves():
 def test_an_old_snapshot_never_rewrites_the_video_mode():
     """Fotografia de uma versão anterior não pode mexer na tela.
 
-    O modo de vídeo é o que a captura do minimapa lê; reescrevê-lo por
-    baixo do jogador seria o app brigando com o próprio aviso.
+    O modo de vídeo é uma preferência da máquina; reescrevê-lo por baixo
+    do jogador pode deixar a instalação desconfortável.
     """
     cliente = ClienteFalso()
     apply(cliente, {"game": {"General": {"WindowMode": 0, "CursorScale": 1}}})

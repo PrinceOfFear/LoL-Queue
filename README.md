@@ -54,9 +54,8 @@ abrir e, quando falta algo, põe uma caixa do Windows na tela dizendo o
 nome do que falta e o comando acima.
 
 O que o app procura sozinho na máquina nova: a instalação do League
-(pelo processo em execução, depois nos lugares prováveis, depois
-varrendo os discos) e o `game.cfg`, para saber se o minimapa está
-girado. Nada disso está preso a `C:`.
+(pelo processo em execução, depois nos lugares prováveis e por fim
+varrendo os discos). Nada disso está preso a `C:`.
 
 ### E o executável?
 
@@ -184,8 +183,7 @@ assinatura (o app abria e morria com "Imagem Incorreta", status
   após o login — o cliente ainda está baixando os ajustes da conta
   nova quando anuncia quem entrou, então a cópia espera e é refeita
   uma segunda vez. Qualidade gráfica e modo de vídeo ficam de fora de
-  propósito: são do computador, e o modo de vídeo é justamente o que a
-  captura do minimapa lê.
+  propósito: são do computador.
 - **Marca fila desligada**: a Riot liga e desliga fila por região e
   temporada, e a lista mostra quais o cliente não aceita agora.
 

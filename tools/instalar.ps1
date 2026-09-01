@@ -69,9 +69,8 @@ if ([int]$partes[0] -lt 3 -or ([int]$partes[0] -eq 3 -and [int]$partes[1] -lt 13
 Write-Output "Python $versao encontrado."
 
 # 2. As dependências, lidas do pyproject.toml. A lista não se repete
-#    aqui de propósito: duas listas viram uma desatualizada, e foi assim
-#    que o `edge-tts` ficou de fora uma vez e a máquina jogou muda. Os
-#    qualificadores (por exemplo, `PySide6>=6.10`) também viajam inteiros:
+#    aqui de propósito: duas listas viram uma desatualizada. Os qualificadores
+#    (por exemplo, `PySide6>=6.10`) também viajam inteiros:
 #    assim uma instalação antiga é atualizada quando não atende ao mínimo.
 $pacotes = & $python -c "from lolqueue.ambiente import pacotes_instalacao; print('\n'.join(pacotes_instalacao()))"
 $pacotes = @($pacotes -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
