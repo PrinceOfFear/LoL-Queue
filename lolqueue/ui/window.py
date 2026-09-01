@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QFrame,
     QHBoxLayout,
     QScrollArea,
@@ -69,6 +71,57 @@ from .widgets.titlebar import TITLEBAR_HEIGHT, TitleBar
 #: tela em vez de simplesmente encolher.
 MINIMUM_WIDTH = 1100
 MINIMUM_HEIGHT = 690
+
+# A tela não pode virar uma borda por acidente: esta folga deixa a janela
+# alcançável para mover ou redimensionar, inclusive quando há barra de tarefas.
+SCREEN_MARGIN = 18
+# A abertura acompanha a área útil do monitor, mas não estica a interface
+# para uma faixa excessivamente larga em monitores ultrawide.
+INITIAL_SCREEN_SHARE = 0.84
+MAX_INITIAL_ASPECT_RATIO = 1.8
+# Janela sem moldura não recebe a área de redimensionamento do Windows.
+# Esta faixa devolve esse gesto sem criar uma borda visual permanente.
+RESIZE_BORDER = 8
+
+
+def _usable_screen_geometry(available: QRect) -> QRect:
+    """A área segura em que uma janela pode abrir inteira.
+
+    `availableGeometry()` já desconta a barra de tarefas. A margem adicional
+    evita uma janela colada na borda, onde ficaria difícil recuperar o gesto
+    de arrastar em uma moldura que é propositalmente invisível.
+    """
+
+    horizontal = min(SCREEN_MARGIN, max(0, (available.width() - 1) // 2))
+    vertical = min(SCREEN_MARGIN, max(0, (available.height() - 1) // 2))
+    return available.adjusted(horizontal, vertical, -horizontal, -vertical)
+
+
+def _minimum_size_for_screen(available: QRect) -> QSize:
+    """Mantém o piso confortável sem criar janela maior que a tela."""
+
+    usable = _usable_screen_geometry(available)
+    return QSize(
+        min(MINIMUM_WIDTH, max(1, usable.width())),
+        min(MINIMUM_HEIGHT, max(1, usable.height())),
+    )
+
+
+def _initial_window_geometry(available: QRect) -> QRect:
+    """Uma abertura proporcional e centrada, que também cabe em telas pequenas."""
+
+    usable = _usable_screen_geometry(available)
+    minimum = _minimum_size_for_screen(available)
+    width = max(minimum.width(), round(usable.width() * INITIAL_SCREEN_SHARE))
+    height = max(minimum.height(), round(usable.height() * INITIAL_SCREEN_SHARE))
+    # Em um ultrawide, usar 84% dos dois lados faria uma faixa horizontal
+    # enorme. Preservar uma proporção próxima à da interface deixa os
+    # painéis com leitura natural, e o usuário continua podendo maximizar.
+    width = min(width, round(height * MAX_INITIAL_ASPECT_RATIO), usable.width())
+    height = min(height, usable.height())
+    x = usable.x() + max(0, (usable.width() - width) // 2)
+    y = usable.y() + max(0, (usable.height() - height) // 2)
+    return QRect(x, y, width, height)
 
 
 class MainWindow(QWidget):
@@ -160,6 +213,11 @@ class MainWindow(QWidget):
         self._phase = GameflowPhase.NONE.value
         self._phase_started = time.monotonic()
         self._drag_offset = None
+        self._resize_edges = Qt.Edge(0)
+        self._resize_origin: QPoint | None = None
+        self._resize_geometry: QRect | None = None
+        self._resize_cursor_active = False
+        self._window_handle = None
         # Estado do motor guardado num atributo simples: `_make_engine` roda
         # na thread do watcher e não pode consultar widgets.
         self._enabled = False
@@ -176,15 +234,17 @@ class MainWindow(QWidget):
         self._active_account = ""
 
         self.setWindowTitle("LoL Queue")
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(
+            Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # O painel de campeões é naturalmente mais largo; abrir na medida
         # certa evita a primeira impressão de uma tela apertada.
-        self.resize(1280, 760)
-        self.setMinimumSize(MINIMUM_WIDTH, MINIMUM_HEIGHT)
+        self._apply_initial_screen_geometry()
         self.setStyleSheet(STYLESHEET)
 
         self._build()
+        self._install_window_interaction()
         self.engine_requested.connect(
             self.set_engine_enabled, Qt.ConnectionType.QueuedConnection
         )
@@ -195,6 +255,245 @@ class MainWindow(QWidget):
         self._clock.start(200)
 
     # ---------- construção ----------
+
+    # ---------- tamanho e moldura da janela ----------
+
+    @staticmethod
+    def _screen_at(point: QPoint | None = None):
+        """A tela do cursor, com uma alternativa segura para a primeira abertura."""
+
+        point = QCursor.pos() if point is None else point
+        screen = QGuiApplication.screenAt(point)
+        if screen is not None:
+            return screen
+        app = QGuiApplication.instance()
+        return app.primaryScreen() if app is not None else None
+
+    @classmethod
+    def _available_geometry(cls, screen=None) -> QRect:
+        if screen is not None:
+            return screen.availableGeometry()
+        # Fallback para testes muito iniciais, antes de existir QApplication.
+        return QRect(0, 0, 1280, 760)
+
+    def _apply_initial_screen_geometry(self) -> None:
+        screen = self._screen_at()
+        available = self._available_geometry(screen)
+        self.setMinimumSize(_minimum_size_for_screen(available))
+        self.setGeometry(_initial_window_geometry(available))
+
+    def _on_screen_changed(self, screen) -> None:
+        """Evita que trocar de monitor deixe a janela fora da área visível."""
+
+        available = self._available_geometry(screen)
+        usable = _usable_screen_geometry(available)
+        self.setMinimumSize(_minimum_size_for_screen(available))
+        if self.isMaximized():
+            return
+
+        geometry = self.geometry()
+        width = min(geometry.width(), usable.width())
+        height = min(geometry.height(), usable.height())
+        x = min(max(geometry.x(), usable.left()), usable.right() - width + 1)
+        y = min(max(geometry.y(), usable.top()), usable.bottom() - height + 1)
+        fitted = QRect(x, y, width, height)
+        if fitted != geometry:
+            self.setGeometry(fitted)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        handle = self.windowHandle()
+        if handle is not None and handle is not self._window_handle:
+            self._window_handle = handle
+            handle.screenChanged.connect(self._on_screen_changed)
+        self._on_screen_changed(self.screen())
+
+    def changeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "_titlebar"):
+            self._titlebar.set_maximized(self.isMaximized())
+            if self.isMaximized():
+                self._clear_window_interaction()
+
+    def toggle_maximize(self) -> None:
+        """Alterna o tamanho sem devolver a moldura nativa do Windows."""
+
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._titlebar.set_maximized(self.isMaximized())
+
+    def _install_window_interaction(self) -> None:
+        """Observa a borda mesmo quando há um painel filho por cima dela."""
+
+        self.installEventFilter(self)
+        for widget in self.findChildren(QWidget):
+            widget.installEventFilter(self)
+
+    def _resize_edges_at(self, position: QPoint):
+        if self.isMaximized():
+            return Qt.Edge(0)
+        edges = Qt.Edge(0)
+        if position.x() < RESIZE_BORDER:
+            edges |= Qt.Edge.LeftEdge
+        elif position.x() >= self.width() - RESIZE_BORDER:
+            edges |= Qt.Edge.RightEdge
+        if position.y() < RESIZE_BORDER:
+            edges |= Qt.Edge.TopEdge
+        elif position.y() >= self.height() - RESIZE_BORDER:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def _resize_cursor(edges):
+        horizontal = bool(edges & (Qt.Edge.LeftEdge | Qt.Edge.RightEdge))
+        vertical = bool(edges & (Qt.Edge.TopEdge | Qt.Edge.BottomEdge))
+        if horizontal and vertical:
+            descending = edges in (
+                Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
+                Qt.Edge.BottomEdge | Qt.Edge.RightEdge,
+            )
+            return (
+                Qt.CursorShape.SizeFDiagCursor
+                if descending
+                else Qt.CursorShape.SizeBDiagCursor
+            )
+        if horizontal:
+            return Qt.CursorShape.SizeHorCursor
+        if vertical:
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
+
+    def _update_resize_cursor(self, edges) -> None:
+        cursor = self._resize_cursor(edges)
+        if cursor == Qt.CursorShape.ArrowCursor:
+            if self._resize_cursor_active:
+                self.unsetCursor()
+                self._resize_cursor_active = False
+            return
+        self.setCursor(cursor)
+        self._resize_cursor_active = True
+
+    def _clear_window_interaction(self) -> None:
+        self._drag_offset = None
+        self._resize_edges = Qt.Edge(0)
+        self._resize_origin = None
+        self._resize_geometry = None
+        self._update_resize_cursor(Qt.Edge(0))
+
+    def _is_titlebar_drag_target(self, watched: QWidget, position: QPoint) -> bool:
+        if position.y() >= TITLEBAR_HEIGHT:
+            return False
+        current = watched
+        while current is not None and current is not self:
+            if isinstance(current, QAbstractButton):
+                return False
+            if current is self._titlebar:
+                return True
+            current = current.parentWidget()
+        return watched is self
+
+    def _start_system_resize(self, edges) -> bool:
+        handle = self.windowHandle()
+        if handle is None:
+            return False
+        try:
+            return bool(handle.startSystemResize(edges))
+        except RuntimeError:
+            return False
+
+    def _start_system_move(self) -> bool:
+        handle = self.windowHandle()
+        if handle is None:
+            return False
+        try:
+            return bool(handle.startSystemMove())
+        except RuntimeError:
+            return False
+
+    def _begin_resize(self, edges, global_position: QPoint) -> None:
+        if self._start_system_resize(edges):
+            return
+        self._resize_edges = edges
+        self._resize_origin = global_position
+        self._resize_geometry = self.geometry()
+
+    def _resize_manually(self, global_position: QPoint) -> None:
+        if self._resize_origin is None or self._resize_geometry is None:
+            return
+        geometry = QRect(self._resize_geometry)
+        delta = global_position - self._resize_origin
+        minimum_width = self.minimumWidth()
+        minimum_height = self.minimumHeight()
+        if self._resize_edges & Qt.Edge.LeftEdge:
+            geometry.setLeft(
+                min(geometry.left() + delta.x(), geometry.right() - minimum_width + 1)
+            )
+        if self._resize_edges & Qt.Edge.RightEdge:
+            geometry.setRight(
+                max(geometry.right() + delta.x(), geometry.left() + minimum_width - 1)
+            )
+        if self._resize_edges & Qt.Edge.TopEdge:
+            geometry.setTop(
+                min(geometry.top() + delta.y(), geometry.bottom() - minimum_height + 1)
+            )
+        if self._resize_edges & Qt.Edge.BottomEdge:
+            geometry.setBottom(
+                max(geometry.bottom() + delta.y(), geometry.top() + minimum_height - 1)
+            )
+        self.setGeometry(geometry)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 (Qt override)
+        if not isinstance(watched, QWidget) or watched.window() is not self:
+            return super().eventFilter(watched, event)
+        event_type = event.type()
+        mouse_events = {
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonRelease,
+        }
+        if event_type not in mouse_events or not hasattr(event, "globalPosition"):
+            return super().eventFilter(watched, event)
+
+        global_position = event.globalPosition().toPoint()
+        position = self.mapFromGlobal(global_position)
+        edges = self._resize_edges_at(position)
+
+        if event_type == QEvent.Type.MouseMove:
+            if self._resize_edges != Qt.Edge(0):
+                self._resize_manually(global_position)
+                return True
+            if self._drag_offset is not None:
+                self.move(global_position - self._drag_offset)
+                return True
+            self._update_resize_cursor(edges)
+            return super().eventFilter(watched, event)
+
+        if event_type == QEvent.Type.MouseButtonRelease:
+            if event.button() == Qt.MouseButton.LeftButton and (
+                self._resize_edges != Qt.Edge(0) or self._drag_offset is not None
+            ):
+                self._clear_window_interaction()
+                return True
+            return super().eventFilter(watched, event)
+
+        if event.button() != Qt.MouseButton.LeftButton:
+            return super().eventFilter(watched, event)
+        if edges != Qt.Edge(0):
+            self._begin_resize(edges, global_position)
+            return True
+        if event_type == QEvent.Type.MouseButtonDblClick:
+            if self._is_titlebar_drag_target(watched, position):
+                self.toggle_maximize()
+                return True
+            return super().eventFilter(watched, event)
+        if self._is_titlebar_drag_target(watched, position):
+            if not self._start_system_move():
+                self._drag_offset = global_position - self.pos()
+            return True
+        return super().eventFilter(watched, event)
 
     def _build(self) -> None:
         outer = QVBoxLayout(self)
@@ -214,7 +513,12 @@ class MainWindow(QWidget):
         right = QVBoxLayout()
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
-        right.addWidget(TitleBar(self.showMinimized, self.close))
+        self._titlebar = TitleBar(
+            self.showMinimized,
+            self.toggle_maximize,
+            self.close,
+        )
+        right.addWidget(self._titlebar)
 
         self._dashboard = DashboardPage(binder=self._binder)
         self._dashboard.toggled.connect(self.toggle_engine)

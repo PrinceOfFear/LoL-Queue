@@ -56,11 +56,11 @@ HISTORY_ITEMS_WIDTH = (
 )
 RANK_ICON = QSize(58, 58)
 # O detalhe da partida é o lugar em que a build precisa ser lida, não
-# apenas reconhecida por cor. A primeira versão com 24 px ainda deixava os
-# itens pequenos ao lado do retrato do campeão. Com 30 px, cada componente
-# continua em uma única faixa (como no cliente do LoL), mas fica legível sem
-# transformar as dez linhas do placar em cartões altos demais.
-SCOREBOARD_ITEM_ICON = QSize(30, 30)
+# apenas reconhecida por cor. Os 30 px iniciais ainda pareciam pequenos ao
+# lado do retrato do campeão e das métricas. Com 36 px, os itens se aproximam
+# da escala do cliente do LoL, continuam em uma única faixa e a coluna segue
+# tendo uma largura explícita, sem invadir KDA, ouro ou dano.
+SCOREBOARD_ITEM_ICON = QSize(36, 36)
 SCOREBOARD_ITEMS_WIDTH = 7 * SCOREBOARD_ITEM_ICON.width() + 6 * 2
 # Estes limites absorvem o espaço adicional dos itens na menor largura
 # suportada. Nome e dano continuam sendo as duas colunas elásticas.

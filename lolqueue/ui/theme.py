@@ -94,7 +94,7 @@ STYLESHEET = f"""
     letter-spacing: 1.3px;
     padding: 5px 9px;
 }}
-#windowButton, #closeButton {{
+#windowButton, #maximizeButton, #closeButton {{
     background: transparent;
     border: none;
     color: {Palette.TEXT_MUTED};
@@ -103,6 +103,7 @@ STYLESHEET = f"""
     border-radius: 7px;
 }}
 #windowButton:hover {{ background: rgba(116, 169, 214, 34); color: {Palette.TEXT}; }}
+#maximizeButton:hover {{ background: rgba(116, 169, 214, 34); color: {Palette.TEXT}; }}
 #closeButton:hover {{ background: {Palette.DANGER}; color: #FFFFFF; }}
 
 #sidebar {{

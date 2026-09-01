@@ -14,6 +14,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QPoint, QRect, QSize, Qt  # noqa: E402
+
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lolqueue import config as config_module  # noqa: E402
@@ -26,7 +28,13 @@ from lolqueue.ui.pages.history import HistoryPage  # noqa: E402
 from lolqueue.ui.pages.queue import QueuePage  # noqa: E402
 from lolqueue.ui.pages.settings import SettingsPage  # noqa: E402
 from lolqueue.ui.widgets.sidebar import SECTIONS  # noqa: E402
-from lolqueue.ui.window import MainWindow  # noqa: E402
+from lolqueue.ui.window import (  # noqa: E402
+    MAX_INITIAL_ASPECT_RATIO,
+    MainWindow,
+    _initial_window_geometry,
+    _minimum_size_for_screen,
+    _usable_screen_geometry,
+)
 
 
 @pytest.fixture(scope="module")
@@ -49,6 +57,98 @@ def window(app, monkeypatch, tmp_path):
 
 def boxes(window, attribute):
     return window._binder.boxes(attribute)
+
+
+# --- tamanho e moldura ---------------------------------------------------
+
+
+def test_initial_window_geometry_fits_a_small_monitor_without_covering_it():
+    available = QRect(0, 0, 1024, 768)
+    usable = _usable_screen_geometry(available)
+    geometry = _initial_window_geometry(available)
+    minimum = _minimum_size_for_screen(available)
+
+    assert usable.contains(geometry)
+    assert geometry.width() >= minimum.width()
+    assert geometry.height() >= minimum.height()
+
+
+def test_initial_window_geometry_keeps_ultrawide_opening_readable():
+    geometry = _initial_window_geometry(QRect(0, 0, 3440, 1440))
+
+    assert geometry.width() <= round(geometry.height() * MAX_INITIAL_ASPECT_RATIO)
+
+
+def test_initial_window_uses_the_screen_under_the_cursor(monkeypatch):
+    import lolqueue.ui.window as window_module
+
+    selected = object()
+    seen = []
+
+    class Cursor:
+        @staticmethod
+        def pos():
+            return QPoint(1440, 90)
+
+    class GuiApplication:
+        @staticmethod
+        def screenAt(point):
+            seen.append(point)
+            return selected
+
+        @staticmethod
+        def instance():
+            return None
+
+    monkeypatch.setattr(window_module, "QCursor", Cursor)
+    monkeypatch.setattr(window_module, "QGuiApplication", GuiApplication)
+
+    assert MainWindow._screen_at() is selected
+    assert seen == [QPoint(1440, 90)]
+
+
+def test_frameless_window_recognizes_each_resize_border_and_corner(window):
+    window.setGeometry(100, 100, 1200, 700)
+
+    assert window._resize_edges_at(QPoint(0, 350)) == Qt.Edge.LeftEdge
+    assert window._resize_edges_at(QPoint(1199, 350)) == Qt.Edge.RightEdge
+    assert window._resize_edges_at(QPoint(600, 0)) == Qt.Edge.TopEdge
+    assert window._resize_edges_at(QPoint(600, 699)) == Qt.Edge.BottomEdge
+    assert window._resize_edges_at(QPoint(0, 0)) == (
+        Qt.Edge.LeftEdge | Qt.Edge.TopEdge
+    )
+    assert window._resize_edges_at(QPoint(600, 350)) == Qt.Edge(0)
+
+
+def test_manual_resize_fallback_respects_the_current_minimum_size(window):
+    window.setMinimumSize(QSize(900, 600))
+    window.setGeometry(100, 100, 1100, 700)
+    window._resize_edges = Qt.Edge.LeftEdge | Qt.Edge.TopEdge
+    window._resize_origin = QPoint(100, 100)
+    window._resize_geometry = QRect(window.geometry())
+
+    window._resize_manually(QPoint(900, 800))
+
+    assert window.width() == 900
+    assert window.height() == 600
+
+
+def test_custom_titlebar_exposes_maximize_and_restore_actions(window):
+    button = window._titlebar._maximize_button
+
+    window._titlebar.set_maximized(False)
+    assert button.toolTip() == "Maximizar janela"
+
+    window._titlebar.set_maximized(True)
+    assert button.toolTip() == "Restaurar tamanho da janela"
+
+
+def test_resize_cursor_is_limited_to_the_window_and_clears_after_the_border(window):
+    window._update_resize_cursor(Qt.Edge.LeftEdge)
+    assert window.cursor().shape() == Qt.CursorShape.SizeHorCursor
+
+    window._update_resize_cursor(Qt.Edge(0))
+    assert window.cursor().shape() == Qt.CursorShape.ArrowCursor
 
 
 def test_the_same_setting_has_a_switch_next_to_its_list(window):

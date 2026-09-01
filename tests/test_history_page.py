@@ -361,7 +361,7 @@ def test_scoreboard_items_are_larger_but_keep_their_reserved_column(page):
     assert holder is not None
     icons = holder.findChildren(QtWidgets.QLabel, "itemIcon")
     assert len(icons) == 7
-    assert SCOREBOARD_ITEM_ICON == QSize(30, 30)
+    assert SCOREBOARD_ITEM_ICON == QSize(36, 36)
     assert all(icon.minimumSize() == SCOREBOARD_ITEM_ICON for icon in icons)
     assert holder.minimumWidth() == SCOREBOARD_ITEMS_WIDTH
     assert holder.maximumWidth() == SCOREBOARD_ITEMS_WIDTH
@@ -456,6 +456,17 @@ def test_scoreboard_headers_and_rows_share_the_same_column_geometry(page):
         for column in range(7)
     ]
     assert header_cells == row_cells
+    # Mesmo abaixo da largura ideal, a coluna fixa dos sete itens não pode
+    # encostar nas métricas ao lado. O QScrollArea da janela cuida da rolagem
+    # quando necessário; aqui a grade continua íntegra e alinhada.
+    item_rect = row_grid.cellRect(0, 3)
+    kda_rect = row_grid.cellRect(0, 4)
+    economy_rect = row_grid.cellRect(0, 5)
+    damage_rect = row_grid.cellRect(0, 6)
+    assert item_rect.width() >= SCOREBOARD_ITEMS_WIDTH
+    assert item_rect.right() < kda_rect.left()
+    assert kda_rect.right() < economy_rect.left()
+    assert economy_rect.right() < damage_rect.left()
     champions = page._scoreboard_view.findChildren(
         QtWidgets.QLabel, "scoreboardChampion"
     )
