@@ -438,16 +438,16 @@ def update_cache_dir() -> Path:
     return Path(base) / "LoLQueue" / "updates"
 
 
-def _safe_member(info: zipfile.ZipInfo, expected_root: str) -> PurePosixPath:
+def _normalize_and_validate_member(info: zipfile.ZipInfo, expected_root: str) -> PurePosixPath:
     # O ZIP canônico usa `/`, mas `Compress-Archive` do próprio Windows grava
     # `\\` nos dois pacotes oficiais. Normalizamos *antes* de validar, para
     # que `LoL Queue\\..\\fora.txt` continue sendo recusado e que a mesma
     # representação seja usada para detectar colisões. Também recusamos ADS
     # (`:`) e NUL.
-    raw = info.filename
-    if not raw or "\x00" in raw:
+    raw = info.filename.replace("\\", "/")
+    if not raw or "\x00" in raw or "\x00" in info.orig_filename:
         raise UpdateIntegrityError("o ZIP possui um caminho inseguro")
-    path = PurePosixPath(raw.replace("\\", "/"))
+    path = PurePosixPath(raw)
     if path.is_absolute() or ".." in path.parts or not path.parts:
         raise UpdateIntegrityError("o ZIP possui um caminho inseguro")
     if any(":" in part for part in path.parts):
@@ -459,6 +459,9 @@ def _safe_member(info: zipfile.ZipInfo, expected_root: str) -> PurePosixPath:
     file_type = (info.external_attr >> 16) & 0o170000
     if file_type == 0o120000:
         raise UpdateIntegrityError("o ZIP nao pode conter links simbolicos")
+    # extract() usa filename como destino. O nome original permanece em
+    # orig_filename para a conferência do cabeçalho feita pelo zipfile.
+    info.filename = raw
     return path
 
 
@@ -478,7 +481,7 @@ def prepare_update(offer: UpdateOffer, archive: Path, directory: Path | None = N
                 raise UpdateIntegrityError("o ZIP possui tamanho descompactado invalido")
             seen: set[str] = set()
             for info in infos:
-                path = _safe_member(info, offer.artifact.root)
+                path = _normalize_and_validate_member(info, offer.artifact.root)
                 # O destino e Windows, onde nomes nao distinguem maiusculas.
                 # Recusar colisao evita que uma entrada posterior sobrescreva
                 # outra durante a extracao.

@@ -1,0 +1,105 @@
+{
+  "data": {
+    "opponent_champion_tip": "Save Charm for Zed's return.",
+    "runes": [
+      {
+        "primary_page_id": 8100, "secondary_page_id": 8200,
+        "primary_rune_ids": [8112, 8139, 8140, 8106],
+        "secondary_rune_ids": [8210, 8226], "stat_mod_ids": [5005, 5008, 5001],
+        "play": 286, "win": 149, "pick_rate": 0.5053
+      },
+      {
+        "primary_page_id": 8100, "secondary_page_id": 8200,
+        "primary_rune_ids": [8112, 8139, 8140, 8106],
+        "secondary_rune_ids": [8210, 8226], "stat_mod_ids": [5008, 5008, 5001],
+        "play": 39, "win": 22, "pick_rate": 0.0689
+      },
+      {
+        "primary_page_id": 8100, "secondary_page_id": 8200,
+        "primary_rune_ids": [8112, 8139, 8140, 8106],
+        "secondary_rune_ids": [8210, 8226], "stat_mod_ids": [5005, 5008, 5003],
+        "play": 28, "win": 16, "pick_rate": 0.0495
+      },
+      {
+        "primary_page_id": 8100, "secondary_page_id": 8200,
+        "primary_rune_ids": [8112, 8139, 8140, 8106],
+        "secondary_rune_ids": [8210, 8226], "stat_mod_ids": [5005, 5008, 5011],
+        "play": 23, "win": 14, "pick_rate": 0.0406
+      },
+      {
+        "primary_page_id": 8100, "secondary_page_id": 8200,
+        "primary_rune_ids": [8112, 8139, 8140, 8106],
+        "secondary_rune_ids": [8210, 8226], "stat_mod_ids": [5007, 5008, 5001],
+        "play": 22, "win": 10, "pick_rate": 0.0389
+      }
+    ],
+    "summoner_spells": [
+      {"ids": [4, 12], "play": 80, "win": 45, "pick_rate": 0.1413},
+      {"ids": [4, 14], "play": 480, "win": 238, "pick_rate": 0.8481}
+    ],
+    "starter_items": [
+      {"ids": [1056, 2003, 2003], "play": 498, "win": 259, "pick_rate": 0.8799}
+    ],
+    "boots": [
+      {"ids": [3020], "play": 460, "win": 221, "pick_rate": 0.8127},
+      {"ids": [3047], "play": 68, "win": 45, "pick_rate": 0.1201}
+    ],
+    "single_items": [
+      {
+        "depth": 1,
+        "items": [
+          {"ids": [3118], "play": 270, "win": 125, "pick_rate": 0.4787},
+          {"ids": [2503], "play": 140, "win": 77, "pick_rate": 0.2482},
+          {"ids": [6655], "play": 95, "win": 47, "pick_rate": 0.1684},
+          {"ids": [3157], "play": 6, "win": 4, "pick_rate": 0.0106}
+        ]
+      },
+      {
+        "depth": 2,
+        "items": [
+          {"ids": [3157], "play": 180, "win": 110, "pick_rate": 0.3600},
+          {"ids": [3089], "play": 140, "win": 72, "pick_rate": 0.2800}
+        ]
+      },
+      {
+        "depth": 3,
+        "items": [
+          {"ids": [3157], "play": 134, "win": 82, "pick_rate": 0.3350},
+          {"ids": [3089], "play": 110, "win": 63, "pick_rate": 0.2750},
+          {"ids": [3135], "play": 77, "win": 39, "pick_rate": 0.1925}
+        ]
+      },
+      {
+        "depth": 4,
+        "items": [
+          {"ids": [3157], "play": 95, "win": 59, "pick_rate": 0.3800},
+          {"ids": [3089], "play": 80, "win": 44, "pick_rate": 0.3200},
+          {"ids": [3135], "play": 50, "win": 25, "pick_rate": 0.2000}
+        ]
+      },
+      {
+        "depth": 5,
+        "items": [
+          {"ids": [3089], "play": 60, "win": 34, "pick_rate": 0.5000},
+          {"ids": [3135], "play": 55, "win": 27, "pick_rate": 0.4583}
+        ]
+      }
+    ],
+    "last_items": [
+      {"ids": [1056], "play": 498, "win": 259, "pick_rate": 0.8799},
+      {"ids": [3157], "play": 180, "win": 110, "pick_rate": 0.3180},
+      {"ids": [3165], "play": 74, "win": 37, "pick_rate": 0.1307}
+    ],
+    "skills": [
+      {"order": ["Q", "W", "E", "Q", "Q", "R"], "play": 31},
+      {"order": ["W", "Q", "E", "Q", "Q", "R"], "play": 188}
+    ],
+    "skill_masteries": [
+      {"ids": ["Q", "E", "W"], "play": 42},
+      {"ids": ["Q", "W", "E"], "play": 202}
+    ],
+    "summary": {
+      "average_stats": {"play": 14706, "win_rate": 0.501, "pick_rate": 0.09}
+    }
+  }
+}

@@ -1,10 +1,9 @@
-"""A leitura rica do guia de confronto, sobre uma resposta gravada.
+"""Leitura do guia de confronto de Ahri contra Zed no meio.
 
-A fixture é a captura literal de `lol_get_lane_matchup_guide` para
-Ahri contra Zed no meio — 42 KB, nada recortado. Gravada de propósito:
-teste que depende de rede falha por motivo que não é o do teste, e
-esta resposta é justamente a que precisa continuar sendo entendida
-quando o servidor mudar de forma.
+A captura original do OP.GG não foi versionada. A fixture sintética
+preserva os valores documentados pelos testes e inclui alternativas
+para exercitar a escolha por amostra, a ordem de compra e o descarte
+de itens repetidos sem consultar o serviço.
 """
 
 import json
@@ -173,8 +172,7 @@ def test_without_summoner_spells_there_is_no_build():
 
 
 def test_the_tip_and_the_build_come_from_the_same_answer():
-    """Uma viagem só. A dica escrita e a build saem do mesmo JSON de 42
-    KB que já era baixado inteiro e lido só pela dica."""
+    """A dica escrita e a build saem da mesma resposta."""
     lida = matchup.parse_matchup({"data": AHRI_ZED}, "Ahri", "Zed")
 
     assert lida.tip
