@@ -8,6 +8,7 @@ dist/
 build_log.txt
 *.egg-info/
 tests/fixtures/*.json
+!tests/fixtures/matchup_ahri_zed.json
 
 # App antigo (captura de tela). Movido para cá inteiro em vez de apagado:
 # se algum dia fizer falta, está tudo lá. Pode apagar a pasta à vontade.

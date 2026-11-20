@@ -94,14 +94,17 @@ def test_it_leans_on_nothing_that_could_be_missing():
 def test_the_entry_point_survives_a_missing_dependency(monkeypatch, capsys):
     """Sem console, um import quebrado some; com a caixa, ele fala."""
     import ctypes
+    from types import SimpleNamespace
+
     import main as entrada
 
     caixa = []
-    monkeypatch.setattr(
-        ctypes.windll.user32,
-        "MessageBoxW",
-        lambda _janela, texto, titulo, _flags: caixa.append((titulo, texto)),
-    )
+
+    def message_box(_janela, texto, titulo, _flags):
+        caixa.append((titulo, texto))
+
+    user32 = SimpleNamespace(MessageBoxW=message_box)
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
     monkeypatch.setitem(sys.modules, "lolqueue.__main__", None)
 
     assert entrada.main() == 1

@@ -20,7 +20,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# O TestClient usa httpx nas versões antigas do Starlette e httpx2 nas atuais.
+dev = ["pytest>=8.0", "httpx>=0.27,<0.29", "httpx2>=2.0"]
 security = ["bandit>=1.7", "pip-audit>=2.7"]
 # O servidor de licenças não roda na máquina do usuário — ele mora no
 # host. Se estas entrassem na lista de cima, `ambiente.py` passaria a
